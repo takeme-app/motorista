@@ -19,6 +19,12 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { fetchDriverPaymentTransfers, type DriverPaymentTransfer } from '../lib/driverPaymentTransfers';
+import {
+  fetchDriverPlatformFeeSummary,
+  platformFeeLedgerAmountLabel,
+  platformFeeLedgerTitle,
+  type DriverPlatformFeeSummary,
+} from '../lib/driverPlatformFee';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { describeInvokeFailure } from '../utils/edgeFunctionResponse';
 import { getStripeConnectState, type StripeConnectState } from '../lib/motoristaAccess';
@@ -36,6 +42,12 @@ const SUBTLE = '#9CA3AF';
 const INK = '#111827';
 
 type Transfer = DriverPaymentTransfer;
+
+const EMPTY_PLATFORM_FEE_SUMMARY: DriverPlatformFeeSummary = {
+  owedCents: 0,
+  entries: [],
+  unavailable: false,
+};
 
 function formatCents(cents: number): string {
   return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -72,6 +84,9 @@ export function PaymentsScreen({ navigation }: Props) {
   const [stripeAccountId, setStripeAccountId] = useState<string | null>(null);
   const [connectLoading, setConnectLoading] = useState(false);
   const [expressLoginLoading, setExpressLoginLoading] = useState(false);
+  const [platformFeeSummary, setPlatformFeeSummary] = useState<DriverPlatformFeeSummary>(
+    EMPTY_PLATFORM_FEE_SUMMARY,
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -93,6 +108,11 @@ export function PaymentsScreen({ navigation }: Props) {
     setStripePendingVerification(Number(wp?.stripe_connect_pending_verification_count ?? 0) || 0);
     const acct = (wp?.stripe_connect_account_id as string | null | undefined)?.trim() ?? '';
     setStripeAccountId(acct || null);
+    const feeSummary = await fetchDriverPlatformFeeSummary(supabase, 5).catch(() => ({
+      ...EMPTY_PLATFORM_FEE_SUMMARY,
+      unavailable: true,
+    }));
+    setPlatformFeeSummary(feeSummary);
 
     const today = new Date();
     const start = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
@@ -131,9 +151,9 @@ export function PaymentsScreen({ navigation }: Props) {
     ]);
 
     const tipRows = [
-      ...((bTips.data ?? []) as Array<{ tip_cents: number | null }>),
-      ...((sTips.data ?? []) as Array<{ tip_cents: number | null }>),
-      ...((dTips.data ?? []) as Array<{ tip_cents: number | null }>),
+      ...((bTips.data ?? []) as { tip_cents: number | null }[]),
+      ...((sTips.data ?? []) as { tip_cents: number | null }[]),
+      ...((dTips.data ?? []) as { tip_cents: number | null }[]),
     ];
     const tipsSum = tipRows.reduce((s, r) => s + (Number(r.tip_cents) || 0), 0);
     setTips(tipRows.length);
@@ -261,6 +281,61 @@ export function PaymentsScreen({ navigation }: Props) {
             onPressExpress={handleStripeExpressLogin}
           />
 
+          <Text style={[styles.sectionTitle, { marginTop: 20 }]}>Saldo devido à plataforma</Text>
+          <View style={styles.platformFeeCard}>
+            <View style={styles.platformFeeHeader}>
+              <View style={styles.platformFeeIcon}>
+                <MaterialIcons name="account-balance-wallet" size={20} color={GOLD} />
+              </View>
+              <View style={styles.platformFeeTitleCol}>
+                <Text style={styles.platformFeeLabel}>Saldo atual</Text>
+                <Text style={styles.platformFeeHint}>
+                  Taxas de corridas em dinheiro são abatidas quando o Connect estiver ativo.
+                </Text>
+              </View>
+              <Text
+                style={[
+                  styles.platformFeeAmount,
+                  platformFeeSummary.owedCents > 0 ? styles.platformFeeAmountWarn : styles.platformFeeAmountOk,
+                ]}
+              >
+                {formatCents(platformFeeSummary.owedCents)}
+              </Text>
+            </View>
+
+            {platformFeeSummary.unavailable ? (
+              <Text style={styles.platformFeeEmpty}>
+                Saldo temporariamente indisponível. Tente atualizar novamente em alguns instantes.
+              </Text>
+            ) : platformFeeSummary.entries.length === 0 ? (
+              <Text style={styles.platformFeeEmpty}>Nenhuma movimentação registrada.</Text>
+            ) : (
+              <View style={styles.ledgerList}>
+                {platformFeeSummary.entries.map((entry, i) => (
+                  <View key={entry.id}>
+                    <View style={styles.ledgerRow}>
+                      <View style={styles.ledgerInfo}>
+                        <Text style={styles.ledgerTitle}>{platformFeeLedgerTitle(entry)}</Text>
+                        <Text style={styles.ledgerMeta}>
+                          {formatShortDate(entry.createdAt)} • {formatHour(entry.createdAt)}
+                        </Text>
+                      </View>
+                      <Text
+                        style={[
+                          styles.ledgerAmount,
+                          entry.kind === 'credit' ? styles.ledgerAmountCredit : styles.ledgerAmountDebit,
+                        ]}
+                      >
+                        {platformFeeLedgerAmountLabel(entry)}
+                      </Text>
+                    </View>
+                    {i < platformFeeSummary.entries.length - 1 && <View style={styles.ledgerSep} />}
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
           {/* Transferências de hoje */}
           <Text style={[styles.sectionTitle, { marginTop: 32 }]}>Transferências de hoje</Text>
 
@@ -366,6 +441,39 @@ const styles = StyleSheet.create({
   transferMeta: { fontSize: 13, color: SUBTLE, marginTop: 2 },
   transferDate: { fontSize: 14, color: SUBTLE },
   sep: { height: 1, backgroundColor: '#F3F4F6' },
+
+  platformFeeCard: {
+    borderWidth: 1,
+    borderColor: '#F3E3A3',
+    backgroundColor: CREAM,
+    borderRadius: 16,
+    padding: 16,
+  },
+  platformFeeHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  platformFeeIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  platformFeeTitleCol: { flex: 1 },
+  platformFeeLabel: { fontSize: 15, fontWeight: '700', color: INK },
+  platformFeeHint: { fontSize: 12, color: MUTED, lineHeight: 16, marginTop: 2 },
+  platformFeeAmount: { fontSize: 17, fontWeight: '800' },
+  platformFeeAmountWarn: { color: '#92400E' },
+  platformFeeAmountOk: { color: '#16A34A' },
+  platformFeeEmpty: { marginTop: 14, fontSize: 13, color: MUTED, lineHeight: 18 },
+  ledgerList: { marginTop: 12, borderTopWidth: 1, borderTopColor: '#F3E3A3' },
+  ledgerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+  ledgerInfo: { flex: 1 },
+  ledgerTitle: { fontSize: 13, fontWeight: '700', color: INK },
+  ledgerMeta: { fontSize: 12, color: SUBTLE, marginTop: 2 },
+  ledgerAmount: { fontSize: 13, fontWeight: '800' },
+  ledgerAmountCredit: { color: '#92400E' },
+  ledgerAmountDebit: { color: '#16A34A' },
+  ledgerSep: { height: 1, backgroundColor: '#F3E3A3' },
 
   historyLink: { alignItems: 'center', marginTop: 24 },
   historyLinkText: { fontSize: 14, color: MUTED, textDecorationLine: 'underline', fontWeight: '500' },

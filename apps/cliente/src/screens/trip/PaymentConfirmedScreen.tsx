@@ -103,15 +103,15 @@ export function PaymentConfirmedScreen({ navigation, route }: Props) {
       <View style={styles.iconWrap}>
         <MaterialIcons name="check" size={48} color="#FFFFFF" />
       </View>
-      <Text style={styles.title}>{isCash ? 'Pedido confirmado!' : 'Pagamento confirmado!'}</Text>
+      <Text style={styles.title}>{isCash ? 'Solicitação enviada!' : 'Pagamento confirmado!'}</Text>
       <Text style={styles.subtitle}>
         {isCash
-          ? 'Sua viagem foi agendada. O pagamento será feito em dinheiro diretamente ao motorista.'
+          ? 'Sua viagem foi solicitada ao motorista. O pagamento será feito em dinheiro se ele aceitar.'
           : 'Sua viagem foi agendada com sucesso.'}
       </Text>
       <Text style={styles.hint}>
         {isCash
-          ? 'Leve o valor combinado no dia da viagem. Acompanhe o status em Atividades.'
+          ? 'Você receberá a confirmação assim que o motorista aceitar. Acompanhe o status em Atividades.'
           : 'Você poderá acompanhar o status e detalhes em Atividades.'}
       </Text>
       <TouchableOpacity style={styles.primaryButton} onPress={goToActivities} activeOpacity={0.8}>

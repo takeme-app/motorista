@@ -57,6 +57,7 @@ import {
 import { onlyDigits } from '../../utils/formatCpf';
 import { closeShipmentConversation } from '../../lib/shipmentConversation';
 import { getUserErrorMessage, isShipmentDriverRatingsUnavailableError } from '../../utils/errorMessage';
+import { formatShipmentCode } from '@take-me/shared';
 
 let Location: any = null;
 try { Location = require('expo-location'); } catch { /* not linked yet */ }
@@ -66,6 +67,9 @@ const NAV_ROUTE_SNAP_MAX_M = 52;
 const NAV_ROAD_BEARING_SNAP_M = 40;
 const NAV_LOOK_AHEAD_M = 56;
 const NAV_CAMERA_ANIMATION_MS = 320;
+const SDK_NATIVE_FLOATING_CARD_PADDING = 380;
+const SDK_NATIVE_FOLLOWING_ZOOM = 17.8;
+const SDK_NATIVE_ROUTE_GUIDE_MAX_POINTS = 25;
 
 const GOLD = '#C9A227';
 const DARK = '#111827';
@@ -98,7 +102,7 @@ type Shipment = {
   deliveryHasMapCoords: boolean;
   amountCents: number;
   confirmedAt: string;
-  /** PDF cenário 4 (sem base): `pickup_code` que o motorista digita. */
+  /** Cenário 4 (sem base): `pickup_code` que o motorista informa ao cliente. */
   pickupCodeExpected: string;
   /** PDF cenário 4 (sem base): `delivery_code` que o motorista digita ao entregar. */
   deliveryCodeExpected: string;
@@ -108,6 +112,8 @@ type Shipment = {
   preparerToBaseCode: string;
   /** PDF cenário 3 (com base): timestamp do handoff Passageiro → Preparador. */
   pickedUpByPreparerAt: string | null;
+  /** Cenário sem base: timestamp da coleta validada pelo cliente. */
+  pickedUpAt: string | null;
   coletaLetter: string;
 };
 
@@ -131,6 +137,28 @@ function routeDistanceKm(coords: Coord[]): number {
   return d;
 }
 
+function sampleRouteGuidePoints(points: LatLng[], maxPoints: number): LatLng[] {
+  if (points.length <= maxPoints) return points;
+  if (maxPoints <= 2) return [points[0]!, points[points.length - 1]!];
+  const lastIndex = points.length - 1;
+  const slots = maxPoints - 1;
+  const sampled: LatLng[] = [];
+  for (let i = 0; i < maxPoints; i++) {
+    sampled.push(points[Math.round((lastIndex * i) / slots)]!);
+  }
+  return sampled;
+}
+
+function formatDistanceRemaining(meters: number | null): string | null {
+  if (meters == null || !Number.isFinite(meters) || meters <= 0) return null;
+  if (meters < 1000) return `${Math.max(10, Math.round(meters / 10) * 10)} m`;
+  return `${(meters / 1000).toFixed(meters < 10000 ? 1 : 0)} km`;
+}
+
+function shipmentDisplayId(id: string): string {
+  return formatShipmentCode(id);
+}
+
 /** ~150 m — abre modais de código ao aproximar da coleta ou da base. */
 const NEARBY_KM = 0.15;
 
@@ -147,6 +175,10 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
   const [fullRouteCoords, setFullRouteCoords] = useState<Coord[]>([]);
   const [driverRouteCoords, setDriverRouteCoords] = useState<Coord[]>([]);
   const [etaSeconds, setEtaSeconds] = useState(0);
+  const [nativeDistanceRemainingMeters, setNativeDistanceRemainingMeters] = useState<number | null>(null);
+  const [nativeVoiceMuted, setNativeVoiceMuted] = useState(false);
+  const [nativeRecenterRequestKey, setNativeRecenterRequestKey] = useState(0);
+  const [miniSheetVisible, setMiniSheetVisible] = useState(true);
 
   // Mapa offline + indicador de rede. Hooks ficam no topo (regras de Hooks):
   // não podem rodar depois de early returns abaixo.
@@ -165,7 +197,6 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
 
   // Pickup modal
   const [pickupVisible, setPickupVisible] = useState(false);
-  const [pickupCode, setPickupCode] = useState('');
   const [pickupObs, setPickupObs] = useState('');
   const [pickupLoading, setPickupLoading] = useState(false);
 
@@ -216,30 +247,36 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
   const useNativeNav = useNativeNavigationEnabled();
 
   /**
-   * Waypoints do SDK nativo. Em encomendas o motorista sempre faz pickup →
-   * delivery; quando o pickup já foi concluído (`step === 'to_delivery'`), o
-   * SDK recebe só `[motorista, delivery]` e re-roteia automaticamente
-   * (transição de leg sem destruir a sessão de navegação).
+   * Waypoints do SDK nativo no fluxo do preparador. A navegação é sempre do GPS
+   * atual até a próxima etapa real: cliente primeiro, base depois.
    */
   const navigationWaypoints = useMemo(() => {
-    if (!useNativeNav || !shipment) return [];
+    if (!useNativeNav || !shipment || !driverPos) return [];
     const dp = driverPos ?? null;
     const points: { coord: LatLng; name?: string }[] = [];
     if (dp && isValidGlobeCoordinate(dp.latitude, dp.longitude)) {
       points.push({ coord: dp, name: 'Você' });
     }
-    if (step === 'to_pickup') {
-      points.push({ coord: shipment.pickupCoord, name: 'Coleta' });
-      points.push({ coord: shipment.deliveryCoord, name: 'Entrega' });
-    } else {
-      points.push({ coord: shipment.deliveryCoord, name: 'Entrega' });
-    }
+    points.push({
+      coord: step === 'to_pickup' ? shipment.pickupCoord : shipment.deliveryCoord,
+      name: step === 'to_pickup' ? 'Coleta' : shipment.hasPreparerBase ? 'Base' : 'Entrega',
+    });
     return points
       .filter((p) => isValidGlobeCoordinate(p.coord.latitude, p.coord.longitude))
-      .map((p, i, arr) =>
-        latLngToWaypoint(p.coord, p.name, i > 0 && i < arr.length - 1),
-      );
+      .map((p) => latLngToWaypoint(p.coord, p.name));
   }, [useNativeNav, shipment, driverPos, step]);
+
+  const nativeNavigationActive = useNativeNav && navigationWaypoints.length >= 2;
+
+  const nativeSdkRouteGuide = useMemo(() => {
+    if (!nativeNavigationActive || driverRouteCoords.length < 2) return [];
+    return sampleRouteGuidePoints(driverRouteCoords, SDK_NATIVE_ROUTE_GUIDE_MAX_POINTS);
+  }, [nativeNavigationActive, driverRouteCoords]);
+
+  const nativeDistanceRemainingLabel = useMemo(
+    () => formatDistanceRemaining(nativeDistanceRemainingMeters),
+    [nativeDistanceRemainingMeters],
+  );
 
   const applyHeadingUpCamera = useCallback(() => {
     if (!followNavRef.current || !mapRef.current) return;
@@ -456,6 +493,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         passengerToPreparerCode: String(row.passenger_to_preparer_code ?? ''),
         preparerToBaseCode: String(row.preparer_to_base_code ?? ''),
         pickedUpByPreparerAt: row.picked_up_by_preparer_at ?? null,
+        pickedUpAt: row.picked_up_at ?? null,
         coletaLetter: coletaLetterFromShipmentId(row.id),
       };
       setShipment(s);
@@ -529,6 +567,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         passengerToPreparerCode: String(row.passenger_to_preparer_code ?? ''),
         preparerToBaseCode: String(row.preparer_to_base_code ?? ''),
         pickedUpByPreparerAt: row.picked_up_by_preparer_at ?? null,
+        pickedUpAt: row.picked_up_at ?? null,
         coletaLetter: coletaLetterFromShipmentId(row.id),
       };
       setShipment(s);
@@ -647,6 +686,15 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     else routeForSnapRef.current = [];
   }, [driverRouteCoords, fullRouteCoords]);
 
+  useEffect(() => {
+    if (!nativeNavigationActive) {
+      setNativeDistanceRemainingMeters(null);
+      return;
+    }
+    setFollowMyLocation(false);
+    setNativeRecenterRequestKey((key) => key + 1);
+  }, [nativeNavigationActive, step]);
+
   const navRoutePresentation = useMemo(() => {
     const goldBase = fullRouteCoords;
     const darkBase = driverRouteCoords;
@@ -758,12 +806,10 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     );
   }, [shipment]);
 
-  // PDF cenário 3 (com base): o preparador NÃO digita o PIN A — ele apenas
-  // INFORMA verbalmente ao passageiro, que valida no app cliente. O passageiro
-  // valida → backend seta `picked_up_by_preparer_at`. Aqui só verificamos se já
-  // foi validado e avançamos.
-  // PDF cenário 4 (sem base): comportamento legado — preparador digita
-  // `pickup_code` para registrar a coleta.
+  // Coleta: quem está com a encomenda informa o PIN ao cliente; o cliente valida
+  // no app dele. Aqui só conferimos se o backend já registrou a validação.
+  // Com base: validação preenche `picked_up_by_preparer_at`.
+  // Sem base: validação preenche `picked_up_at` e status `in_progress`.
   const confirmPickup = async () => {
     if (!shipment) return;
 
@@ -818,7 +864,6 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       return;
     }
 
-    if (!pickupCode.trim()) return;
     const expDigits = onlyDigits(shipment.pickupCodeExpected);
     if (expDigits.length !== 4) {
       showAlert(
@@ -827,28 +872,43 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       );
       return;
     }
-    if (!shipmentCodesMatch(shipment.pickupCodeExpected, pickupCode)) {
-      showAlert('Código incorreto', 'Confira o código de confirmação da coleta com o cliente.');
-      return;
-    }
     setPickupLoading(true);
     try {
-      const { error: upErr } = await supabase
+      const { data, error } = await supabase
         .from('shipments')
-        .update({
-          status: 'in_progress',
-          pickup_notes: pickupObs.trim() || null,
-          picked_up_at: new Date().toISOString(),
-        } as never)
-        .eq('id', shipment.id);
-      if (upErr) {
-        showAlert('Não foi possível confirmar', upErr.message || 'Tente novamente.');
+        .select('picked_up_at, status')
+        .eq('id', shipment.id)
+        .maybeSingle();
+      if (error || !data) {
+        showAlert('Erro', 'Não foi possível verificar a coleta. Tente novamente.');
+        return;
+      }
+      const row = data as { picked_up_at: string | null; status: string | null };
+      if (!row.picked_up_at) {
+        showAlert(
+          'Aguardando o cliente',
+          'O cliente ainda não validou o código no app dele. Informe o código exibido aqui e peça para ele confirmar a coleta.',
+        );
+        return;
+      }
+      if (pickupObs.trim()) {
+        const { error: notesErr } = await supabase
+          .from('shipments')
+          .update({ pickup_notes: pickupObs.trim() } as never)
+          .eq('id', shipment.id);
+        if (notesErr) {
+          showAlert('Não foi possível salvar', notesErr.message || 'Tente novamente.');
+          return;
+        }
+      }
+      setShipment((s) => (s ? { ...s, pickedUpAt: row.picked_up_at } : s));
+      if (row.status === 'cancelled') {
+        showAlert('Envio cancelado', 'Esta encomenda foi cancelada e não pode continuar.');
         return;
       }
       autoModalRef.current = { pickup: false, delivery: false };
       setStep('to_delivery');
       setPickupVisible(false);
-      setPickupCode('');
       setPickupObs('');
       mapRef.current?.animateToRegion(
         { ...shipment.deliveryCoord, latitudeDelta: 0.02, longitudeDelta: 0.02 },
@@ -1024,6 +1084,10 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
   const pickupDone = step === 'to_delivery';
   const overlayTop = insets.top + 56;
   const fallbackNavTarget = step === 'to_pickup' ? shipment.pickupCoord : shipment.deliveryCoord;
+  const miniSheetBottom = Platform.OS === 'ios' ? Math.max(insets.bottom, 12) + 16 : 20;
+  const nativeFollowingBottom = nativeNavigationActive && !miniSheetVisible
+    ? Math.max(insets.bottom, 12) + 96
+    : miniSheetBottom + SDK_NATIVE_FLOATING_CARD_PADDING;
 
   return (
     <View style={styles.root}>
@@ -1034,7 +1098,21 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         ref={mapRef}
         style={StyleSheet.absoluteFillObject}
         waypoints={navigationWaypoints}
+        routeCoordinates={nativeSdkRouteGuide}
+        accessToken={getMapboxAccessToken()}
         voiceLanguage="pt-BR"
+        mute={nativeVoiceMuted}
+        nativeNavigationActive={nativeNavigationActive}
+        followingPaddingTop={overlayTop}
+        followingPaddingBottom={nativeFollowingBottom}
+        followingPaddingLeft={14}
+        followingPaddingRight={14}
+        followingZoom={SDK_NATIVE_FOLLOWING_ZOOM}
+        recenterRequestKey={nativeRecenterRequestKey}
+        onProgress={(progress) => {
+          setEtaSeconds(Math.max(0, Math.round(progress.durationRemainingSeconds)));
+          setNativeDistanceRemainingMeters(progress.distanceRemainingMeters);
+        }}
         legacyInitialRegion={mapInitialRegion}
         legacyRender={({ mapRef: legacyMapRef, initialRegion }) => (
           <GoogleMapsMap
@@ -1112,7 +1190,8 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         )}
       />
 
-      {followMyLocation &&
+      {!nativeNavigationActive &&
+        followMyLocation &&
         driverPos &&
         isValidGlobeCoordinate(driverPos.latitude, driverPos.longitude) && (
           <View style={styles.navPuckOverlay} pointerEvents="none">
@@ -1145,39 +1224,75 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
           </View>
         )}
 
-        <View style={[styles.zoomWrap, { top: overlayTop, left: 14 }]} pointerEvents="box-none">
-          <MapZoomControls
-            mapRef={mapRef}
-            floating={false}
-            onBeforeZoom={() => {
-              setFollowMyLocation(false);
-              const fix = latestDriverFixRef.current;
-              if (fix && mapRef.current && isValidGlobeCoordinate(fix.latitude, fix.longitude)) {
-                mapRef.current.easeToRegionNorthUp(
-                  {
-                    latitude: fix.latitude,
-                    longitude: fix.longitude,
-                    latitudeDelta: MY_LOCATION_NAV_DELTA,
-                    longitudeDelta: MY_LOCATION_NAV_DELTA,
-                  },
-                  280,
-                );
-              }
-            }}
-          />
-        </View>
+        {!nativeNavigationActive && (
+          <View style={[styles.zoomWrap, { top: overlayTop, left: 14 }]} pointerEvents="box-none">
+            <MapZoomControls
+              mapRef={mapRef}
+              floating={false}
+              onBeforeZoom={() => {
+                setFollowMyLocation(false);
+                const fix = latestDriverFixRef.current;
+                if (fix && mapRef.current && isValidGlobeCoordinate(fix.latitude, fix.longitude)) {
+                  mapRef.current.easeToRegionNorthUp(
+                    {
+                      latitude: fix.latitude,
+                      longitude: fix.longitude,
+                      latitudeDelta: MY_LOCATION_NAV_DELTA,
+                      longitudeDelta: MY_LOCATION_NAV_DELTA,
+                    },
+                    280,
+                  );
+                }
+              }}
+            />
+          </View>
+        )}
 
         <DriverLocationFocusButton
-          following={followMyLocation}
+          following={nativeNavigationActive || followMyLocation}
           style={[
             styles.myLocationBtn,
-            { top: overlayTop + 44 + 6 + 44 + 10, left: 14 },
+            { top: nativeNavigationActive ? overlayTop : overlayTop + 44 + 6 + 44 + 10, left: 14 },
           ]}
           onPress={() => {
             if (!driverPos || !isValidGlobeCoordinate(driverPos.latitude, driverPos.longitude)) return;
+            if (nativeNavigationActive) {
+              setNativeRecenterRequestKey((key) => key + 1);
+              return;
+            }
             setFollowMyLocation(true);
           }}
         />
+
+        {nativeNavigationActive && (
+          <TouchableOpacity
+            style={[styles.nativeVoiceBtn, { top: overlayTop + 54, left: 14 }]}
+            onPress={() => setNativeVoiceMuted((muted) => !muted)}
+            activeOpacity={0.85}
+          >
+            <MaterialIcons name={nativeVoiceMuted ? 'volume-off' : 'volume-up'} size={22} color={DARK} />
+          </TouchableOpacity>
+        )}
+
+        {nativeNavigationActive && (
+          <TouchableOpacity
+            style={[styles.nativeVoiceBtn, { top: overlayTop + 108, left: 14 }]}
+            onPress={() => setMiniSheetVisible((visible) => !visible)}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={
+              miniSheetVisible
+                ? 'Ocultar informações da coleta'
+                : 'Mostrar informações da coleta'
+            }
+          >
+            <MaterialIcons
+              name={miniSheetVisible ? 'keyboard-arrow-down' : 'keyboard-arrow-up'}
+              size={26}
+              color={DARK}
+            />
+          </TouchableOpacity>
+        )}
 
         {/* Barra direita: encomenda — coleta → entrega (tocar centraliza no ponto) */}
         <View style={[styles.sidebar, { top: overlayTop, right: 14 }]} pointerEvents="box-none">
@@ -1205,11 +1320,9 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         </View>
 
         {/* Cartão flutuante — mesmo estilo do miniSheet da viagem ativa */}
+        {(!nativeNavigationActive || miniSheetVisible) && (
         <View
-          style={[
-            styles.miniSheet,
-            { bottom: Platform.OS === 'ios' ? Math.max(insets.bottom, 12) + 16 : 20 },
-          ]}
+          style={[styles.miniSheet, { bottom: miniSheetBottom }]}
           pointerEvents="box-none"
         >
           <View style={styles.miniSheetTopRow}>
@@ -1219,7 +1332,11 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
             </View>
             {etaSeconds > 0 && (
               <View style={styles.etaBadge}>
-                <Text style={styles.etaBadgeText}>{Math.max(1, Math.round(etaSeconds / 60))} min</Text>
+                <Text style={styles.etaBadgeText}>
+                  {nativeDistanceRemainingLabel
+                    ? `${Math.max(1, Math.round(etaSeconds / 60))} min • ${nativeDistanceRemainingLabel}`
+                    : `${Math.max(1, Math.round(etaSeconds / 60))} min`}
+                </Text>
               </View>
             )}
           </View>
@@ -1230,6 +1347,9 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
               : shipment.hasPreparerBase
                 ? `Depósito na base — ${shipment.baseName}`
                 : 'Entrega ao destino'}
+          </Text>
+          <Text style={styles.miniSheetOrderId} numberOfLines={1}>
+            Pedido #{shipmentDisplayId(shipment.id)}
           </Text>
           <View style={styles.miniAddressRow}>
             <MaterialIcons name="location-on" size={14} color="#6B7280" />
@@ -1262,6 +1382,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
             </Text>
           </TouchableOpacity>
         </View>
+        )}
       </SafeAreaView>
 
       {/* ── Pickup modal ── */}
@@ -1326,15 +1447,19 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                   </>
                 ) : (
                   <>
-                    <Text style={styles.fieldLabel}>Código de confirmação</Text>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Ex: 482915"
-                      placeholderTextColor="#9CA3AF"
-                      value={pickupCode}
-                      onChangeText={setPickupCode}
-                      autoCapitalize="characters"
-                    />
+                    <Text style={styles.fieldLabel}>Informe este código ao cliente</Text>
+                    <Text style={styles.handoffHint}>
+                      Diga estes 4 dígitos ao cliente. Ele vai digitar no app dele
+                      para validar a coleta. Depois que ele confirmar, toque no botão
+                      abaixo para seguir até a entrega.
+                    </Text>
+                    <View style={styles.handoffPinBox}>
+                      <Text style={styles.handoffPinText}>
+                        {onlyDigits(shipment.pickupCodeExpected).length === 4
+                          ? onlyDigits(shipment.pickupCodeExpected)
+                          : '— — — —'}
+                      </Text>
+                    </View>
                     <View style={styles.obsRow}>
                       <Text style={styles.fieldLabel}>Observações</Text>
                       <Text style={styles.optional}>Opcional</Text>
@@ -1350,14 +1475,14 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                       textAlignVertical="top"
                     />
                     <TouchableOpacity
-                      style={[styles.primaryBtn, !pickupCode.trim() && styles.btnDisabled]}
+                      style={styles.primaryBtn}
                       onPress={confirmPickup}
-                      disabled={!pickupCode.trim() || pickupLoading}
+                      disabled={pickupLoading}
                       activeOpacity={0.85}
                     >
                       {pickupLoading
                         ? <ActivityIndicator size="small" color="#FFF" />
-                        : <Text style={styles.primaryBtnText}>Sim, confirmar</Text>
+                        : <Text style={styles.primaryBtnText}>Cliente confirmou — seguir para entrega</Text>
                       }
                     </TouchableOpacity>
                   </>
@@ -1405,13 +1530,19 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                     : 'Código de entrega'}
                 </Text>
                 <TextInput
-                  style={styles.input}
+                  style={shipment.hasPreparerBase ? styles.codeInput : styles.input}
                   placeholder={shipment.hasPreparerBase ? 'Ex: 1234' : 'Ex: BASE132'}
                   placeholderTextColor="#9CA3AF"
                   value={deliveryCode}
-                  onChangeText={setDeliveryCode}
+                  onChangeText={(value) => {
+                    setDeliveryCode(
+                      shipment.hasPreparerBase
+                        ? value.replace(/\D/g, '').slice(0, 4)
+                        : value,
+                    );
+                  }}
                   autoCapitalize="characters"
-                  keyboardType={shipment.hasPreparerBase ? 'number-pad' : 'default'}
+                  keyboardType={shipment.hasPreparerBase ? 'numeric' : 'default'}
                   maxLength={shipment.hasPreparerBase ? 4 : undefined}
                 />
                 <View style={styles.obsRow}>
@@ -1581,6 +1712,20 @@ const styles = StyleSheet.create({
   myLocationBtn: {
     position: 'absolute',
   },
+  nativeVoiceBtn: {
+    position: 'absolute',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 5,
+    elevation: 4,
+  },
 
   networkBadgeWrap: {
     position: 'absolute',
@@ -1729,6 +1874,12 @@ const styles = StyleSheet.create({
     fontSize: 21,
     fontWeight: '700',
     color: DARK,
+    marginBottom: 2,
+  },
+  miniSheetOrderId: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#92400E',
     marginBottom: 6,
   },
   miniAddressRow: {
@@ -1808,6 +1959,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#F3F4F6', borderRadius: 12,
     paddingHorizontal: 16, paddingVertical: 14,
     fontSize: 15, color: DARK, marginBottom: 8,
+  },
+  codeInput: {
+    alignSelf: 'center',
+    width: 220,
+    maxWidth: '100%',
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    fontSize: 24,
+    fontWeight: '700',
+    color: DARK,
+    letterSpacing: 0,
+    backgroundColor: '#F9FAFB',
+    marginBottom: 8,
+    textAlign: 'center',
   },
   textArea: { height: 110, paddingTop: 14 },
   primaryBtn: {

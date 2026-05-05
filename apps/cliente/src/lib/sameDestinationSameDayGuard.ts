@@ -55,15 +55,11 @@ function scheduledTripMetaFromJoin(st: StJoin): { departureAt: string | null; tr
 }
 
 /**
- * Impede novo pedido se já existir viagem/envio ativo para o mesmo destino (coords ~200 m)
- * no mesmo dia de referência (viagem = dia da `scheduled_trip`; envio = dia da viagem vinculada ou dia do pedido em SP).
+ * Impede nova reserva de **viagem de passageiro** quando já existe booking ativo
+ * para a mesma viagem/rota do mesmo motorista ou para o mesmo destino no mesmo dia.
  *
- * `currentScheduledTripId` (fluxo de **booking** de viagem):
- *  - Detecta reserva na **mesma** viagem antes do check geográfico (mensagem correta vs. “mesmo destino”).
- *  - Ignora reservas cuja `scheduled_trips.status` não é `active` (inclui `cancelled`/`completed`).
- *  - Importante: por RLS, o passageiro **só lê** `scheduled_trips` com `status = 'active'`. Quando a viagem
- *    já terminou ou foi cancelada, o embed vem **null** — antes isso podia gerar falso bloqueio ou
- *    mensagem errada (“já tem reserva nesta viagem”) com reserva antiga ainda `paid`/`confirmed`.
+ * Encomendas e envios de dependentes são propostas diferentes: podem coexistir
+ * com a viagem do passageiro e não devem ser bloqueados por esta guarda.
  */
 export async function getDuplicateDestinationSameDayMessage(args: {
   userId: string;
@@ -130,64 +126,6 @@ export async function getDuplicateDestinationSameDayMessage(args: {
       if (isLikelyAppFallbackDestination(row.destination_lat, row.destination_lng)) continue;
       if (destMatches(destLat, destLng, row.destination_lat, row.destination_lng)) {
         return 'Você já tem uma viagem solicitada para este destino neste dia. Cancele ou escolha outro dia ou destino.';
-      }
-    }
-  }
-
-  const { data: shipments, error: sErr } = await supabase
-    .from('shipments')
-    .select(
-      'id, destination_lat, destination_lng, status, created_at, scheduled_trip_id, scheduled_trips(departure_at, status)',
-    )
-    .eq('user_id', userId)
-    .in('status', ['pending_review', 'confirmed', 'in_progress'])
-    .order('created_at', { ascending: false })
-    .limit(200);
-  if (!sErr && Array.isArray(shipments)) {
-    for (const row of shipments as {
-      destination_lat?: number;
-      destination_lng?: number;
-      created_at?: string;
-      scheduled_trip_id?: string | null;
-      scheduled_trips?: StJoin;
-    }[]) {
-      const { departureAt: depTrip, tripStatus } = scheduledTripMetaFromJoin(row.scheduled_trips ?? null);
-      const linkedTrip = Boolean(row.scheduled_trip_id?.trim());
-      if (linkedTrip && tripStatus !== 'active') continue;
-      const day =
-        depTrip != null ? calendarDayKeySaoPaulo(depTrip) : calendarDayKeySaoPaulo(row.created_at ?? new Date().toISOString());
-      if (day !== dayKey) continue;
-      if (isLikelyAppFallbackDestination(row.destination_lat, row.destination_lng)) continue;
-      if (destMatches(destLat, destLng, row.destination_lat, row.destination_lng)) {
-        return 'Você já tem um envio para este destino neste dia. Aguarde concluir ou cancele antes de solicitar outro.';
-      }
-    }
-  }
-
-  const { data: dependents, error: dErr } = await supabase
-    .from('dependent_shipments')
-    .select('id, destination_lat, destination_lng, status, created_at, scheduled_trip_id, scheduled_trips(departure_at, status)')
-    .eq('user_id', userId)
-    .in('status', ['pending_review', 'confirmed', 'in_progress'])
-    .order('created_at', { ascending: false })
-    .limit(200);
-  if (!dErr && Array.isArray(dependents)) {
-    for (const row of dependents as {
-      destination_lat?: number;
-      destination_lng?: number;
-      created_at?: string;
-      scheduled_trip_id?: string | null;
-      scheduled_trips?: StJoin;
-    }[]) {
-      const { departureAt: depTrip, tripStatus } = scheduledTripMetaFromJoin(row.scheduled_trips ?? null);
-      const linkedTrip = Boolean(row.scheduled_trip_id?.trim());
-      if (linkedTrip && tripStatus !== 'active') continue;
-      const day =
-        depTrip != null ? calendarDayKeySaoPaulo(depTrip) : calendarDayKeySaoPaulo(row.created_at ?? new Date().toISOString());
-      if (day !== dayKey) continue;
-      if (isLikelyAppFallbackDestination(row.destination_lat, row.destination_lng)) continue;
-      if (destMatches(destLat, destLng, row.destination_lat, row.destination_lng)) {
-        return 'Você já tem um envio de dependente para este destino neste dia. Aguarde concluir ou cancele antes de solicitar outro.';
       }
     }
   }

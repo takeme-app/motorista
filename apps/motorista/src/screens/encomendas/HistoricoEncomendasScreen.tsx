@@ -112,22 +112,29 @@ export function HistoricoEncomendasScreen({ navigation }: Props) {
 
     const { data } = await supabase
       .from('shipments')
-      .select('id, created_at, user_id')
-      .eq('driver_id' as never, user.id)
+      .select('id, created_at, user_id, delivered_to_base_at')
+      .eq('preparer_id' as never, user.id)
       .eq('base_id' as never, myBaseId as never)
-      .order('created_at', { ascending: false });
+      .not('delivered_to_base_at', 'is', null)
+      .order('delivered_to_base_at', { ascending: false });
 
-    const rows = (data ?? []) as { id: string; created_at: string; user_id: string }[];
+    const rows = (data ?? []) as unknown as {
+      id: string;
+      created_at: string;
+      user_id: string;
+      delivered_to_base_at?: string | null;
+    }[];
     const items: HistoryItem[] = [];
     for (const r of rows) {
       const { data: prof } = await supabase
         .from('profiles').select('full_name').eq('id', r.user_id).maybeSingle();
       const p = prof as { full_name?: string | null } | null;
+      const finishedAt = r.delivered_to_base_at ?? r.created_at;
       items.push({
         id: r.id,
         clientName: p?.full_name ?? 'Cliente',
-        dateLabel: formatHistoryDate(r.created_at),
-        rawDate: new Date(r.created_at),
+        dateLabel: formatHistoryDate(finishedAt),
+        rawDate: new Date(finishedAt),
       });
     }
     setAllItems(items);

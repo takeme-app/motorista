@@ -75,6 +75,11 @@ import {
   type NavigationEdgePadding,
 } from '../lib/navigationCamera';
 import { snapToRoutePolyline, trimPolylineFromSnap } from '../lib/routeSnap';
+import {
+  formatDependentShipmentCode,
+  formatShipmentCode,
+  formatTripCode,
+} from '@take-me/shared';
 import * as ImagePicker from 'expo-image-picker';
 // expo-location — defensive import (needs native rebuild if just added)
 let Location: any = null;
@@ -167,11 +172,20 @@ const GOLD = '#C9A227';
 /**
  * Padding inferior (pt ≈ dp) entre o centro “útil” do mapa SDK e o fundo seguro —
  * espaço ocupado pelo mini sheet flutuante + folga (~igual aos estilos do card).
+ *
+ * Valor maior puxa o motorista para cima na tela (estilo Waze) e dá espaço para
+ * o `viewportDataSource` "olhar à frente", o que estabiliza a câmera durante
+ * o tracking — evita a sensação de travado vinda de re-centramentos abruptos.
  */
-const SDK_NATIVE_FLOATING_CARD_PADDING = 300;
-/** Zoom fixo do SDK no modo following. Maior = mais perto da posição do motorista. */
-const SDK_NATIVE_FOLLOWING_ZOOM = 19.3;
+const SDK_NATIVE_FLOATING_CARD_PADDING = 380;
+/**
+ * Zoom fixo do SDK no modo following. Maior = mais perto da posição do motorista.
+ * 17.8 é o sweet spot Waze-like: amplo o suficiente para ver a próxima manobra
+ * e estável o bastante para não amplificar jitter do GPS.
+ */
+const SDK_NATIVE_FOLLOWING_ZOOM = 17.8;
 const SDK_NATIVE_CONTROL_GAP = 12;
+const SDK_NATIVE_ROUTE_GUIDE_MAX_POINTS = 25;
 /** Trecho imediato no mapa (GPS → próxima etapa): preto, distinto do ouro contínuo. */
 const ROUTE_IMMEDIATE_LEG_COLOR = DARK;
 /** Âncora compartilhada dos marcadores do mapa (centralizados no ponto). Referência estável
@@ -204,6 +218,16 @@ const ODOMETER_UI_FLUSH_MS = 650;
 // ---------------------------------------------------------------------------
 
 type Stop = TripStop;
+type CashPaymentInfo = {
+  label: 'Viagem' | 'Encomenda' | 'Envio de dependente';
+  amountCents: number;
+};
+
+type TripEntityEarningInfo = {
+  amountCents: number;
+  workerEarningCents: number | null;
+  status?: string | null;
+};
 
 /** Helper — stop é coleta (embarque / pick-up) */
 function isPickup(s: Stop) {
@@ -319,14 +343,31 @@ async function resolveSyntheticTripStopId(
 /** Helper — stop é de encomenda */
 function isPackage(s: Stop) { return s.stopType === 'package_pickup' || s.stopType === 'package_dropoff'; }
 
+function formatCurrencyCents(cents: number): string {
+  return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function entityEarningCents(row: TripEntityEarningInfo): number {
+  const worker = Number(row.workerEarningCents);
+  if (Number.isFinite(worker) && worker > 0) return Math.floor(worker);
+  const amount = Number(row.amountCents);
+  return Number.isFinite(amount) && amount > 0 ? Math.floor(amount) : 0;
+}
+
+function countsAsTripTotal(status: string | null | undefined): boolean {
+  const s = String(status ?? '').trim().toLowerCase();
+  return s !== 'cancelled' && s !== 'rejected' && s !== 'expired';
+}
+
 /**
- * Paradas que exigem PIN de 4 dígitos no app do motorista (PDF "Sequência
- * de Solicitação de Código"):
- *   - encomenda: coleta e entrega (o código é a prova de posse).
+ * Paradas que exigem PIN de 4 dígitos digitado no app do motorista:
+ *   - encomenda sem base: coleta é validada pelo cliente; entrega é validada pelo motorista.
+ *   - encomenda com base: retirada na base e entrega são validadas pelo motorista.
  *   - passageiro: apenas embarque (desembarque é livre — cenário 1 do PDF).
  *   - dependente: embarque E desembarque (cenário 2 do PDF, etapas 1-3 e 5-7).
  */
 function requiresDriverEnteredPin(s: Stop): boolean {
+  if (s.stopType === 'package_pickup' && !isPackagePickupAtBase(s)) return false;
   if (isPackage(s)) return true;
   return (
     s.stopType === 'passenger_pickup' ||
@@ -337,6 +378,10 @@ function requiresDriverEnteredPin(s: Stop): boolean {
 
 function isPackagePickupAtBase(s: Stop | null | undefined): boolean {
   return !!s && s.stopType === 'package_pickup' && s.packageDriverLeg === 'base_pickup';
+}
+
+function isPackagePickupWithClientValidation(s: Stop | null | undefined): boolean {
+  return !!s && s.stopType === 'package_pickup' && !isPackagePickupAtBase(s);
 }
 
 function isRouteWaypointStop(s: Stop) {
@@ -457,6 +502,20 @@ function stopPhaseShortLabel(s: Stop): string {
   }
 }
 
+function stopModalCode(stop: Stop): { label: string; code: string } | null {
+  if (isPackage(stop)) {
+    return { label: 'Encomenda', code: formatShipmentCode(stop.entityId) };
+  }
+  if (isDependent(stop)) {
+    const dependentShipmentId = dependentShipmentIdFromSyntheticStopId(stop.id) ?? stop.entityId;
+    return { label: 'Envio de dependente', code: formatDependentShipmentCode(dependentShipmentId) };
+  }
+  if (isPassenger(stop) || stop.stopType === 'trip_destination') {
+    return { label: 'Viagem', code: formatTripCode(stop.entityId) };
+  }
+  return null;
+}
+
 function detailSheetTitle(stop: Stop | null): string {
   if (!stop) return '';
   switch (stop.stopType) {
@@ -503,7 +562,7 @@ function confirmPickupSubtitle(stop: Stop | null | undefined): string {
       // PDF cenário 3, etapas 10-11: motorista solicita o código à base e digita.
       return 'Solicite o código de 4 dígitos à base e digite abaixo para retirar a encomenda.';
     }
-    return 'Insira o código informado pelo passageiro para confirmar a coleta.';
+    return 'Informe este código ao cliente. Ele deve digitar no app dele para validar a coleta; depois toque abaixo para avançar.';
   }
   if (stop.stopType === 'package_dropoff') return '';
   if (isPackage(stop)) return 'Insira o código de 4 dígitos informado pelo remetente.';
@@ -532,7 +591,9 @@ function confirmPickupButtonLabel(stop: Stop | null | undefined): string {
   }
   if (isRouteWaypointStop(stop)) return 'Concluir';
   if (stop.stopType === 'package_pickup') {
-    return isPackagePickupAtBase(stop) ? 'Confirmar retirada' : 'Confirmar coleta';
+    return isPackagePickupAtBase(stop)
+      ? 'Confirmar retirada'
+      : 'Cliente confirmou — seguir';
   }
   return 'Confirmar embarque';
 }
@@ -666,6 +727,19 @@ function dedupeConsecutivePoints(pts: LatLng[]): LatLng[] {
   return out;
 }
 
+function sampleRouteGuidePoints(points: LatLng[], maxPoints: number): LatLng[] {
+  const deduped = dedupeConsecutivePoints(
+    points.filter((p) => isValidGlobeCoordinate(p.latitude, p.longitude)),
+  );
+  if (deduped.length <= maxPoints) return deduped;
+  const lastIndex = deduped.length - 1;
+  const sampled: LatLng[] = [];
+  for (let i = 0; i < maxPoints; i++) {
+    sampled.push(deduped[Math.round((lastIndex * i) / (maxPoints - 1))]!);
+  }
+  return dedupeConsecutivePoints(sampled);
+}
+
 /**
  * Navegação: primeira parada restante com coordenadas válidas (cliente/encomenda/destino).
  * Ignora driver_origin caso ainda apareça em algum fluxo legado.
@@ -678,9 +752,8 @@ function resolveNavigationDestination(
   for (let i = fromIndex; i < stopsList.length; i++) {
     const s = stopsList[i];
     if (s.stopType === 'driver_origin') continue;
-    if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) {
-      return { latitude: s.lat, longitude: s.lng };
-    }
+    const coord = pickStopCoord(s.lat, s.lng);
+    if (coord) return coord;
   }
   return finalDest;
 }
@@ -691,9 +764,8 @@ function collectRemainingStopPoints(stopsList: TripStop[], fromIndex: number): L
   for (let i = fromIndex; i < stopsList.length; i++) {
     const s = stopsList[i];
     if (s.stopType === 'driver_origin') continue;
-    if (s.lat != null && s.lng != null && isValidGlobeCoordinate(s.lat, s.lng)) {
-      pts.push({ latitude: s.lat, longitude: s.lng });
-    }
+    const coord = pickStopCoord(s.lat, s.lng);
+    if (coord) pts.push(coord);
   }
   return pts;
 }
@@ -846,6 +918,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const [nearestTargetCoord, setNearestTargetCoord] = useState<LatLng | null>(null);
   const [stopsRouteCoords, setStopsRouteCoords] = useState<LatLng[]>([]);
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
+  const [nativeDistanceRemainingMeters, setNativeDistanceRemainingMeters] = useState<number | null>(null);
 
   // Driver position (ref atualizado a cada fix; estado React com throttle para fluidez)
   const [driverPosition, setDriverPosition] = useState<LatLng | null>(null);
@@ -864,6 +937,10 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const [nativeNavigationRequested, setNativeNavigationRequested] = useState(false);
   const [nativeRecenterRequestKey, setNativeRecenterRequestKey] = useState(0);
   const [miniSheetVisible, setMiniSheetVisible] = useState(true);
+  const [nativeVoiceMuted, setNativeVoiceMuted] = useState(false);
+  const [cashPaymentByEntity, setCashPaymentByEntity] = useState<Record<string, CashPaymentInfo>>({});
+  const [cashPlatformFeeCents, setCashPlatformFeeCents] = useState(0);
+  const [tripEarningsByEntity, setTripEarningsByEntity] = useState<Record<string, number>>({});
   const nativeNavigationActiveRef = useRef(false);
   const locationPermissionWarned = useRef(false);
   const locationModuleWarned = useRef(false);
@@ -1589,6 +1666,144 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     load();
   }, [load]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const bookingIds = new Set<string>();
+    const shipmentIds = new Set<string>();
+    const dependentIds = new Set<string>();
+
+    for (const stop of stops) {
+      if (!stop.entityId) continue;
+      if (isPassenger(stop)) bookingIds.add(stop.entityId);
+      else if (isPackage(stop)) shipmentIds.add(stop.entityId);
+      else if (isDependent(stop)) {
+        const dependentShipmentId = dependentShipmentIdFromSyntheticStopId(stop.id) ?? stop.entityId;
+        dependentIds.add(dependentShipmentId);
+      }
+    }
+
+    if (bookingIds.size === 0 && shipmentIds.size === 0 && dependentIds.size === 0) {
+      setCashPaymentByEntity({});
+      setCashPlatformFeeCents(0);
+      setTripEarningsByEntity({});
+      return;
+    }
+
+    void (async () => {
+      const next: Record<string, CashPaymentInfo> = {};
+      const earnings: Record<string, number> = {};
+      let nextCashPlatformFeeCents = 0;
+
+      const [bookingsRes, shipmentsRes, dependentsRes] = await Promise.all([
+        bookingIds.size > 0
+          ? supabase
+              .from('bookings')
+              .select(
+                'id, amount_cents, worker_earning_cents, admin_earning_cents, payment_method, payment_method_id, stripe_payment_intent_id, status',
+              )
+              .in('id', [...bookingIds])
+          : Promise.resolve({ data: [] as unknown[] }),
+        shipmentIds.size > 0
+          ? supabase
+              .from('shipments')
+              .select('id, amount_cents, worker_earning_cents, payment_method, status')
+              .in('id', [...shipmentIds])
+          : Promise.resolve({ data: [] as unknown[] }),
+        dependentIds.size > 0
+          ? supabase
+              .from('dependent_shipments')
+              .select('id, amount_cents, worker_earning_cents, payment_method, status')
+              .in('id', [...dependentIds])
+          : Promise.resolve({ data: [] as unknown[] }),
+      ]);
+
+      for (const row of (bookingsRes.data ?? []) as unknown as {
+        id: string;
+        amount_cents?: number | null;
+        worker_earning_cents?: number | null;
+        admin_earning_cents?: number | null;
+        payment_method?: string | null;
+        payment_method_id?: string | null;
+        stripe_payment_intent_id?: string | null;
+        status?: string | null;
+      }[]) {
+        const amount = Math.max(0, Math.floor(Number(row.amount_cents ?? 0)));
+        const method = String(row.payment_method ?? '').trim().toLowerCase();
+        const isCash =
+          method === 'cash' ||
+          (!method && !row.payment_method_id && !row.stripe_payment_intent_id);
+        if (countsAsTripTotal(row.status)) {
+          const earning = entityEarningCents({
+            amountCents: amount,
+            workerEarningCents: row.worker_earning_cents ?? null,
+            status: row.status,
+          });
+          if (earning > 0) earnings[row.id] = earning;
+        }
+        if (isCash && amount > 0 && row.status !== 'cancelled') {
+          next[row.id] = { label: 'Viagem', amountCents: amount };
+          if (countsAsTripTotal(row.status)) {
+            nextCashPlatformFeeCents += Math.max(0, Math.floor(Number(row.admin_earning_cents ?? 0)));
+          }
+        }
+      }
+
+      for (const row of (shipmentsRes.data ?? []) as unknown as {
+        id: string;
+        amount_cents?: number | null;
+        worker_earning_cents?: number | null;
+        payment_method?: string | null;
+        status?: string | null;
+      }[]) {
+        const amount = Math.max(0, Math.floor(Number(row.amount_cents ?? 0)));
+        const method = String(row.payment_method ?? '').trim().toLowerCase();
+        if (countsAsTripTotal(row.status)) {
+          const earning = entityEarningCents({
+            amountCents: amount,
+            workerEarningCents: row.worker_earning_cents ?? null,
+            status: row.status,
+          });
+          if (earning > 0) earnings[row.id] = earning;
+        }
+        if ((method === 'dinheiro' || method === 'cash') && amount > 0 && row.status !== 'cancelled') {
+          next[row.id] = { label: 'Encomenda', amountCents: amount };
+        }
+      }
+
+      for (const row of (dependentsRes.data ?? []) as unknown as {
+        id: string;
+        amount_cents?: number | null;
+        worker_earning_cents?: number | null;
+        payment_method?: string | null;
+        status?: string | null;
+      }[]) {
+        const amount = Math.max(0, Math.floor(Number(row.amount_cents ?? 0)));
+        const method = String(row.payment_method ?? '').trim().toLowerCase();
+        if (countsAsTripTotal(row.status)) {
+          const earning = entityEarningCents({
+            amountCents: amount,
+            workerEarningCents: row.worker_earning_cents ?? null,
+            status: row.status,
+          });
+          if (earning > 0) earnings[row.id] = earning;
+        }
+        if ((method === 'dinheiro' || method === 'cash') && amount > 0 && row.status !== 'cancelled') {
+          next[row.id] = { label: 'Envio de dependente', amountCents: amount };
+        }
+      }
+
+      if (!cancelled) {
+        setCashPaymentByEntity(next);
+        setCashPlatformFeeCents(nextCashPlatformFeeCents);
+        setTripEarningsByEntity(earnings);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [stops]);
+
   // ---------------------------------------------------------------------------
   // Derived values
   // ---------------------------------------------------------------------------
@@ -1599,12 +1814,46 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     confirmPickupVisible || confirmDeliveryVisible ? (confirmUiStop ?? currentStop) : null;
   const totalStops = stops.length;
   const allDone = currentStopIndex >= totalStops && totalStops > 0;
+  const confirmSheetCashPayment = useMemo(() => {
+    if (!confirmSheetStop) return null;
+    const entityId = isDependent(confirmSheetStop)
+      ? (dependentShipmentIdFromSyntheticStopId(confirmSheetStop.id) ?? confirmSheetStop.entityId)
+      : confirmSheetStop.entityId;
+    return cashPaymentByEntity[entityId] ?? null;
+  }, [cashPaymentByEntity, confirmSheetStop]);
+  const totalCashToReceiveCents = useMemo(() => {
+    const seen = new Set<string>();
+    let total = 0;
+    for (const stop of stops) {
+      const entityId = isDependent(stop)
+        ? (dependentShipmentIdFromSyntheticStopId(stop.id) ?? stop.entityId)
+        : stop.entityId;
+      if (!entityId || seen.has(entityId)) continue;
+      const cash = cashPaymentByEntity[entityId];
+      if (!cash) continue;
+      seen.add(entityId);
+      total += cash.amountCents;
+    }
+    return total;
+  }, [cashPaymentByEntity, stops]);
 
   const completedTripEarningsLabel = useMemo(() => {
     if (!trip) return '—';
-    const cents = tripDisplayEarningsCents(trip.bookings, trip.amount_cents);
+    const seen = new Set<string>();
+    let cents = 0;
+    for (const stop of stops) {
+      const entityId = isDependent(stop)
+        ? (dependentShipmentIdFromSyntheticStopId(stop.id) ?? stop.entityId)
+        : stop.entityId;
+      if (!entityId || seen.has(entityId)) continue;
+      const earning = tripEarningsByEntity[entityId] ?? 0;
+      if (earning <= 0) continue;
+      seen.add(entityId);
+      cents += earning;
+    }
+    if (cents <= 0) cents = tripDisplayEarningsCents(trip.bookings, trip.amount_cents);
     return cents > 0 ? `R$ ${(cents / 100).toFixed(2).replace('.', ',')}` : '—';
-  }, [trip]);
+  }, [trip, tripEarningsByEntity, stops]);
 
   /**
    * Tempo desde o início real (`driver_journey_started_at`). Sem isso, usa `departure_at` só se já
@@ -1628,6 +1877,13 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     const km = traveledMeters / 1000;
     return `~${km.toFixed(1).replace('.', ',')} km`;
   }, [traveledMeters]);
+
+  const nativeDistanceRemainingLabel = useMemo(() => {
+    if (nativeDistanceRemainingMeters == null || nativeDistanceRemainingMeters < 0) return null;
+    if (nativeDistanceRemainingMeters < 1000) return `${Math.round(nativeDistanceRemainingMeters)} m`;
+    const km = nativeDistanceRemainingMeters / 1000;
+    return `${km.toFixed(km < 10 ? 1 : 0).replace('.', ',')} km`;
+  }, [nativeDistanceRemainingMeters]);
 
   /** Último ponto válido do roteiro (entrega final / última parada) ou destino da viagem. */
   const finalDestination = useMemo((): LatLng | null => {
@@ -1722,6 +1978,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   /** Índice destacado no mapa e na barra lateral: com GPS = parada geograficamente mais próxima; senão = sequencial. */
   const mapHighlightStopIndex = nearestNavStopIndex ?? currentStopIndex;
 
+  const nativeNavigationTarget = useMemo((): { coord: LatLng; name?: string } | null => {
+    const nearest = nearestGeographicNavPick;
+    if (nearest?.coord && isValidGlobeCoordinate(nearest.coord.latitude, nearest.coord.longitude)) {
+      return { coord: nearest.coord, name: nearest.label };
+    }
+    const fallback = resolveNavigationDestination(stops, currentStopIndex, finalDestination);
+    if (!fallback || !isValidGlobeCoordinate(fallback.latitude, fallback.longitude)) return null;
+    const stop = stops[currentStopIndex];
+    return { coord: fallback, name: stop?.label ?? trip?.destination_address ?? 'Destino' };
+  }, [nearestGeographicNavPick, stops, currentStopIndex, finalDestination, trip?.destination_address]);
+
   /**
    * Feature flag: quando `EXPO_PUBLIC_USE_NATIVE_NAVIGATION=1` e o módulo nativo
    * (`@take-me/expo-mapbox-navigation`) está disponível, a tela usa o
@@ -1732,29 +1999,26 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const useNativeNav = useNativeNavigationEnabled();
 
   /**
-   * Waypoints derivados das paradas restantes (usados apenas quando o caminho
-   * nativo está ativo). Origem = posição do motorista; intermediárias =
-   * paradas pendentes; destino = última parada (ou `finalDestination`).
+   * Waypoints do SDK: apenas o trecho atual que o mapa sem SDK exibe como
+   * rota tracejada (motorista -> próxima parada/coleta/embarque). Ao concluir
+   * a parada, `currentStopIndex` avança e um novo trecho é calculado.
    */
   const navigationWaypoints = useMemo(() => {
     if (!useNativeNav) return [];
     if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) {
       return [];
     }
-    const stopPts = collectRemainingStopPoints(stops, currentStopIndex);
+    if (!nativeNavigationTarget) return [];
     const points: { coord: LatLng; name?: string }[] = [
       { coord: driverPosition, name: 'Você' },
-      ...stopPts.map((coord, i) => ({ coord, name: stops[currentStopIndex + i]?.label })),
+      nativeNavigationTarget,
     ];
-    if (points.length < 2 && finalDestination) {
-      points.push({ coord: finalDestination, name: trip?.destination_address ?? 'Destino' });
-    }
     return points
       .filter((p) => p.coord && isValidGlobeCoordinate(p.coord.latitude, p.coord.longitude))
       .map((p, i, arr) =>
-        latLngToWaypoint(p.coord, p.name, i > 0 && i < arr.length - 1),
+        latLngToWaypoint(p.coord, p.name, false),
       );
-  }, [useNativeNav, driverPosition, stops, currentStopIndex, finalDestination, trip?.destination_address]);
+  }, [useNativeNav, driverPosition, nativeNavigationTarget]);
 
   const nativeNavigationActive =
     useNativeNav && nativeNavigationRequested && navigationWaypoints.length >= 2;
@@ -1771,12 +2035,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         clearInterval(drIntervalRef.current);
         drIntervalRef.current = null;
       }
+    } else {
+      setNativeDistanceRemainingMeters(null);
     }
   }, [nativeNavigationActive]);
 
   const handleNativeRouteProgress = useCallback((progress: RouteProgressEvent) => {
     if (Number.isFinite(progress.durationRemainingSeconds)) {
       setEtaSeconds(Math.max(0, progress.durationRemainingSeconds));
+    }
+    if (Number.isFinite(progress.distanceRemainingMeters)) {
+      setNativeDistanceRemainingMeters(Math.max(0, progress.distanceRemainingMeters));
     }
     if (Number.isFinite(progress.distanceTraveledMeters)) {
       setTraveledMeters(Math.max(0, progress.distanceTraveledMeters));
@@ -1834,6 +2103,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       code: null,
     };
   }, [nearestGeographicNavPick, stops, currentStop, trip]);
+  const nativeMiniSheetCode = cardInfo ? stopModalCode(cardInfo) : null;
 
   /** Evita dois botões com bandeira: parada trip_destination ou mesmo lugar do destino da viagem. */
   const showSidebarTripEndFlag = useMemo(() => {
@@ -1919,6 +2189,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
   // Trecho imediato: GPS → alvo geograficamente mais próximo (paradas restantes + destino da viagem).
   useEffect(() => {
+    if (nativeNavigationActive) return;
     if (loading) return;
     const dpLive = driverPositionRef.current;
     const dp =
@@ -2008,7 +2279,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     // chegar (ficava "piscando" em direção ao destino). Agora só dispara em mudança
     // real de alvo (`nearestDashedTargetKey`/`currentStopIndex`), reroute (`rerouteKey`)
     // ou primeira aquisição de GPS (`hasGpsKey`).
-  }, [loading, hasGpsKey, nearestDashedTargetKey, currentStopIndex, stops, trip?.id, trip?.destination_address, tripDestLL, rerouteKey]);
+  }, [loading, nativeNavigationActive, hasGpsKey, nearestDashedTargetKey, currentStopIndex, stops, trip?.id, trip?.destination_address, tripDestLL, rerouteKey]);
 
   useEffect(() => {
     if (stopsRouteCoords.length >= 2) routeForSnapRef.current = stopsRouteCoords;
@@ -2078,9 +2349,14 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     [],
   );
 
-  /** Estado derivado: mostrar o badge quando qualquer fase do reroute está ativa. */
+  /**
+   * Estado derivado: mostrar o badge quando qualquer fase do reroute está ativa.
+   * Suprimimos o overlay no modo SDK nativo: o próprio Mapbox SDK cuida do reroute
+   * e o badge gerava flicker constante por causa de jitter de GPS.
+   */
   const shouldShowRerouteBadge =
-    isRerouting || isOffRouteSoft || rerouteNetworkError || isWrongDirection;
+    !nativeNavigationActive &&
+    (isRerouting || isOffRouteSoft || rerouteNetworkError || isWrongDirection);
 
   /**
    * Anima entrada/saída do badge (fade + slide-down). Mantém o node montado até a animação
@@ -2151,6 +2427,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     ? effectiveBottomInset + 12 + SDK_NATIVE_FLOATING_CARD_PADDING + 14
     : effectiveBottomInset + 16;
   const nativeSdkRecenterBottom = nativeSdkToggleBottom + 46 + SDK_NATIVE_CONTROL_GAP;
+  const nativeSdkVoiceBottom = nativeSdkRecenterBottom + 46 + SDK_NATIVE_CONTROL_GAP;
 
   /** Centraliza o mapa na parada correspondente ao ícone da lateral (mesmo fallback de coord. dos markers). */
   const focusMapOnSidebarStop = useCallback(
@@ -2315,6 +2592,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     }
     return null;
   }, [navRoutePresentation.goldLine, navRoutePresentation.snappedForFallback, stopsRouteCoords.length, driverPosition, fallbackNavDest]);
+
+  const nativeSdkRouteGuide = useMemo(
+    () => sampleRouteGuidePoints(immediateLegLineForMap, SDK_NATIVE_ROUTE_GUIDE_MAX_POINTS),
+    [immediateLegLineForMap],
+  );
 
   /** Troca de trecho (parada / destino sequencial): remonta a polyline para o Mapbox não “arrastar” geometria antiga. */
   const dashedRouteSegmentKey = useMemo(() => {
@@ -2748,6 +3030,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                   : 'Código da encomenda não encontrado no sistema. Atualize a viagem ou fale com o suporte.'
                 : err === 'forbidden'
                   ? 'Sem permissão para concluir esta parada.'
+                  : err === 'pickup_not_confirmed'
+                    ? 'O cliente ainda não validou o código de coleta no app dele.'
                   : err === 'stop_not_found'
                     ? 'Parada não encontrada.'
                     : 'Não foi possível concluir a parada.';
@@ -2792,6 +3076,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
 
   const handleFinalizeTrip = async () => {
     const routeSlotSnapshot = trip;
+    const completedCashFeeCents = cashPlatformFeeCents;
     setFinalizingTrip(true);
     try {
       const {
@@ -2913,6 +3198,14 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     requestAnimationFrame(() => {
       Animated.spring(completedSlide, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
     });
+    if (completedCashFeeCents > 0) {
+      setTimeout(() => {
+        showAlert(
+          'Taxa da plataforma',
+          `Taxa ${formatCurrencyCents(completedCashFeeCents)} registrada; será abatida nas próximas corridas com cartão/Pix.`,
+        );
+      }, 350);
+    }
   };
 
   const handleSubmitRating = async () => {
@@ -3054,8 +3347,10 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         ref={mapRef}
         style={StyleSheet.absoluteFillObject}
         waypoints={navigationWaypoints}
+        routeCoordinates={nativeSdkRouteGuide}
         accessToken={getMapboxAccessToken()}
         voiceLanguage="pt-BR"
+        mute={nativeVoiceMuted}
         nativeNavigationActive={nativeNavigationActive}
         followingPaddingTop={overlayTop}
         followingPaddingBottom={effectiveBottomInset + 12 + SDK_NATIVE_FLOATING_CARD_PADDING}
@@ -3270,31 +3565,50 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           </View>
         )}
 
-        <DriverLocationFocusButton
-          following={followMyLocation || nativeNavigationActive}
-          style={[
-            styles.myLocationBtn,
-            { top: overlayTop + 44 + 6 + 44 + 10, left: 14 },
-          ]}
-          onPress={() => {
-            if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) return;
-            if (useNativeNav) {
-              if (navigationWaypoints.length < 2) {
-                showAlert('Navegação', 'Ainda não há rota suficiente para iniciar a navegação.');
+        {/*
+          O DriverLocationFocusButton serve para "entrar" no SDK e para
+          recentralizar o mapa fora do SDK. Uma vez que a navegação SDK
+          está ativa, o controle equivalente é o sdkFloatingBtn (à esquerda,
+          ícone "near-me"). Esconder evita ações duplicadas e poluição visual.
+        */}
+        {!nativeNavigationActive && (
+          <DriverLocationFocusButton
+            following={followMyLocation}
+            style={[
+              styles.myLocationBtn,
+              { top: overlayTop + 44 + 6 + 44 + 10, left: 14 },
+            ]}
+            onPress={() => {
+              if (!driverPosition || !isValidGlobeCoordinate(driverPosition.latitude, driverPosition.longitude)) return;
+              if (useNativeNav) {
+                if (navigationWaypoints.length < 2) {
+                  showAlert('Navegação', 'Ainda não há rota suficiente para iniciar a navegação.');
+                  return;
+                }
+                setFollowMyLocation(false);
+                setNativeNavigationRequested(true);
+                setNativeRecenterRequestKey((v) => v + 1);
                 return;
               }
-              setFollowMyLocation(false);
-              setNativeNavigationRequested(true);
-              return;
-            }
-            setFollowMyLocation(true);
-          }}
-        />
+              setFollowMyLocation(true);
+            }}
+          />
+        )}
 
         {nativeNavigationActive && (
           <>
             <TouchableOpacity
-              style={[styles.sdkFloatingBtn, { right: 14, bottom: nativeSdkRecenterBottom }]}
+              style={[styles.sdkFloatingBtn, { left: 14, bottom: nativeSdkVoiceBottom }]}
+              onPress={() => setNativeVoiceMuted((muted) => !muted)}
+              activeOpacity={0.82}
+              accessibilityRole="button"
+              accessibilityLabel={nativeVoiceMuted ? 'Ativar auxiliar de voz' : 'Desativar auxiliar de voz'}
+            >
+              <MaterialIcons name={nativeVoiceMuted ? 'volume-off' : 'volume-up'} size={22} color="#fff" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.sdkFloatingBtn, { left: 14, bottom: nativeSdkRecenterBottom }]}
               onPress={() => setNativeRecenterRequestKey((v) => v + 1)}
               activeOpacity={0.82}
               accessibilityRole="button"
@@ -3304,7 +3618,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.sdkFloatingBtn, { right: 14, bottom: nativeSdkToggleBottom }]}
+              style={[styles.sdkFloatingBtn, { left: 14, bottom: nativeSdkToggleBottom }]}
               onPress={() => setMiniSheetVisible((visible) => !visible)}
               activeOpacity={0.82}
               accessibilityRole="button"
@@ -3377,7 +3691,10 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               </View>
               {etaSeconds !== null && (
                 <View style={styles.etaBadge}>
-                  <Text style={styles.etaBadgeText}>{Math.max(1, Math.round(etaSeconds / 60))} min</Text>
+                  <Text style={styles.etaBadgeText}>
+                    {Math.max(1, Math.round(etaSeconds / 60))} min
+                    {nativeDistanceRemainingLabel ? ` • ${nativeDistanceRemainingLabel}` : ''}
+                  </Text>
                 </View>
               )}
             </View>
@@ -3385,6 +3702,11 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             <Text style={styles.miniSheetName} numberOfLines={1}>
               {totalStops > 0 ? cardInfo.label : (trip?.origin_address ?? cardInfo.label)}
             </Text>
+            {nativeNavigationActive && nativeMiniSheetCode?.code ? (
+              <Text style={styles.miniSheetOrderId} numberOfLines={1}>
+                {nativeMiniSheetCode.label} #{nativeMiniSheetCode.code}
+              </Text>
+            ) : null}
 
             <View style={styles.addressRow}>
               <MaterialIcons name="location-on" size={14} color="#6B7280" />
@@ -3648,6 +3970,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 <Text style={styles.confirmSheetSubtitle}>
                   Insira o código informado pelo cliente para confirmar a entrega.
                 </Text>
+                {confirmSheetCashPayment ? (
+                  <View style={styles.cashPaymentNotice}>
+                    <MaterialIcons name="payments" size={20} color="#92400E" />
+                    <View style={styles.cashPaymentTextCol}>
+                      <Text style={styles.cashPaymentTitle}>Receber em dinheiro</Text>
+                      <Text style={styles.cashPaymentValue}>
+                        {confirmSheetCashPayment.label}: {formatCurrencyCents(confirmSheetCashPayment.amountCents)}
+                      </Text>
+                    </View>
+                  </View>
+                ) : null}
                 <View style={styles.confirmSheetDivider} />
                 <Text style={styles.fieldLabel}>Código de entrega</Text>
                 <TextInput
@@ -3693,6 +4026,17 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                   </TouchableOpacity>
                 </View>
                 <Text style={styles.confirmSheetSubtitle}>{confirmPickupSubtitle(confirmSheetStop)}</Text>
+                {confirmSheetCashPayment ? (
+                  <View style={styles.cashPaymentNotice}>
+                    <MaterialIcons name="payments" size={20} color="#92400E" />
+                    <View style={styles.cashPaymentTextCol}>
+                      <Text style={styles.cashPaymentTitle}>Receber em dinheiro</Text>
+                      <Text style={styles.cashPaymentValue}>
+                        {confirmSheetCashPayment.label}: {formatCurrencyCents(confirmSheetCashPayment.amountCents)}
+                      </Text>
+                    </View>
+                  </View>
+                ) : null}
                 <View style={styles.confirmSheetDivider} />
                 {confirmSheetStop && requiresDriverEnteredPin(confirmSheetStop) ? (
                   <>
@@ -3722,6 +4066,22 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                       placeholderTextColor="#9CA3AF"
                     />
                   </>
+                ) : null}
+                {isPackagePickupWithClientValidation(confirmSheetStop) ? (
+                  <View style={styles.handoffCodeWrap}>
+                    <Text style={styles.fieldLabel}>Código para informar ao cliente</Text>
+                    <View style={styles.handoffCodeBox}>
+                      <Text style={styles.handoffCodeText}>
+                        {onlyDigits(confirmSheetStop?.code ?? '').length === 4
+                          ? onlyDigits(confirmSheetStop?.code ?? '')
+                          : '— — — —'}
+                      </Text>
+                    </View>
+                    <Text style={styles.handoffCodeHint}>
+                      Peça para o cliente digitar esse código no app dele. Quando ele confirmar,
+                      toque no botão abaixo para avançar para a próxima parada.
+                    </Text>
+                  </View>
                 ) : null}
                 {confirmError ? <Text style={styles.errorText}>{confirmError}</Text> : null}
                 <TouchableOpacity
@@ -3787,6 +4147,20 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 <Text style={styles.statusBadgeText}>Concluído</Text>
               </View>
             </View>
+            <View style={styles.finalizeDivider} />
+            <View style={styles.finalizeSummaryRow}>
+              <Text style={styles.finalizeSummaryLabel}>Total da corrida</Text>
+              <Text style={styles.finalizeSummaryValue}>{completedTripEarningsLabel}</Text>
+            </View>
+            {totalCashToReceiveCents > 0 ? (
+              <>
+                <View style={styles.finalizeDivider} />
+                <View style={styles.finalizeSummaryRow}>
+                  <Text style={styles.finalizeSummaryLabel}>Dinheiro a receber</Text>
+                  <Text style={styles.finalizeSummaryValue}>{formatCurrencyCents(totalCashToReceiveCents)}</Text>
+                </View>
+              </>
+            ) : null}
           </View>
 
           <Text style={styles.expenseOptional}>Anexar despesas (opcional)</Text>
@@ -4227,6 +4601,13 @@ const styles = StyleSheet.create({
     color: DARK,
     marginBottom: 6,
   },
+  miniSheetOrderId: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#92400E',
+    marginTop: -2,
+    marginBottom: 6,
+  },
   addressRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -4383,6 +4764,21 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   confirmSheetSubtitle: { fontSize: 14, color: '#6B7280', lineHeight: 20, marginBottom: 16 },
+  cashPaymentNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 16,
+  },
+  cashPaymentTextCol: { flex: 1 },
+  cashPaymentTitle: { fontSize: 12, fontWeight: '800', color: '#92400E', textTransform: 'uppercase' },
+  cashPaymentValue: { fontSize: 15, fontWeight: '800', color: DARK, marginTop: 2 },
   confirmSheetDivider: { height: 1, backgroundColor: '#F3F4F6', marginBottom: 16 },
   sheetBackBtn: {
     borderRadius: 14,
@@ -4410,6 +4806,32 @@ const styles = StyleSheet.create({
     backgroundColor: '#F9FAFB',
     marginBottom: 4,
     textAlign: 'center',
+  },
+  handoffCodeWrap: { marginBottom: 8 },
+  handoffCodeBox: {
+    alignSelf: 'center',
+    minWidth: 180,
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    borderRadius: 14,
+    backgroundColor: '#F9FAFB',
+    paddingVertical: 14,
+    paddingHorizontal: 22,
+    marginBottom: 10,
+  },
+  handoffCodeText: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: DARK,
+    textAlign: 'center',
+    letterSpacing: 1,
+  },
+  handoffCodeHint: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#6B7280',
+    textAlign: 'center',
+    marginBottom: 4,
   },
   errorText: { fontSize: 13, color: '#EF4444', marginTop: 4, marginBottom: 4, textAlign: 'center' },
 

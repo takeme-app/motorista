@@ -18,6 +18,7 @@ import type { ColetasEncomendasStackParamList } from '../../navigation/ColetasEn
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 import { supabase } from '../../lib/supabase';
 import { fetchWorkerShipmentBaseId } from '../../lib/preparerEncomendasBase';
+import { formatShipmentCode } from '@take-me/shared';
 
 type Props = NativeStackScreenProps<ColetasEncomendasStackParamList, 'ColetasMain'>;
 
@@ -37,8 +38,18 @@ type HistoryItem = {
   dateLabel: string;
 };
 
+type ChatPreview = {
+  id: string;
+  participantName: string;
+  participantAvatar?: string | null;
+  lastMessage?: string | null;
+  lastMessageAt?: string | null;
+  unreadCount: number;
+  status: 'active' | 'closed';
+};
+
 function shortId(id: string): string {
-  return id.replace(/-/g, '').slice(-4).toUpperCase();
+  return formatShipmentCode(id);
 }
 
 function formatHistoryDate(iso: string): string {
@@ -59,10 +70,20 @@ function formatScheduledAt(iso: string | null, createdAt: string): string {
   } catch { return '—'; }
 }
 
+function formatChatTime(iso?: string | null): string {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
 export function ColetasEncomendasScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [active, setActive] = useState<ActiveShipment | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [chatPreviews, setChatPreviews] = useState<ChatPreview[]>([]);
   const [supportVisible, setSupportVisible] = useState(false);
 
   const load = useCallback(async () => {
@@ -74,28 +95,31 @@ export function ColetasEncomendasScreen({ navigation }: Props) {
     if (!myBaseId) {
       setActive(null);
       setHistory([]);
+      setChatPreviews([]);
       setLoading(false);
       return;
     }
 
-    // Encomenda ativa (confirmada, mesma base do preparador)
+    // Encomenda ativa assumida pelo preparador (mesma base), ainda não entregue na base.
     const { data: activeData } = await supabase
       .from('shipments')
-      .select('id, origin_address, scheduled_at, created_at, user_id, base_id, bases(name, address)')
+      .select('id, origin_address, scheduled_at, created_at, user_id, base_id, delivered_to_base_at, bases(name, address)')
       .in('status', ['confirmed', 'in_progress'])
-      .eq('driver_id' as never, user.id)
+      .eq('preparer_id' as never, user.id)
       .eq('base_id' as never, myBaseId as never)
+      .is('delivered_to_base_at', null)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
 
     if (activeData) {
-      const row = activeData as {
+      const row = activeData as unknown as {
         id: string;
         origin_address: string;
         scheduled_at: string | null;
         created_at: string;
         user_id: string;
+        delivered_to_base_at?: string | null;
         bases?: { name?: string | null; address?: string | null } | null;
       };
       const { data: prof } = await supabase
@@ -116,35 +140,78 @@ export function ColetasEncomendasScreen({ navigation }: Props) {
       setActive(null);
     }
 
-    // Histórico recente (últimas 4, excluindo a ativa)
+    // Histórico recente: só encomendas já depositadas/finalizadas pelo preparador.
     const { data: histData } = await supabase
       .from('shipments')
-      .select('id, created_at, user_id')
-      .eq('driver_id' as never, user.id)
+      .select('id, created_at, user_id, delivered_to_base_at')
+      .eq('preparer_id' as never, user.id)
       .eq('base_id' as never, myBaseId as never)
-      .order('created_at', { ascending: false })
-      .limit(5);
+      .not('delivered_to_base_at', 'is', null)
+      .order('delivered_to_base_at', { ascending: false })
+      .limit(4);
 
-    const rows = (histData ?? []) as { id: string; created_at: string; user_id: string }[];
-    const activeId = activeData ? (activeData as { id: string }).id : null;
+    const rows = (histData ?? []) as unknown as {
+      id: string;
+      created_at: string;
+      user_id: string;
+      delivered_to_base_at?: string | null;
+    }[];
     const items: HistoryItem[] = [];
     for (const r of rows) {
-      if (r.id === activeId) continue;
-      if (items.length >= 4) break;
       const { data: prof } = await supabase
         .from('profiles').select('full_name').eq('id', r.user_id).maybeSingle();
       const p = prof as { full_name?: string | null } | null;
       items.push({
         id: r.id,
         clientName: p?.full_name ?? 'Cliente',
-        dateLabel: formatHistoryDate(r.created_at),
+        dateLabel: formatHistoryDate(r.delivered_to_base_at ?? r.created_at),
       });
     }
     setHistory(items);
+
+    const { data: chatsData } = await supabase
+      .from('conversations' as never)
+      .select('id, participant_name, participant_avatar, last_message, last_message_at, unread_driver, status')
+      .eq('driver_id', user.id)
+      .not('shipment_id', 'is', null)
+      .order('last_message_at', { ascending: false })
+      .limit(3);
+
+    setChatPreviews(((chatsData ?? []) as unknown as {
+      id: string;
+      participant_name?: string | null;
+      participant_avatar?: string | null;
+      last_message?: string | null;
+      last_message_at?: string | null;
+      unread_driver?: number | null;
+      status?: string | null;
+    }[]).map((c) => ({
+      id: c.id,
+      participantName: c.participant_name?.trim() || 'Cliente',
+      participantAvatar: c.participant_avatar ?? null,
+      lastMessage: c.last_message ?? null,
+      lastMessageAt: c.last_message_at ?? null,
+      unreadCount: c.unread_driver ?? 0,
+      status: c.status === 'closed' ? 'closed' : 'active',
+    })));
     setLoading(false);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const openChatThread = useCallback((chat: ChatPreview) => {
+    const parent = navigation.getParent() as
+      | { navigate: (screen: string, params?: unknown) => void }
+      | undefined;
+    parent?.navigate('ChatEnc', {
+      screen: 'ChatEncThread',
+      params: {
+        conversationId: chat.id,
+        participantName: chat.participantName,
+        participantAvatar: chat.participantAvatar ?? undefined,
+      },
+    });
+  }, [navigation]);
 
   const handleCall = () => {
     Linking.openURL('tel:+5500000000000');
@@ -231,6 +298,9 @@ export function ColetasEncomendasScreen({ navigation }: Props) {
                       <Text style={styles.historyName}>{item.clientName}</Text>
                       <Text style={styles.historyDate}>{item.dateLabel}</Text>
                     </View>
+                    <View style={styles.historyStatusBadge}>
+                      <Text style={styles.historyStatusText}>Finalizada</Text>
+                    </View>
                     <MaterialIcons name="chevron-right" size={20} color="#9CA3AF" />
                   </TouchableOpacity>
                   {idx < history.length - 1 && <View style={styles.sep} />}
@@ -254,11 +324,38 @@ export function ColetasEncomendasScreen({ navigation }: Props) {
           {/* Chat */}
           <Text style={[styles.sectionTitle, { marginTop: 8 }]}>Chat</Text>
           <View style={styles.listCard}>
-            <View style={styles.chatEmptyRow}>
-              <MaterialIcons name="chat-bubble-outline" size={28} color="#D1D5DB" />
-              <Text style={styles.emptyListText}>Nenhuma conversa recente</Text>
-            </View>
-            <View style={styles.sep} />
+            {chatPreviews.length === 0 ? (
+              <View style={styles.chatEmptyRow}>
+                <MaterialIcons name="chat-bubble-outline" size={28} color="#D1D5DB" />
+                <Text style={styles.emptyListText}>Nenhuma conversa recente</Text>
+              </View>
+            ) : (
+              chatPreviews.map((chat, idx) => (
+                <View key={chat.id}>
+                  <TouchableOpacity style={styles.chatRow} activeOpacity={0.75} onPress={() => openChatThread(chat)}>
+                    <View style={styles.chatIcon}>
+                      <MaterialIcons name="chat-bubble-outline" size={20} color="#92400E" />
+                    </View>
+                    <View style={styles.chatInfo}>
+                      <View style={styles.chatTitleRow}>
+                        <Text style={styles.chatName} numberOfLines={1}>{chat.participantName}</Text>
+                        <Text style={styles.chatTime}>{formatChatTime(chat.lastMessageAt)}</Text>
+                      </View>
+                      <Text style={styles.chatPreviewText} numberOfLines={1}>
+                        {chat.lastMessage || (chat.status === 'closed' ? 'Conversa finalizada' : 'Abrir conversa')}
+                      </Text>
+                    </View>
+                    {chat.unreadCount > 0 && (
+                      <View style={styles.chatBadge}>
+                        <Text style={styles.chatBadgeText}>{chat.unreadCount}</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                  {idx < chatPreviews.length - 1 && <View style={styles.sep} />}
+                </View>
+              ))
+            )}
+            {chatPreviews.length > 0 && <View style={styles.sep} />}
             <TouchableOpacity
               style={styles.verMaisBtn}
               activeOpacity={0.7}
@@ -355,10 +452,44 @@ const styles = StyleSheet.create({
   historyInfo: { flex: 1 },
   historyName: { fontSize: 15, fontWeight: '600', color: '#111827' },
   historyDate: { fontSize: 13, color: '#6B7280', marginTop: 2 },
+  historyStatusBadge: {
+    backgroundColor: '#ECFDF5',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginRight: 8,
+  },
+  historyStatusText: { fontSize: 11, fontWeight: '800', color: '#047857' },
   sep: { height: 1, backgroundColor: '#F3F4F6', marginHorizontal: 16 },
   verMaisBtn: { paddingVertical: 14, alignItems: 'center' },
   verMaisText: { fontSize: 14, fontWeight: '600', color: '#374151', textDecorationLine: 'underline' },
   chatEmptyRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 16 },
+  chatRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16 },
+  chatIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FFFBEB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  chatInfo: { flex: 1 },
+  chatTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  chatName: { flex: 1, fontSize: 15, fontWeight: '700', color: '#111827' },
+  chatTime: { fontSize: 12, color: '#9CA3AF' },
+  chatPreviewText: { fontSize: 13, color: '#6B7280', marginTop: 2 },
+  chatBadge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#92400E',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    marginLeft: 8,
+  },
+  chatBadgeText: { fontSize: 11, fontWeight: '800', color: '#FFFFFF' },
   emptyListText: { fontSize: 14, color: '#9CA3AF' },
   emptyHistory: { paddingVertical: 28, alignItems: 'center', gap: 10 },
   // FAB

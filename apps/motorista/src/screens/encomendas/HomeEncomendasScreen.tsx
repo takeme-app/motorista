@@ -7,7 +7,6 @@ import {
   Switch,
   Modal,
   ActivityIndicator,
-  InteractionManager,
 } from 'react-native';
 
 let Location: any = null;
@@ -16,11 +15,10 @@ import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 import { supabase } from '../../lib/supabase';
 import { fetchWorkerShipmentBaseId } from '../../lib/preparerEncomendasBase';
-import { createOrGetShipmentConversation } from '../../lib/shipmentConversation';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
 
@@ -70,7 +68,6 @@ type Promotion = {
 };
 
 export function HomeEncomendasScreen() {
-  const navigation = useNavigation<any>();
   const { showAlert } = useAppAlert();
   const [preparadorName, setPreparadorName] = useState('Preparador');
   const [gpsEnabled, setGpsEnabled] = useState(false);
@@ -196,64 +193,60 @@ export function HomeEncomendasScreen() {
   const confirmAccept = useCallback(async () => {
     if (!acceptModal || !userId) return;
     const modal = acceptModal;
-    /** Navegar só depois de fechar o Modal — iOS costuma travar ao trocar de tab com Modal visível. */
-    let chatNav: { conversationId: string; participantName: string } | null = null;
     setActioning(true);
     try {
-      const { data: row, error: upErr } = await supabase
-        .from('shipments')
-        .update({
-          status: 'confirmed',
-          driver_id: userId,
-          driver_accepted_at: new Date().toISOString(),
-        } as never)
-        .eq('id', modal.id)
-        .is('driver_id', null)
-        .select('id')
-        .maybeSingle();
+      const { data: claimData, error: claimErr } = await supabase.rpc(
+        'shipment_preparer_accept_claim' as never,
+        { p_shipment_id: modal.id } as never,
+      );
+      const claim = claimData as { ok?: boolean; error?: string; skipped?: boolean } | null;
 
-      if (upErr) {
-        showAlert('Erro', upErr.message || 'Não foi possível aceitar a coleta.');
+      if (claimErr) {
+        showAlert('Erro', getUserErrorMessage(claimErr, 'Não foi possível aceitar a coleta.'));
         return;
       }
-      if (!row) {
+      if (claim?.ok !== true) {
+        if (claim?.error === 'already_claimed') {
+          showAlert(
+            'Coleta indisponível',
+            'Outro preparador já aceitou esta encomenda. A lista será atualizada.',
+          );
+          await load();
+          return;
+        }
+        if (claim?.error === 'awaiting_driver') {
+          showAlert(
+            'Coleta aguardando motorista',
+            'Esta encomenda ainda precisa ser aceita pelo motorista antes de ficar disponível para coleta.',
+          );
+          await load();
+          return;
+        }
+        if (claim?.error === 'forbidden' || claim?.error === 'no_base') {
+          showAlert(
+            'Coleta indisponível',
+            'Esta encomenda não pertence à sua base de preparação.',
+          );
+          await load();
+          return;
+        }
         showAlert(
-          'Coleta indisponível',
-          'Outro preparador já aceitou esta encomenda. A lista será atualizada.',
+          'Erro',
+          'Não foi possível aceitar a coleta. Atualize a lista e tente novamente.',
         );
         await load();
         return;
       }
 
       setAccepted((prev) => [...prev, modal.id]);
-
-      const conv = await createOrGetShipmentConversation(modal.id, userId);
-      if (conv.error && !conv.conversationId) {
-        showAlert('Chat', `Coleta aceita, mas o chat não pôde ser criado: ${conv.error}`);
-      }
-
-      if (conv.conversationId) {
-        chatNav = {
-          conversationId: conv.conversationId,
-          participantName: modal.clientName,
-        };
-      }
+      setSolicitacoes((prev) => prev.filter((s) => s.id !== modal.id));
     } catch (e: unknown) {
       showAlert('Erro', getUserErrorMessage(e, 'Não foi possível aceitar a coleta.'));
     } finally {
       setActioning(false);
       setAcceptModal(null);
     }
-    if (chatNav) {
-      const params = chatNav;
-      InteractionManager.runAfterInteractions(() => {
-        navigation.navigate('ChatEnc', {
-          screen: 'ChatEncThread',
-          params,
-        });
-      });
-    }
-  }, [acceptModal, userId, navigation, showAlert, load]);
+  }, [acceptModal, userId, showAlert, load]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>

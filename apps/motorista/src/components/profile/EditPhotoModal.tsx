@@ -24,11 +24,25 @@ export function EditPhotoModal({ visible, onClose, onTakePhoto, onChoosePhoto, o
           </TouchableOpacity>
         </View>
         <View style={styles.divider} />
-        <TouchableOpacity style={styles.row} onPress={() => { onTakePhoto(); onClose(); }} activeOpacity={0.7}>
+        <TouchableOpacity
+          style={styles.row}
+          onPress={() => {
+            onClose();
+            setTimeout(() => onTakePhoto(), 120);
+          }}
+          activeOpacity={0.7}
+        >
           <MaterialIcons name="photo-camera" size={24} color="#6B7280" />
           <Text style={styles.rowLabel}>Tirar foto</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.row} onPress={() => { onChoosePhoto(); onClose(); }} activeOpacity={0.7}>
+        <TouchableOpacity
+          style={styles.row}
+          onPress={() => {
+            onClose();
+            setTimeout(() => onChoosePhoto(), 120);
+          }}
+          activeOpacity={0.7}
+        >
           <MaterialIcons name="image" size={24} color="#6B7280" />
           <Text style={styles.rowLabel}>Escolher foto</Text>
         </TouchableOpacity>

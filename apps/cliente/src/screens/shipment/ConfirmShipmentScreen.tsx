@@ -26,11 +26,10 @@ import {
   shipmentPricingSnapshotFromParams,
   shipmentOrderInsertFromQuoteParams,
 } from '../../lib/orderPricingSnapshot';
-import { formatPricingBreakdown, computeOrderPricing, PricingDenominatorOverflowError } from '@take-me/shared';
+import { formatPricingBreakdown, computeOrderPricing, PricingDenominatorOverflowError, formatShipmentCode } from '@take-me/shared';
 import { guessCityFromPtAddress } from '../../lib/shipmentOriginCity';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
-import { calendarDayKeySaoPaulo, getDuplicateDestinationSameDayMessage } from '../../lib/sameDestinationSameDayGuard';
 import { waitForShipmentStripePaymentIntentId } from '../../lib/waitForShipmentStripePaymentIntentId';
 
 const MAX_ENCOMENDA_PHOTOS = 8;
@@ -52,7 +51,7 @@ const PACKAGE_SIZE_SUBTITLES: Record<string, string> = {
 };
 
 function orderIdFromUuid(uuid: string): string {
-  return uuid.replace(/-/g, '').slice(-4).toUpperCase();
+  return formatShipmentCode(uuid);
 }
 
 export function ConfirmShipmentScreen({ navigation, route }: Props) {
@@ -74,7 +73,6 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
     adminPctApplied,
     clientPreferredDriverId,
     resolvedBaseId: resolvedBaseIdParam,
-    scheduledTripDepartureAt,
     scheduledTripId,
   } = route.params;
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>(null);
@@ -171,30 +169,6 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
         if (authError || !user) {
           showAlert('Erro', 'Faça login para continuar.');
           return;
-        }
-        let depIsoForGuard = scheduledTripDepartureAt ?? null;
-        if (!depIsoForGuard && scheduledTripId) {
-          const { data: stRow } = await supabase
-            .from('scheduled_trips')
-            .select('departure_at')
-            .eq('id', scheduledTripId)
-            .maybeSingle();
-          depIsoForGuard = (stRow?.departure_at as string | undefined) ?? null;
-        }
-        if (!depIsoForGuard && whenOption === 'now') {
-          depIsoForGuard = new Date().toISOString();
-        }
-        if (depIsoForGuard) {
-          const dupMsg = await getDuplicateDestinationSameDayMessage({
-            userId: user.id,
-            destLat: destination.latitude,
-            destLng: destination.longitude,
-            dayKey: calendarDayKeySaoPaulo(depIsoForGuard),
-          });
-          if (dupMsg) {
-            showAlert('Limite', dupMsg);
-            return;
-          }
         }
         const rawPhotoUris = [
           ...(recipient.photoUris ?? []),
@@ -470,7 +444,6 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
       packageSize,
       clientPreferredDriverId,
       resolvedBaseIdParam,
-      scheduledTripDepartureAt,
       scheduledTripId,
       recipient,
       amountCents,

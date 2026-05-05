@@ -20,10 +20,12 @@ import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import {
   canUseAppWithStripeState,
+  checkMotoristaCanAccessApp,
   getStripeConnectState,
   subtypeToMainRoute,
   type StripeConnectState,
 } from '../lib/motoristaAccess';
+import { clearStripeConnectSetupSkipped, markStripeConnectSetupSkipped } from '../lib/stripeConnectSkip';
 import { describeInvokeFailure } from '../utils/edgeFunctionResponse';
 
 function isOpenableHttpUrl(url: unknown): url is string {
@@ -37,8 +39,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'StripeConnectSetup'>;
 
 const GOLD = '#C9A227';
 
-export function StripeConnectSetupScreen({ navigation, route }: Props) {
-  const subtype = route.params?.subtype ?? 'takeme';
+export function StripeConnectSetupScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -56,6 +57,30 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
       navigateAfterStripeTimerRef.current = null;
     }
   }, []);
+
+  const navigateAccordingToAccessGate = useCallback(async (userId: string) => {
+    const gate = await checkMotoristaCanAccessApp(userId);
+    if (gate.kind === 'active') {
+      navigation.reset({ index: 0, routes: [{ name: subtypeToMainRoute(gate.subtype, gate.role) }] });
+      return;
+    }
+    if (gate.kind === 'pending') {
+      navigation.reset({ index: 0, routes: [{ name: 'MotoristaPendingApproval' }] });
+      return;
+    }
+    if (gate.kind === 'needs_profile_completion') {
+      navigation.reset({ index: 0, routes: [{ name: 'MotoristaPendingApproval' }] });
+      return;
+    }
+    if (gate.kind === 'missing_profile') {
+      navigation.reset({ index: 0, routes: [{ name: 'SignUpType' }] });
+      return;
+    }
+    if (gate.kind === 'error') {
+      await supabase.auth.signOut();
+      navigation.reset({ index: 0, routes: [{ name: 'Welcome' }] });
+    }
+  }, [navigation]);
 
   // Sincroniza com a Stripe e lê o banco. `useFocusEffect` sozinho não reexecuta
   // quando o utilizador volta do Safari/Chrome (a tela continua focada na stack).
@@ -79,18 +104,36 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
       const acct = (wp?.stripe_connect_account_id as string | null | undefined)?.trim() ?? '';
       setStripeAccountId(acct || null);
       if (canUseAppWithStripeState(state)) {
+        await clearStripeConnectSetupSkipped(user.id).catch(() => undefined);
         clearNavigateAfterStripeTimer();
         navigateAfterStripeTimerRef.current = setTimeout(() => {
           navigateAfterStripeTimerRef.current = null;
           if (gen === gateCheckGen.current) {
-            navigation.reset({ index: 0, routes: [{ name: subtypeToMainRoute(subtype) }] });
+            void navigateAccordingToAccessGate(user.id);
           }
         }, 1500);
       }
     } finally {
       if (gen === gateCheckGen.current) setChecking(false);
     }
-  }, [navigation, subtype, clearNavigateAfterStripeTimer]);
+  }, [navigateAccordingToAccessGate, clearNavigateAfterStripeTimer]);
+
+  const handleSkip = useCallback(async () => {
+    setChecking(true);
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user?.id) {
+        await markStripeConnectSetupSkipped(user.id).catch(() => undefined);
+        await navigateAccordingToAccessGate(user.id);
+        return;
+      }
+      navigation.reset({ index: 0, routes: [{ name: 'Welcome' }] });
+    } finally {
+      setChecking(false);
+    }
+  }, [navigation, navigateAccordingToAccessGate]);
 
   useFocusEffect(
     useCallback(() => {
@@ -206,8 +249,8 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
   if (stripeState === 'in_review') {
     const reviewBody =
       stripePendingVerification > 0
-        ? 'Sem concluir o que a Stripe pedir, o recebimento automático não libera. Use o botão abaixo para abrir o site da Stripe e enviar o que faltar.'
-        : 'O recebimento automático só libera após a Stripe aprovar. Use o botão abaixo para abrir a Stripe e concluir ou corrigir dados.';
+        ? 'Sem concluir o que a Stripe pedir, cartão/Pix e recebimento automático não liberam. Até lá, as viagens ficam em dinheiro e a taxa da plataforma acumula saldo.'
+        : 'Cartão/Pix e recebimento automático só liberam após a Stripe aprovar. Enquanto isso, as viagens ficam em dinheiro e a taxa da plataforma acumula saldo.';
     const reviewTitle = 'Ação pendente';
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
@@ -269,7 +312,7 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
         <View style={styles.hero}>
           <Text style={styles.heroTitle}>Configure seu recebimento</Text>
           <Text style={styles.heroSubtitle}>
-            Para receber seus ganhos automaticamente via PIX após cada viagem, configure sua conta de recebimento.
+            Para liberar cartão/Pix e receber seus ganhos automaticamente, configure sua conta de recebimento.
           </Text>
         </View>
 
@@ -281,17 +324,17 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
 
         {/* Benefits */}
         <View style={styles.benefitsCard}>
-          <BenefitRow icon="flash-on" text="Receba automaticamente apos cada viagem" />
-          <BenefitRow icon="pix" text="Deposito direto via PIX na sua conta" />
+          <BenefitRow icon="flash-on" text="Receba automaticamente após cada viagem com cartão/Pix" />
+          <BenefitRow icon="pix" text="Depósito direto via PIX na sua conta" />
           <BenefitRow icon="security" text="Seguro e protegido pelo Stripe" />
-          <BenefitRow icon="schedule" text="Sem necessidade de solicitar pagamento" />
+          <BenefitRow icon="account-balance-wallet" text="Abate automático das taxas acumuladas em dinheiro" />
         </View>
 
         {/* Info */}
         <View style={styles.infoCard}>
           <MaterialIcons name="info-outline" size={20} color="#6B7280" />
           <Text style={styles.infoText}>
-            Voce sera redirecionado para uma pagina segura do Stripe onde vai cadastrar seus dados bancarios e chave PIX. O processo leva cerca de 2 minutos.
+            Você será redirecionado para uma página segura do Stripe. Sem Connect aprovado, o passageiro paga em dinheiro e a taxa da plataforma fica como saldo devido para abater depois.
           </Text>
         </View>
 
@@ -299,7 +342,7 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
           <View style={[styles.infoCard, styles.pendingCard]}>
             <MaterialIcons name="hourglass-empty" size={20} color="#B45309" />
             <Text style={[styles.infoText, styles.pendingText]}>
-              Seu cadastro no Stripe ainda não foi concluído. Toque em "Continuar configuração" para retomar o onboarding.
+              Seu cadastro no Stripe ainda não foi concluído. Toque em Continuar configuração para retomar o onboarding.
             </Text>
           </View>
         )}
@@ -308,7 +351,7 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
           <View style={[styles.infoCard, styles.pendingCard]}>
             <MaterialIcons name="error-outline" size={20} color="#B45309" />
             <Text style={[styles.infoText, styles.pendingText]}>
-              A Stripe pediu informações adicionais para liberar o recebimento automático. Toque em "Completar informações" para enviar os dados pendentes.
+              A Stripe pediu informações adicionais para liberar o recebimento automático. Toque em Completar informações para enviar os dados pendentes.
             </Text>
           </View>
         )}
@@ -369,7 +412,7 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
         <TouchableOpacity
           style={styles.btnSkip}
           onPress={() => {
-            navigation.reset({ index: 0, routes: [{ name: subtypeToMainRoute(subtype) }] });
+            void handleSkip();
           }}
           disabled={loading || checking}
           activeOpacity={0.7}
@@ -377,7 +420,7 @@ export function StripeConnectSetupScreen({ navigation, route }: Props) {
           <Text style={styles.btnSkipText}>Pular esta etapa</Text>
         </TouchableOpacity>
         <Text style={styles.skipHint}>
-          Você pode configurar depois em Configurações → Pagamentos, mas precisará disso para receber pagamentos.
+          Você pode configurar depois em Configurações → Pagamentos. Até a aprovação do Connect, as viagens ficam em dinheiro.
         </Text>
       </ScrollView>
     </SafeAreaView>

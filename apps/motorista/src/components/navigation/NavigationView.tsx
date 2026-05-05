@@ -21,6 +21,8 @@ export type NavigationViewWaypoint = MapboxNavigationWaypoint;
 export type NavigationViewProps = {
   /** Pontos da rota: [origem (motorista), ...intermediárias?, destino]. */
   waypoints: NavigationViewWaypoint[];
+  /** Polyline da rota já calculada pelo fluxo legado, usada como guia silencioso no SDK. */
+  routeCoordinates?: ExpoMapboxNavigationProps['routeCoordinates'];
   /** Token público Mapbox usado pela view nativa. */
   accessToken?: string;
   /** Idioma da voz (default `pt-BR`). */
@@ -83,6 +85,7 @@ export const NavigationView = React.forwardRef<GoogleMapsMapRef, NavigationViewP
   function NavigationView(
     {
       waypoints,
+      routeCoordinates,
       accessToken,
       voiceLanguage = 'pt-BR',
       mute = false,
@@ -129,6 +132,7 @@ export const NavigationView = React.forwardRef<GoogleMapsMapRef, NavigationViewP
       <ExpoMapboxNavigationView
         style={[styles.root, style]}
         waypoints={waypoints}
+        routeCoordinates={routeCoordinates}
         accessToken={accessToken}
         voiceLanguage={voiceLanguage}
         mute={mute}
@@ -150,7 +154,11 @@ export const NavigationView = React.forwardRef<GoogleMapsMapRef, NavigationViewP
         }}
         onReroute={(_e: { nativeEvent: RerouteEvent }) => onReroute?.()}
         onOffRoute={() => onOffRoute?.()}
-        onCancel={(_e: { nativeEvent: CancelEvent }) => onCancel?.()}
+        onCancel={(e: { nativeEvent: CancelEvent }) => {
+          // `session-end` pode acontecer quando o SDK cancela uma requisição de rota antiga
+          // durante rebuild/recenter. Não é falha de navegação e não deve derrubar para legado.
+          if (e.nativeEvent.reason !== 'session-end') onCancel?.();
+        }}
         onReady={() => onReady?.()}
       >
         {children}

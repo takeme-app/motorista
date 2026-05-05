@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { View, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import { useCallback, useMemo, useState } from 'react';
+import { View, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, ActivityIndicator } from 'react-native';
 import { Text } from '../components/Text';
 import { StatusBar } from 'expo-status-bar';
 import { CommonActions } from '@react-navigation/native';
@@ -10,29 +10,49 @@ import { setLastRecoveryEmail } from '../lib/lastRecoveryEmail';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
 import { parseInvokeData, parseInvokeError } from '../utils/edgeFunctionResponse';
+import { detectPhoneOrEmailChannel, formatPhoneBRMask } from '../utils/phoneOrEmailInput';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ForgotPassword'>;
 
 export function ForgotPasswordScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const channel = useMemo(() => detectPhoneOrEmailChannel(identifier), [identifier]);
+
+  const handleIdentifierChange = useCallback((text: string) => {
+    if (detectPhoneOrEmailChannel(text) === 'phone') {
+      setIdentifier(formatPhoneBRMask(text));
+    } else {
+      setIdentifier(text);
+    }
+  }, []);
+
   const handleSubmit = async () => {
-    const trimmed = email.trim();
+    const trimmed = identifier.trim();
     if (!trimmed) {
-      showAlert('Atenção', 'Digite seu e-mail.');
+      showAlert('Atenção', 'Digite seu e-mail ou telefone.');
       return;
     }
     if (!isSupabaseConfigured) {
       showAlert('Configuração', 'Serviço de recuperação não configurado.');
       return;
     }
+    const kind = channel;
+    const value = kind === 'phone' ? trimmed.replace(/\D/g, '') : trimmed;
+    if (kind === 'phone' && (value.length < 10 || value.length > 11)) {
+      showAlert('Atenção', 'Informe DDD + número (10 ou 11 dígitos).');
+      return;
+    }
     setLoading(true);
     try {
-      const { data: sendData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
-        body: { email: trimmed, purpose: 'password_reset' },
-      });
+      const fnName = kind === 'email' ? 'send-email-verification-code' : 'send-phone-verification-code';
+      const body =
+        kind === 'email'
+          ? { email: value, purpose: 'password_reset' as const }
+          : { phone: value, purpose: 'password_reset' as const };
+      const { data: sendData, error: fnError } = await supabase.functions.invoke(fnName, { body });
       const payload = parseInvokeData(sendData);
       if (payload?.error != null) {
         showAlert('Erro', String(payload.error));
@@ -44,18 +64,23 @@ export function ForgotPasswordScreen({ navigation }: Props) {
         return;
       }
       await supabase.auth.signOut();
-      setLastRecoveryEmail(trimmed);
+      if (kind === 'email') {
+        setLastRecoveryEmail(value);
+      }
       navigation.dispatch(
         CommonActions.reset({
           index: 1,
           routes: [
             { name: 'Welcome' },
-            { name: 'ForgotPasswordVerifyCode', params: { email: trimmed } },
+            {
+              name: 'ForgotPasswordVerifyCode',
+              params: kind === 'email' ? { email: value } : { phone: value },
+            },
           ],
         })
       );
     } catch (e: unknown) {
-      showAlert('Erro ao enviar e-mail', getUserErrorMessage(e, 'Não foi possível enviar o e-mail. Tente novamente.'));
+      showAlert('Erro ao enviar código', getUserErrorMessage(e, 'Não foi possível enviar o código. Tente novamente.'));
     } finally {
       setLoading(false);
     }
@@ -71,16 +96,17 @@ export function ForgotPasswordScreen({ navigation }: Props) {
       <View style={styles.content}>
         <Text style={styles.title}>Recuperação de senha</Text>
         <Text style={styles.subtitle}>
-          Digite seu e-mail. Enviaremos um código de 4 dígitos para você redefinir a senha.
+          Digite seu e-mail ou telefone. Enviaremos um código de 4 dígitos para você redefinir a senha.
         </Text>
         <TextInput
           style={styles.input}
-          placeholder="Email"
+          placeholder="E-mail ou telefone"
           placeholderTextColor="#9CA3AF"
-          value={email}
-          onChangeText={setEmail}
+          value={identifier}
+          onChangeText={handleIdentifierChange}
           autoCapitalize="none"
-          keyboardType="email-address"
+          keyboardType={channel === 'phone' ? 'phone-pad' : 'email-address'}
+          textContentType={channel === 'phone' ? 'telephoneNumber' : 'emailAddress'}
           editable={!loading}
         />
       </View>

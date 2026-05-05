@@ -42,6 +42,9 @@ class ExpoMapboxNavigationModule : Module() {
       Prop("waypoints") { view: ExpoMapboxNavigationView, raw: List<Map<String, Any?>> ->
         view.updateWaypoints(raw)
       }
+      Prop("routeCoordinates") { view: ExpoMapboxNavigationView, raw: List<Map<String, Any?>>? ->
+        view.updateRouteCoordinates(raw ?: emptyList())
+      }
       Prop("accessToken") { view: ExpoMapboxNavigationView, token: String? ->
         view.updateAccessToken(token)
       }

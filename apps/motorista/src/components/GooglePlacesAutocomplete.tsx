@@ -77,6 +77,10 @@ export function GooglePlacesAutocomplete({
   }, [value, runSuggest, hasResolvedCoords]);
 
   const handlePick = (item: GoogleGeocodeResult) => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
     setSuggestions([]);
     setOpen(false);
     /** Só o pai define texto + resolved; evita onChangeText resetar originResolved antes do select. */

@@ -1,13 +1,19 @@
 // TODO (onboarding telefone/WhatsApp):
 // - Este endpoint é irmão de `verify-email-code`, mas identifica o usuário por telefone.
-// - Integra com a Meta WhatsApp Cloud API (envio em `send-phone-verification-code`).
+// - Integra com a Z-API (envio em `send-phone-verification-code`).
 // - Cria a conta em auth.users usando e-mail FAKE no formato `{phoneDigits}@takeme.com`
 //   + senha. O telefone real fica em `user_metadata.phone` e é replicado para
 //   `profiles.phone` por trigger. Dessa forma, `login-with-phone` encontra o e-mail
 //   real via `profiles.phone → auth.users.email` e faz signIn normal.
+// - Quando `password_reset: true`, não cria conta — apenas valida o OTP e devolve um
+//   token HMAC compatível com `complete-password-reset` (mesmo formato do e-mail).
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import {
+  createPasswordResetToken,
+  findAuthUserIdByPhone,
+} from "../_shared/passwordResetToken.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -66,8 +72,11 @@ Deno.serve(async (req) => {
       password?: string;
       fullName?: string;
       driver_type?: string;
+      password_reset?: boolean | string | number;
     };
-    const { phone, code, password, fullName, driver_type } = body;
+    const { phone, code, password, fullName, driver_type, password_reset } = body;
+    const wantsPasswordReset =
+      password_reset === true || password_reset === "true" || password_reset === 1;
     const registrationType = parseRegistrationType(driver_type);
 
     const phoneDigits = normalizePhoneBR(phone);
@@ -83,7 +92,10 @@ Deno.serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
-    if (!password || typeof password !== "string" || password.length < 6) {
+    if (
+      !wantsPasswordReset &&
+      (!password || typeof password !== "string" || password.length < 6)
+    ) {
       return new Response(
         JSON.stringify({ error: "Senha é obrigatória (mínimo 6 caracteres)." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -103,12 +115,13 @@ Deno.serve(async (req) => {
     const admin = createClient(supabaseUrl, serviceRoleKey);
 
     const nowIso = new Date().toISOString();
+    const purpose = wantsPasswordReset ? "password_reset" : "signup";
 
     const { data: candidates, error: selectError } = await admin
       .from("phone_verification_codes")
       .select("id, code, user_id")
       .eq("phone", phoneDigits)
-      .eq("purpose", "signup")
+      .eq("purpose", purpose)
       .gt("expires_at", nowIso)
       .order("created_at", { ascending: false })
       .limit(20);
@@ -139,6 +152,34 @@ Deno.serve(async (req) => {
     }
 
     await admin.from("phone_verification_codes").delete().eq("id", matched.id);
+
+    if (wantsPasswordReset) {
+      const userId =
+        matched.user_id ??
+        (await findAuthUserIdByPhone(admin, phoneDigits));
+      if (!userId) {
+        return new Response(
+          JSON.stringify({ error: "Conta não encontrada." }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      try {
+        const token = await createPasswordResetToken(userId, phoneToFakeEmail(phoneDigits));
+        return new Response(
+          JSON.stringify({ ok: true, password_reset_token: token }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      } catch (e) {
+        console.error("[verify-phone-code] password reset token", e);
+        return new Response(
+          JSON.stringify({
+            error:
+              "Configuração do servidor incompleta (token de redefinição). Defina PASSWORD_RESET_TOKEN_SECRET ou SUPABASE_JWT_SECRET.",
+          }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+    }
 
     const { data: existingProfile } = await admin
       .from("profiles")

@@ -21,11 +21,40 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { assertClientePassengerOnlyAccount } from '../lib/clientePassengerOnlyGate';
 import { signInWithOAuthProvider } from '../lib/oauth';
 import { getUserErrorMessage } from '../utils/errorMessage';
-import { parseInvokeError } from '../utils/edgeFunctionResponse';
+import { parseInvokeData, parseInvokeError } from '../utils/edgeFunctionResponse';
 import { detectPhoneOrEmailChannel, formatPhoneBRMask } from '../utils/phoneOrEmailInput';
 import { syncClienteProfileFcmToken } from '../lib/clienteFcm';
+import type { Session } from '@supabase/supabase-js';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
+
+/** Grava sessão devolvida por `login-with-email` / `login-with-phone` e expõe erro real (ex.: JWT inválido se .env ≠ projeto). */
+async function persistEdgeLoginSession(
+  client: typeof supabase,
+  fnPayload: unknown,
+): Promise<Session> {
+  const payload =
+    parseInvokeData(fnPayload) ??
+    (fnPayload && typeof fnPayload === 'object' ? (fnPayload as Record<string, unknown>) : null);
+  const sess = payload?.session;
+  if (!sess || typeof sess !== 'object') {
+    throw new Error('Resposta inválida (sem sessão do servidor).');
+  }
+  const { data, error } = await client.auth.setSession(sess as never);
+  if (error) {
+    const m = error.message || String(error);
+    const hint = /jwt|refresh|invalid|malformed|session/i.test(m)
+      ? ' Verifique se EXPO_PUBLIC_SUPABASE_URL e EXPO_PUBLIC_SUPABASE_ANON_KEY são do mesmo projeto Supabase das Edge Functions; altere o .env, pare o Metro (Ctrl+C) e rode de novo `npm start` em apps/cliente.'
+      : '';
+    throw new Error((m || 'Não foi possível guardar a sessão.') + hint);
+  }
+  if (!data.session?.user) {
+    throw new Error(
+      'Sessão vazia após o login. Confirme EXPO_PUBLIC_SUPABASE_URL e EXPO_PUBLIC_SUPABASE_ANON_KEY, reinicie o Metro com cache limpo: `npx expo start --clear`.',
+    );
+  }
+  return data.session;
+}
 
 export function LoginScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
@@ -73,27 +102,34 @@ export function LoginScreen({ navigation }: Props) {
     setLoading(true);
     try {
       const isEmail = input.includes('@');
+      let activeSession: Session;
 
       if (isEmail) {
-        let authData: { session?: unknown } | null = null;
-        let authError: unknown = null;
-        try {
-          const result = await supabase.auth.signInWithPassword({
-            email: input,
-            password,
-          });
-          authData = result?.data ?? null;
-          authError = result?.error ?? null;
-        } catch (e) {
-          authError = e;
-        }
-        const hasSession = authData?.session != null;
-        if (authError || !hasSession) {
+        const emailNorm = input.trim().toLowerCase();
+        const { data, error: fnError } = await supabase.functions.invoke('login-with-email', {
+          body: { email: emailNorm, password },
+        });
+        if (fnError) {
+          const bodyError = await parseInvokeError(fnError);
           Keyboard.dismiss();
           setLoading(false);
-          showAlert('Erro no login', 'E-mail ou senha incorretos. Tente novamente.');
+          showAlert(
+            'Erro no login',
+            bodyError ?? getUserErrorMessage(fnError, 'E-mail ou senha incorretos. Tente novamente.'),
+          );
           return;
         }
+        const errMsg = data?.error;
+        if (errMsg) {
+          Keyboard.dismiss();
+          setLoading(false);
+          showAlert('Erro no login', String(errMsg));
+          return;
+        }
+        if (!data?.session && !parseInvokeData(data)?.session) {
+          throw new Error('Resposta inválida.');
+        }
+        activeSession = await persistEdgeLoginSession(supabase, data);
       } else {
         const phoneDigits = input.replace(/\D/g, '');
         const { data, error: fnError } = await supabase.functions.invoke('login-with-phone', {
@@ -114,17 +150,12 @@ export function LoginScreen({ navigation }: Props) {
           showAlert('Erro no login', String(errMsg));
           return;
         }
-        if (!data?.session) throw new Error('Resposta inválida.');
-        await supabase.auth.setSession(data.session);
+        if (!data?.session && !parseInvokeData(data)?.session) {
+          throw new Error('Resposta inválida.');
+        }
+        activeSession = await persistEdgeLoginSession(supabase, data);
       }
 
-      const { data: { session: activeSession } } = await supabase.auth.getSession();
-      if (!activeSession?.user) {
-        Keyboard.dismiss();
-        setLoading(false);
-        showAlert('Erro no login', 'Não foi possível obter a sessão. Tente novamente.');
-        return;
-      }
       const gate = await assertClientePassengerOnlyAccount(activeSession.user.id);
       if (!gate.ok) {
         await supabase.auth.signOut();

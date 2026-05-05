@@ -112,7 +112,7 @@ export function LoginScreen({ navigation }: Props) {
       return;
     }
     await syncMotoristaProfileFcmToken();
-    navigation.reset({ index: 0, routes: [{ name: subtypeToMainRoute(gate.subtype) }] });
+    navigation.reset({ index: 0, routes: [{ name: subtypeToMainRoute(gate.subtype, gate.role) }] });
   };
 
   const handleLogin = async () => {

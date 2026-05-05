@@ -33,11 +33,11 @@ export type RouteProgressEvent = {
   /** Fração 0-1 já percorrida da rota atual. */
   fractionTraveled: number;
   /** Texto principal da próxima manobra (ex.: "Vire à direita na Rua A"). */
-  upcomingManeuverText: string | null;
+  upcomingManeuverText?: string | null;
   /** Tipo de manobra (`turn`, `merge`, `arrive`, …) — útil para ícone próprio. */
-  upcomingManeuverType: string | null;
+  upcomingManeuverType?: string | null;
   /** Distância em metros até a próxima manobra. */
-  upcomingManeuverDistanceMeters: number | null;
+  upcomingManeuverDistanceMeters?: number | null;
 };
 
 export type RerouteEvent = {
@@ -68,6 +68,12 @@ export type ExpoMapboxNavigationProps = ViewProps & {
   style?: StyleProp<ViewStyle>;
   /** [origem, ...intermediárias?, destino] — mínimo 2 pontos. */
   waypoints: MapboxNavigationWaypoint[];
+  /**
+   * Polyline de referência já calculada pelo fluxo legado.
+   * Quando enviada, o SDK usa pontos amostrados dela como waypoints silenciosos
+   * para aproximar a rota nativa da mesma geometria visual.
+   */
+  routeCoordinates?: MapboxNavigationCoordinate[];
   /** Token público Mapbox usado pelo SDK nativo para mapa/rotas. */
   accessToken?: string;
   /** Padrão `driving-traffic` (com tráfego ao vivo). */

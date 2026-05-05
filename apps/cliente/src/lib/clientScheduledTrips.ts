@@ -9,6 +9,33 @@ function formatTime(iso: string): string {
   return d.toTimeString().slice(0, 5);
 }
 
+/** Origem do preço: por pessoa (multiplica no checkout) vs valor fixo da viagem (`amount_cents` legado). */
+export type TripPriceBasis = 'per_person' | 'flat_trip';
+
+/**
+ * Resolve preço da oferta e indica se a base deve ser multiplicada pelo nº de passageiros no checkout.
+ * `flat_trip` = caiu só em `amount_cents` (sem price_per_person na rota nem na viagem).
+ */
+export function resolveTripPriceWithBasis(
+  trip: {
+    route_id?: string | null;
+    price_per_person_cents?: number | null;
+    amount_cents?: number | null;
+  },
+  routePriceById: Map<string, number | null>,
+): { cents: number | null; basis: TripPriceBasis | null } {
+  const routeId = trip.route_id;
+  if (routeId && routePriceById.has(routeId)) {
+    const fromRoute = routePriceById.get(routeId);
+    if (fromRoute != null && fromRoute >= 0) return { cents: fromRoute, basis: 'per_person' };
+  }
+  const tripPpp = trip.price_per_person_cents;
+  if (tripPpp != null && tripPpp >= 0) return { cents: tripPpp, basis: 'per_person' };
+  const legacy = trip.amount_cents;
+  if (legacy != null && legacy >= 0) return { cents: legacy, basis: 'flat_trip' };
+  return { cents: null, basis: null };
+}
+
 /** Preço exibido e usado no checkout: rota (worker_routes) > coluna na viagem > amount_cents legado. */
 export function resolveTripPriceCents(
   trip: {
@@ -18,16 +45,7 @@ export function resolveTripPriceCents(
   },
   routePriceById: Map<string, number | null>
 ): number | null {
-  const routeId = trip.route_id;
-  if (routeId && routePriceById.has(routeId)) {
-    const fromRoute = routePriceById.get(routeId);
-    if (fromRoute != null && fromRoute >= 0) return fromRoute;
-  }
-  const tripPpp = trip.price_per_person_cents;
-  if (tripPpp != null && tripPpp >= 0) return tripPpp;
-  const legacy = trip.amount_cents;
-  if (legacy != null && legacy >= 0) return legacy;
-  return null;
+  return resolveTripPriceWithBasis(trip, routePriceById).cents;
 }
 
 /**
@@ -36,7 +54,7 @@ export function resolveTripPriceCents(
  */
 export async function fetchResolvedPriceCentsForScheduledTrip(
   scheduledTripId: string
-): Promise<{ cents: number | null; error: string | null }> {
+): Promise<{ cents: number | null; basis: TripPriceBasis | null; error: string | null }> {
   const sb = supabase as { from: (table: string) => any };
   const { data: trip, error: tripErr } = await sb
     .from('scheduled_trips')
@@ -44,10 +62,10 @@ export async function fetchResolvedPriceCentsForScheduledTrip(
     .eq('id', scheduledTripId)
     .maybeSingle();
   if (tripErr) {
-    return { cents: null, error: getUserErrorMessage(tripErr, 'Não foi possível obter os dados da viagem.') };
+    return { cents: null, basis: null, error: getUserErrorMessage(tripErr, 'Não foi possível obter os dados da viagem.') };
   }
   if (!trip) {
-    return { cents: null, error: 'Viagem não encontrada.' };
+    return { cents: null, basis: null, error: 'Viagem não encontrada.' };
   }
   const routeId = trip.route_id as string | null | undefined;
   const routePriceById = new Map<string, number | null>();
@@ -59,13 +77,13 @@ export async function fetchResolvedPriceCentsForScheduledTrip(
       .eq('is_active', true)
       .maybeSingle();
     if (routeErr) {
-      return { cents: null, error: getUserErrorMessage(routeErr, 'Não foi possível obter o preço da rota.') };
+      return { cents: null, basis: null, error: getUserErrorMessage(routeErr, 'Não foi possível obter o preço da rota.') };
     }
     if (route) {
       routePriceById.set(route.id as string, (route.price_per_person_cents as number | null) ?? null);
     }
   }
-  const cents = resolveTripPriceCents(
+  const { cents, basis } = resolveTripPriceWithBasis(
     {
       route_id: trip.route_id as string | null | undefined,
       price_per_person_cents: trip.price_per_person_cents as number | null | undefined,
@@ -73,7 +91,7 @@ export async function fetchResolvedPriceCentsForScheduledTrip(
     },
     routePriceById
   );
-  return { cents, error: null };
+  return { cents, basis, error: null };
 }
 
 export type ClientScheduledTripItem = {
@@ -382,14 +400,14 @@ export async function loadClientScheduledTrips(opts?: LoadClientScheduledTripsOp
       longitude: t.destination_lng,
       origin_lat: t.origin_lat,
       origin_lng: t.origin_lng,
-      amount_cents: resolveTripPriceCents(
+      amount_cents: resolveTripPriceWithBasis(
         {
           route_id: t.route_id,
           price_per_person_cents: t.price_per_person_cents,
           amount_cents: t.amount_cents,
         },
         routePriceById
-      ),
+      ).cents,
       departure_at: t.departure_at,
     });
   }

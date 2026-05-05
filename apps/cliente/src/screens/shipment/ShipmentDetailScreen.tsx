@@ -40,6 +40,7 @@ import { SupportSheet } from '../../components/SupportSheet';
 import { storageUrl } from '../../utils/storageUrl';
 import { TipModal } from '../../components/TipModal';
 import { CodeConfirmModal } from '../../components/CodeConfirmModal';
+import { formatShipmentCode } from '@take-me/shared';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ShipmentDetail'>;
 
@@ -108,6 +109,7 @@ type ShipmentDetail = {
   delivery_code: string | null;
   cancellation_reason: string | null;
   base_id: string | null;
+  picked_up_at: string | null;
   picked_up_by_preparer_at: string | null;
 };
 
@@ -162,7 +164,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
       const { data: shipment, error: shipErr } = await supabase
         .from('shipments')
         .select(
-          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents, tip_status, tip_paid_at, driver_id, pickup_code, delivery_code, cancellation_reason, base_id, picked_up_by_preparer_at'
+          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents, tip_status, tip_paid_at, driver_id, pickup_code, delivery_code, cancellation_reason, base_id, picked_up_at, picked_up_by_preparer_at'
         )
         .eq('id', shipmentId)
         .eq('user_id', user.id)
@@ -193,6 +195,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         delivery_code: string | null;
         cancellation_reason: string | null;
         base_id: string | null;
+        picked_up_at: string | null;
         picked_up_by_preparer_at: string | null;
       };
       setDetail({
@@ -217,6 +220,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         delivery_code: row.delivery_code ?? null,
         cancellation_reason: row.cancellation_reason ?? null,
         base_id: row.base_id ?? null,
+        picked_up_at: row.picked_up_at ?? null,
         picked_up_by_preparer_at: row.picked_up_by_preparer_at ?? null,
       });
       if (row.driver_id) {
@@ -377,16 +381,15 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
     setRatingComment('');
   };
 
-  // Cenário 3 do PDF "Sequência de Solicitação de Código" — etapa 3:
-  // passageiro digita o PIN A informado pelo preparador na coleta.
-  // RPC `complete_shipment_passenger_to_preparer` valida e atualiza
-  // `picked_up_by_preparer_at` no banco.
-  const handleSubmitPreparerPin = async (code: string): Promise<boolean> => {
+  // Coleta: quem está retirando (preparador com base ou motorista sem base)
+  // informa o PIN; o cliente valida no próprio app.
+  const handleSubmitPickupPin = async (code: string): Promise<boolean> => {
     if (!shipmentId || preparerPinSubmitting) return false;
     setPreparerPinSubmitting(true);
     try {
+      const hasBase = Boolean(detail?.base_id);
       const { data, error } = await supabase.rpc(
-        'complete_shipment_passenger_to_preparer' as never,
+        (hasBase ? 'complete_shipment_passenger_to_preparer' : 'complete_shipment_client_pickup') as never,
         { p_shipment_id: shipmentId, p_confirmation_code: code } as never,
       );
       if (error) {
@@ -397,16 +400,26 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
       if (!payload || payload.ok !== true) {
         const err = String(payload?.error ?? '');
         if (err === 'invalid_code' || err === 'code_length' || err === 'missing_code') {
-          Alert.alert('Código inválido', 'Verifique o código informado pelo preparador.');
+          Alert.alert('Código inválido', `Verifique o código informado pelo ${hasBase ? 'preparador' : 'motorista'}.`);
         } else if (err === 'forbidden') {
           Alert.alert('Acesso negado', 'Esta encomenda não está vinculada à sua conta.');
+        } else if (err === 'driver_not_assigned') {
+          Alert.alert('Motorista pendente', 'Aguarde um motorista aceitar este envio antes de confirmar a coleta.');
+        } else if (err === 'has_base') {
+          Alert.alert('Fluxo com base', 'Esta encomenda deve ser confirmada pelo fluxo do preparador.');
+        } else if (err === 'invalid_status') {
+          Alert.alert('Envio indisponível', 'Esta encomenda não pode mais ter a coleta confirmada.');
         } else {
           Alert.alert('Erro', 'Não foi possível validar. Tente novamente.');
         }
         return false;
       }
       setDetail((d) =>
-        d ? { ...d, picked_up_by_preparer_at: new Date().toISOString() } : d,
+        d
+          ? hasBase
+            ? { ...d, picked_up_by_preparer_at: new Date().toISOString() }
+            : { ...d, picked_up_at: new Date().toISOString(), status: 'in_progress' }
+          : d,
       );
       setShowPreparerPinModal(false);
       Alert.alert('Coleta confirmada', 'Código validado com sucesso. Boa viagem!');
@@ -475,7 +488,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
     );
   }
 
-  const displayId = detail.id.length >= 6 ? `EN${detail.id.slice(-6).toUpperCase()}` : detail.id;
+  const displayId = formatShipmentCode(detail.id);
   const driverAvatarUri = storageUrl('avatars', driverProfile?.avatar_url ?? null);
 
   return (
@@ -549,10 +562,8 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
           </View>
         )}
 
-        {/* PIN de Coleta — duas variantes conforme PDF "Sequência de Solicitação de Código":
-            - Cenário 4 (sem base): PIN de coleta visível, motorista digita → cliente repassa.
-            - Cenário 3 (com base): preparador informa o PIN A verbalmente; passageiro
-              valida digitando. O código não é exibido em texto para preservar o handoff. */}
+        {/* PIN de Coleta — quem retira informa o código; o cliente valida no app.
+            Sem base: motorista informa o PIN. Com base: preparador informa o PIN A. */}
         {detail.base_id ? (
           <View style={styles.pinSection}>
             <Text style={styles.pinLabel}>Coleta pelo preparador</Text>
@@ -584,35 +595,32 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
           </View>
         ) : (
           <View style={styles.pinSection}>
-            <Text style={styles.pinLabel}>PIN de Coleta</Text>
-            <View style={styles.pinRow}>
-              <View style={styles.pinChipsWrap}>
-                {pinCharsForDisplay(detail.pickup_code).map((ch, i) => (
-                  <View key={`pc-${i}`} style={styles.pinChip}>
-                    <Text style={styles.pinChipText}>{ch}</Text>
-                  </View>
-                ))}
+            <Text style={styles.pinLabel}>Coleta pelo motorista</Text>
+            {detail.picked_up_at ? (
+              <View style={styles.preparerStatusRow}>
+                <MaterialIcons name="check-circle" size={20} color="#16a34a" />
+                <Text style={styles.preparerStatusText}>
+                  Coleta confirmada com o motorista.
+                </Text>
               </View>
-              <View style={styles.pinIconButtons}>
+            ) : (
+              <>
+                <Text style={styles.preparerHint}>
+                  Quando o motorista chegar para retirar a encomenda, ele informará
+                  um código de 4 dígitos. Digite esse código para confirmar a coleta.
+                </Text>
                 <TouchableOpacity
-                  style={styles.pinIconBtn}
+                  style={styles.preparerValidateButton}
                   activeOpacity={0.8}
-                  onPress={() => copyPin('PIN de coleta', detail.pickup_code)}
+                  onPress={() => setShowPreparerPinModal(true)}
                 >
-                  <MaterialIcons name="content-copy" size={20} color={COLORS.neutral700} />
+                  <MaterialIcons name="vpn-key" size={18} color={COLORS.background} />
+                  <Text style={styles.preparerValidateButtonText}>
+                    Validar código do motorista
+                  </Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.pinIconBtn}
-                  activeOpacity={0.8}
-                  onPress={() => void sharePin('PIN de coleta', detail.pickup_code)}
-                >
-                  <MaterialIcons name="share" size={20} color={COLORS.neutral700} />
-                </TouchableOpacity>
-              </View>
-            </View>
-            <TouchableOpacity style={styles.pinReenviarButton} activeOpacity={0.8}>
-              <Text style={styles.pinReenviarText}>Reenviar para o remetente</Text>
-            </TouchableOpacity>
+              </>
+            )}
           </View>
         )}
 
@@ -884,11 +892,11 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
           if (!preparerPinSubmitting) setShowPreparerPinModal(false);
         }}
         title="Confirmar coleta"
-        instruction="Digite o código de 4 dígitos informado pelo preparador para confirmar a coleta."
+        instruction={`Digite o código de 4 dígitos informado pelo ${detail.base_id ? 'preparador' : 'motorista'} para confirmar a coleta.`}
         inputPlaceholder="Ex: 1234"
         submitLabel={preparerPinSubmitting ? 'Validando…' : 'Confirmar coleta'}
         onSubmit={(code) => {
-          void handleSubmitPreparerPin(code);
+          void handleSubmitPickupPin(code);
           return false;
         }}
         backLabel="Voltar"

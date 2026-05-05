@@ -41,6 +41,7 @@ import { useAppAlert } from '../../contexts/AppAlertContext';
 import { SupportSheet } from '../../components/SupportSheet';
 import { AnimatedBottomSheet } from '../../components/AnimatedBottomSheet';
 import { TipModal } from '../../components/TipModal';
+import { formatDependentShipmentCode } from '@take-me/shared';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 const SHEET_SLIDE_DISTANCE = 500;
@@ -501,6 +502,7 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
     : null;
   const priceFormatted = `R$ ${(detail.amount_cents / 100).toFixed(2).replace('.', ',')}`;
   const tipFormatted = detail.tip_cents ? `R$ ${(detail.tip_cents / 100).toFixed(2).replace('.', ',')}` : null;
+  const displayId = formatDependentShipmentCode(detail.id);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -628,6 +630,7 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
         <View style={styles.infoHeader}>
           <View style={styles.infoHeaderText}>
             <Text style={styles.infoTitle}>Envio TakeMe{'\n'}com {senderName ?? '—'}</Text>
+            <Text style={styles.infoOrderId}>Pedido #{displayId}</Text>
           </View>
           <View style={styles.avatarWrap}>
             {senderAvatarUri ? (
@@ -957,6 +960,7 @@ const styles = StyleSheet.create({
   },
   infoHeaderText: { flex: 1, marginRight: 16 },
   infoTitle: { fontSize: 22, fontWeight: '700', color: COLORS.black, lineHeight: 28 },
+  infoOrderId: { marginTop: 6, fontSize: 13, fontWeight: '700', color: COLORS.neutral700 },
   avatarWrap: { flexShrink: 0 },
   avatar: { width: 48, height: 48, borderRadius: 24 },
   avatarPlaceholder: {

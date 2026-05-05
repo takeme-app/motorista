@@ -5,7 +5,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
-  Platform,
   ActivityIndicator,
 } from 'react-native';
 import { Text } from '../components/Text';
@@ -18,12 +17,13 @@ import { setLastRecoveryEmail } from '../lib/lastRecoveryEmail';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
 import { parseInvokeData, parseInvokeError } from '../utils/edgeFunctionResponse';
+import { detectPhoneOrEmailChannel, formatPhoneBRMask } from '../utils/phoneOrEmailInput';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ForgotPassword'>;
 
 export function ForgotPasswordScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [loading, setLoading] = useState(false);
 
   const channel = useMemo(() => detectPhoneOrEmailChannel(identifier), [identifier]);
@@ -39,7 +39,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
   const handleSubmit = async () => {
     const trimmed = identifier.trim();
     if (!trimmed) {
-      showAlert('Atenção', 'Digite seu e-mail.');
+      showAlert('Atenção', 'Digite seu e-mail ou telefone.');
       return;
     }
     if (!isSupabaseConfigured) {
@@ -56,19 +56,22 @@ export function ForgotPasswordScreen({ navigation }: Props) {
         showAlert('Atenção', 'Informe DDD + número (10 ou 11 dígitos).');
         return;
       }
-      await sendPhoneCode(phoneDigits);
+      await sendResetCode('phone', phoneDigits);
       return;
     }
 
-    await sendEmailCode(trimmed);
+    await sendResetCode('email', trimmed);
   };
 
-  const sendEmailCode = async (emailTrim: string) => {
+  const sendResetCode = async (kind: 'email' | 'phone', value: string) => {
     setLoading(true);
     try {
-      const { data: sendData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
-        body: { email: trimmed, purpose: 'password_reset' },
-      });
+      const fnName = kind === 'email' ? 'send-email-verification-code' : 'send-phone-verification-code';
+      const body =
+        kind === 'email'
+          ? { email: value, purpose: 'password_reset' as const }
+          : { phone: value, purpose: 'password_reset' as const };
+      const { data: sendData, error: fnError } = await supabase.functions.invoke(fnName, { body });
       const payload = parseInvokeData(sendData);
       if (payload?.error != null) {
         showAlert('Erro', String(payload.error));
@@ -80,19 +83,24 @@ export function ForgotPasswordScreen({ navigation }: Props) {
         return;
       }
       await supabase.auth.signOut();
-      setLastRecoveryEmail(trimmed);
+      if (kind === 'email') {
+        setLastRecoveryEmail(value);
+      }
       navigation.dispatch(
         CommonActions.reset({
           index: 1,
           routes: [
             { name: 'Welcome' },
-            { name: 'ForgotPasswordVerifyCode', params: { email: trimmed } },
+            {
+              name: 'ForgotPasswordVerifyCode',
+              params: kind === 'email' ? { email: value } : { phone: value },
+            },
           ],
         })
       );
     } catch (e: unknown) {
-      const message = getUserErrorMessage(e, 'Não foi possível enviar o e-mail. Tente novamente.');
-      showAlert('Erro ao enviar e-mail', message);
+      const message = getUserErrorMessage(e, 'Não foi possível enviar o código. Tente novamente.');
+      showAlert('Erro ao enviar código', message);
     } finally {
       setLoading(false);
     }
@@ -116,7 +124,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
       <View style={styles.content}>
         <Text style={styles.title}>Recuperação de senha</Text>
         <Text style={styles.subtitle}>
-          Digite seu e-mail. Enviaremos um código de 4 dígitos para você redefinir a senha.
+          Digite seu e-mail ou telefone. Enviaremos um código de 4 dígitos para você redefinir a senha.
         </Text>
 
         <TextInput

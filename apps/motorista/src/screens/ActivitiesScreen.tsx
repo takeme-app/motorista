@@ -20,7 +20,7 @@ import type { CompositeScreenProps } from '@react-navigation/native';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
-import { getOrCreateActiveSupportConversationId } from '@take-me/shared';
+import { getOrCreateActiveSupportConversationId, formatTripCode as formatSharedTripCode } from '@take-me/shared';
 import { supabase } from '../lib/supabase';
 import { invokeRefundJourneyStartNotAccepted } from '../lib/refundJourneyStartNotAccepted';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
@@ -89,7 +89,7 @@ function applyDateMask(text: string): string {
 }
 
 function formatTripCode(id: string): string {
-  return 'VG' + id.replace(/-/g, '').slice(0, 6).toUpperCase();
+  return formatSharedTripCode(id);
 }
 
 function shortAddr(addr: string): string {

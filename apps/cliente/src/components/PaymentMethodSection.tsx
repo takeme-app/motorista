@@ -39,6 +39,10 @@ export type PaymentMethodSectionProps = {
   confirmLabel: string;
   cancellationPolicyVariant: CancellationPolicyVariant;
   loading?: boolean;
+  /** Se definido, só estes métodos são exibidos (ex.: só dinheiro sem Stripe Connect). */
+  allowedMethods?: PaymentMethodType[];
+  /** Texto do aviso quando só dinheiro por falta de Stripe Connect (default: viagem). */
+  connectCashOnlyContext?: 'trip' | 'dependent_shipment';
 };
 
 type SavedCardRow = {
@@ -87,6 +91,8 @@ export function PaymentMethodSection({
   confirmLabel,
   cancellationPolicyVariant,
   loading = false,
+  allowedMethods,
+  connectCashOnlyContext = 'trip',
 }: PaymentMethodSectionProps) {
   const isFocused = useIsFocused();
   const { createPaymentMethod } = useStripe();
@@ -264,11 +270,28 @@ export function PaymentMethodSection({
     freeWindowHours,
   );
 
+  const visibleOptions =
+    allowedMethods == null || allowedMethods.length === 0
+      ? PAYMENT_OPTIONS
+      : PAYMENT_OPTIONS.filter((o) => allowedMethods.includes(o.type));
+  const cashOnlyConnect =
+    allowedMethods != null &&
+    allowedMethods.length === 1 &&
+    allowedMethods[0] === 'dinheiro';
+
+  const connectCashOnlyMessage =
+    connectCashOnlyContext === 'dependent_shipment'
+      ? 'Este motorista ainda não concluiu a configuração financeira (Stripe Connect). Apenas pagamento em dinheiro está disponível para este envio do dependente — o valor total (incluindo taxa da plataforma) será pago ao motorista ao final da viagem.'
+      : 'Este motorista ainda não concluiu a configuração financeira (Stripe Connect). Apenas pagamento em dinheiro está disponível para esta viagem — o valor total (incluindo taxa da plataforma) será pago ao motorista ao final da viagem.';
+
   return (
     <View style={styles.container}>
       <Text style={styles.sectionTitle}>Método de pagamento</Text>
+      {cashOnlyConnect ? (
+        <Text style={styles.connectHint}>{connectCashOnlyMessage}</Text>
+      ) : null}
 
-      {PAYMENT_OPTIONS.map((opt) => (
+      {visibleOptions.map((opt) => (
         <View key={opt.type} style={[styles.optionCard, selectedMethod === opt.type && styles.optionCardSelected]}>
           <TouchableOpacity
             style={styles.optionRow}
@@ -465,7 +488,8 @@ export function PaymentMethodSection({
           {selectedMethod === opt.type && opt.type === 'dinheiro' && (
             <View style={styles.expanded}>
               <Text style={styles.dinheiroText}>
-                O pagamento deverá ser realizado diretamente ao motorista no momento do embarque.
+                O pagamento em dinheiro deve ser feito ao motorista quando você chegar ao destino final — o valor
+                total abaixo (incluindo taxa da plataforma) é o que você entrega em mãos.
               </Text>
               <Text style={styles.dinheiroText}>
                 Você receberá o comprovante digital assim que o pagamento for registrado no sistema.
@@ -511,6 +535,12 @@ const CARD_STYLE = {
 const styles = StyleSheet.create({
   container: {
     marginTop: 8,
+  },
+  connectHint: {
+    fontSize: 13,
+    color: COLORS.neutral700,
+    lineHeight: 20,
+    marginBottom: 14,
   },
   sectionTitle: {
     fontSize: 16,

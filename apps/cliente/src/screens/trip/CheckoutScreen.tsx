@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useCallback } from 'react';
+import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -36,7 +36,10 @@ import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
 import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
 import { formatVehicleDescription, formatDriverRatingLabel, formatTripFareBrl } from '../../lib/tripDriverDisplay';
-import { fetchResolvedPriceCentsForScheduledTrip } from '../../lib/clientScheduledTrips';
+import {
+  fetchResolvedPriceCentsForScheduledTrip,
+  type TripPriceBasis,
+} from '../../lib/clientScheduledTrips';
 import {
   MAPBOX_DESTINATION_MARKER_COLOR,
   MAPBOX_ORIGIN_MARKER_COLOR,
@@ -53,6 +56,7 @@ import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCusto
 import { waitForShipmentStripePaymentIntentId } from '../../lib/waitForShipmentStripePaymentIntentId';
 import { displayCpf } from '../../utils/formatCpf';
 import { bookingTotalPassengers, maxBagsForTrip } from '../../lib/tripCapacityLimits';
+import { fetchDriverStripeChargesEnabled } from '../../lib/driverStripeConnect';
 
 const supabasePublicUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 
@@ -128,25 +132,6 @@ const DEFAULT_REGION = {
 export function CheckoutScreen({ navigation, route }: Props) {
   const { currentPlace } = useCurrentLocation();
   const { showAlert } = useAppAlert();
-  const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('credito');
-  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
-  /** Preço alinhado a `scheduled_trips` + `worker_routes` (evita fallback fictício 6400). */
-  const [resolvedFareCents, setResolvedFareCents] = useState<number | null>(() =>
-    route.params?.scheduled_trip_id ? null : route.params?.driver?.amount_cents ?? null
-  );
-  const [fareLoading, setFareLoading] = useState(() => Boolean(route.params?.scheduled_trip_id));
-  /**
-   * Preview do breakdown gross-up (PDF):
-   *   Base + Adicionais + Ganho/Desconto promo + Taxa admin = Total
-   * O `totalCents` é exatamente o que vai no PaymentIntent.
-   */
-  const [pricingPreview, setPricingPreview] = useState<PricingResult | null>(null);
-  const [pricingError, setPricingError] = useState<string | null>(null);
-  const [appliedPromotionId, setAppliedPromotionId] = useState<string | null>(null);
-  const [appliedPromoWorkerRouteId, setAppliedPromoWorkerRouteId] = useState<string | null>(null);
-  const [workerRouteId, setWorkerRouteId] = useState<string | null>(null);
-  const [pricingRouteId, setPricingRouteId] = useState<string | null>(null);
 
   const driver = route.params?.driver ?? DEFAULT_DRIVER;
   const origin = route.params?.origin;
@@ -160,8 +145,57 @@ export function CheckoutScreen({ navigation, route }: Props) {
       : Math.min(1, maxBagsForBooking);
   const scheduledTripId = route.params?.scheduled_trip_id;
   const immediateTrip = route.params?.immediateTrip === true;
-  const routePriceCents = resolvedFareCents ?? driver.amount_cents ?? null;
-  const displayChargeCents = pricingPreview?.totalCents ?? routePriceCents;
+
+  const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('credito');
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
+  /** Stripe Connect com `charges_enabled` — só então cartão/Pix ficam disponíveis. */
+  const [connectChargesEnabled, setConnectChargesEnabled] = useState<boolean | null>(null);
+  const [connectStatusLoading, setConnectStatusLoading] = useState(() => Boolean(driver.driver_id?.trim()));
+  const connectFetchGen = useRef(0);
+  /** Preço alinhado a `scheduled_trips` + `worker_routes` (evita fallback fictício 6400). */
+  const [resolvedFareCents, setResolvedFareCents] = useState<number | null>(() =>
+    route.params?.scheduled_trip_id ? null : route.params?.driver?.amount_cents ?? null
+  );
+  /** `null` = ainda não definido (viagem agendada antes do fetch). */
+  const [resolvedPricingBasis, setResolvedPricingBasis] = useState<TripPriceBasis | null>(() =>
+    route.params?.scheduled_trip_id ? null : 'flat_trip'
+  );
+  const [fareLoading, setFareLoading] = useState(() => Boolean(route.params?.scheduled_trip_id));
+  /**
+   * Preview do breakdown gross-up (PDF):
+   *   Base + Adicionais + Ganho/Desconto promo + Taxa admin = Total
+   * O `totalCents` é exatamente o que vai no PaymentIntent.
+   */
+  const [pricingPreview, setPricingPreview] = useState<PricingResult | null>(null);
+  const [pricingError, setPricingError] = useState<string | null>(null);
+  const [appliedPromotionId, setAppliedPromotionId] = useState<string | null>(null);
+  const [appliedPromoWorkerRouteId, setAppliedPromoWorkerRouteId] = useState<string | null>(null);
+  const [workerRouteId, setWorkerRouteId] = useState<string | null>(null);
+  const [pricingRouteId, setPricingRouteId] = useState<string | null>(null);
+  /** Com viagem agendada, só confia no valor da API (evita `driver.amount_cents` da lista = 1 pax com taxa). */
+  const routePriceCents =
+    resolvedFareCents ?? (!scheduledTripId ? driver.amount_cents ?? null : null);
+  const passengerCountForPricing = Math.max(1, totalBookingPassengers);
+  const orderBaseCents = (() => {
+    if (scheduledTripId && fareLoading) return null;
+    if (routePriceCents == null || routePriceCents < 1) return null;
+    if (resolvedPricingBasis === 'flat_trip') return routePriceCents;
+    if (resolvedPricingBasis === 'per_person') {
+      return Math.floor(routePriceCents * passengerCountForPricing);
+    }
+    if (scheduledTripId) {
+      return Math.floor(routePriceCents * passengerCountForPricing);
+    }
+    return routePriceCents;
+  })();
+  const needsFullPricingPreview =
+    Boolean(scheduledTripId) &&
+    resolvedPricingBasis === 'per_person' &&
+    passengerCountForPricing > 1;
+  const displayChargeCents =
+    pricingPreview?.totalCents ??
+    (needsFullPricingPreview && !pricingPreview && !pricingError ? null : orderBaseCents);
   const fareFormatted =
     displayChargeCents != null
       ? formatTripFareBrl(displayChargeCents)
@@ -172,6 +206,35 @@ export function CheckoutScreen({ navigation, route }: Props) {
   const [driverAvatarFailed, setDriverAvatarFailed] = useState(false);
   /** Titular da reserva (lista completa na UI = você + extras). */
   const [primaryPassenger, setPrimaryPassenger] = useState<{ name: string; cpf: string } | null>(null);
+
+  const allowedPaymentMethods = useMemo((): PaymentMethodType[] => {
+    if (connectStatusLoading) return ['dinheiro'];
+    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix', 'dinheiro'];
+    return ['dinheiro'];
+  }, [connectChargesEnabled, connectStatusLoading]);
+
+  useEffect(() => {
+    const wid = driver.driver_id?.trim();
+    if (!wid) {
+      setConnectChargesEnabled(false);
+      setConnectStatusLoading(false);
+      return;
+    }
+    const gen = ++connectFetchGen.current;
+    setConnectStatusLoading(true);
+    void fetchDriverStripeChargesEnabled(wid).then((ok) => {
+      if (connectFetchGen.current !== gen) return;
+      setConnectChargesEnabled(ok);
+      setConnectStatusLoading(false);
+    });
+  }, [driver.driver_id]);
+
+  useEffect(() => {
+    if (selectedPaymentMethod == null) return;
+    if (!allowedPaymentMethods.includes(selectedPaymentMethod)) {
+      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'dinheiro');
+    }
+  }, [allowedPaymentMethods, selectedPaymentMethod]);
 
   useEffect(() => {
     let cancelled = false;
@@ -198,18 +261,21 @@ export function CheckoutScreen({ navigation, route }: Props) {
     if (!scheduledTripId) {
       setFareLoading(false);
       setResolvedFareCents(driver.amount_cents ?? null);
+      setResolvedPricingBasis('flat_trip');
       return;
     }
     let cancelled = false;
     setFareLoading(true);
-    fetchResolvedPriceCentsForScheduledTrip(scheduledTripId).then(({ cents, error }) => {
+    fetchResolvedPriceCentsForScheduledTrip(scheduledTripId).then(({ cents, basis, error }) => {
       if (cancelled) return;
       setFareLoading(false);
       if (error) {
         setResolvedFareCents(driver.amount_cents ?? null);
+        setResolvedPricingBasis('flat_trip');
         return;
       }
       setResolvedFareCents(cents ?? driver.amount_cents ?? null);
+      setResolvedPricingBasis(basis ?? (cents != null ? 'per_person' : 'flat_trip'));
     });
     return () => {
       cancelled = true;
@@ -244,7 +310,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
   }, [scheduledTripId]);
 
   useEffect(() => {
-    if (routePriceCents == null || routePriceCents < 1) {
+    if (orderBaseCents == null || orderBaseCents < 1) {
       setPricingPreview(null);
       setPricingError(null);
       setAppliedPromotionId(null);
@@ -278,7 +344,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
           const payload: Record<string, unknown> = {
             p_order_type: 'bookings',
             p_user_id: user.id,
-            p_amount_cents: routePriceCents,
+            p_amount_cents: orderBaseCents,
           };
           if (workerRouteId) payload.p_worker_route_id = workerRouteId;
           if (pricingRouteId) payload.p_pricing_route_id = pricingRouteId;
@@ -296,7 +362,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
 
       try {
         const preview = computeOrderPricing({
-          baseCents: routePriceCents,
+          baseCents: orderBaseCents,
           surchargesCents: 0,
           adminPct,
           gainPct,
@@ -322,7 +388,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [routePriceCents, workerRouteId, pricingRouteId]);
+  }, [orderBaseCents, workerRouteId, pricingRouteId]);
 
   useEffect(() => {
     if (!scheduledTripId) {
@@ -397,14 +463,22 @@ export function CheckoutScreen({ navigation, route }: Props) {
       }
       setPaymentSubmitting(true);
       try {
-        const { cents: dbCents, error: priceErr } =
+        if (!allowedPaymentMethods.includes(params.method)) {
+          showAlert(
+            'Método de pagamento',
+            'Este método não está disponível para esta viagem. Escolha outra opção ou volte mais tarde.',
+          );
+          return;
+        }
+
+        const { cents: dbCents, basis: dbBasis, error: priceErr } =
           await fetchResolvedPriceCentsForScheduledTrip(scheduledTripId);
         if (priceErr) {
           showAlert('Preço', priceErr);
           return;
         }
-        const finalAmountCents = dbCents ?? driver.amount_cents ?? null;
-        if (finalAmountCents == null || finalAmountCents < 0) {
+        const resolvedUnitCents = dbCents ?? driver.amount_cents ?? null;
+        if (resolvedUnitCents == null || resolvedUnitCents < 0) {
           showAlert(
             'Preço',
             'Não foi possível determinar o valor desta viagem. Verifique se a rota tem preço (worker_routes) ou se a viagem está cadastrada corretamente.'
@@ -412,6 +486,15 @@ export function CheckoutScreen({ navigation, route }: Props) {
           return;
         }
         const { passenger_data, passenger_count } = await buildBookingPassengersPayload(user.id, passengersParam);
+        const payBasis: TripPriceBasis = dbBasis ?? (dbCents != null ? 'per_person' : 'flat_trip');
+        const finalOrderBaseCents =
+          payBasis === 'per_person'
+            ? Math.floor(resolvedUnitCents * passenger_count)
+            : Math.floor(resolvedUnitCents);
+        if (finalOrderBaseCents < 1) {
+          showAlert('Preço', 'Não foi possível determinar o valor desta viagem.');
+          return;
+        }
 
         if (scheduledTripId) {
           const { data: tripCap } = await supabase
@@ -431,13 +514,13 @@ export function CheckoutScreen({ navigation, route }: Props) {
           }
         }
 
-        // Recompute pricing server-side authority, mas também materializa o
-        // snapshot localmente para o INSERT no caso de fluxo sem Stripe.
-        const fallbackAdminPct = pricingPreview?.adminPctApplied ?? 15;
-        const previewToUse: PricingResult = pricingPreview ?? computeOrderPricing({
-          baseCents: finalAmountCents,
+        // Snapshot alinhado à base total do pedido (por pessoa × passageiros quando aplicável).
+        const previewToUse: PricingResult = computeOrderPricing({
+          baseCents: finalOrderBaseCents,
           surchargesCents: 0,
-          adminPct: fallbackAdminPct,
+          adminPct: pricingPreview?.adminPctApplied ?? 15,
+          gainPct: pricingPreview?.gainPctApplied ?? 0,
+          discountPct: pricingPreview?.discountPctApplied ?? 0,
         });
         const pricingInsert = snapshotFromPricingResult(previewToUse, {
           promotionId: appliedPromotionId,
@@ -525,7 +608,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
           if (typeof ac === 'number' && Number.isFinite(ac) && ac >= 0) {
             chargedAmountCents = Math.floor(ac);
           }
-        } else {
+        } else if (params.method === 'pix') {
           const { data: row, error } = await supabase
             .from('bookings')
             .insert({
@@ -542,6 +625,9 @@ export function CheckoutScreen({ navigation, route }: Props) {
               passenger_data,
               ...pricingInsert,
               status: 'pending',
+              payment_method: 'pix',
+              amount_cents: previewToUse.totalCents,
+              platform_fee_extra_debit_cents: 0,
             })
             .select('id')
             .single();
@@ -558,87 +644,124 @@ export function CheckoutScreen({ navigation, route }: Props) {
             return;
           }
 
-          if (params.method === 'pix') {
-            // Pix: cobra via Stripe (mesma engine de envios). Reserva pré-criada como pending;
-            // o webhook stripe-webhook promove para `paid` após o pagamento real do usuário no banco.
-            const stripeCtx = await ensureAccessTokenForStripeFunctions();
-            const cancelBooking = async () => {
-              await supabase
-                .from('bookings')
-                .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
-                .eq('id', bookingId);
-            };
-            if (!stripeCtx.ok) {
-              await cancelBooking();
-              showAlert('Pagamento', stripeCtx.message);
-              return;
-            }
-            const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke(
-              'charge-booking',
-              {
-                headers: { Authorization: `Bearer ${stripeCtx.accessToken}` },
-                body: { booking_id: bookingId, payment_method_kind: 'pix' },
-              },
+          // Pix: cobra via Stripe (mesma engine de envios). Reserva pré-criada como pending;
+          // o webhook stripe-webhook promove para `paid` após o pagamento real do usuário no banco.
+          const stripeCtx = await ensureAccessTokenForStripeFunctions();
+          const cancelBooking = async () => {
+            await supabase
+              .from('bookings')
+              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+              .eq('id', bookingId);
+          };
+          if (!stripeCtx.ok) {
+            await cancelBooking();
+            showAlert('Pagamento', stripeCtx.message);
+            return;
+          }
+          const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke(
+            'charge-booking',
+            {
+              headers: { Authorization: `Bearer ${stripeCtx.accessToken}` },
+              body: { booking_id: bookingId, payment_method_kind: 'pix' },
+            },
+          );
+          if (chargeFnError) {
+            const raw = await describeInvokeFailure(chargeData, chargeFnError);
+            const chargeErrMsg = getUserErrorMessage({ message: raw }, raw);
+            await cancelBooking();
+            showAlert(
+              'Pagamento',
+              chargeErrMsg || 'Não foi possível iniciar o Pix; a reserva foi cancelada.',
             );
-            if (chargeFnError) {
-              const raw = await describeInvokeFailure(chargeData, chargeFnError);
-              const chargeErrMsg = getUserErrorMessage({ message: raw }, raw);
+            return;
+          }
+          const pixBody = chargeData as {
+            ok?: boolean;
+            pix_requires_payment?: boolean;
+            image_url_png?: string | null;
+            hosted_voucher_url?: string | null;
+            pix_copy_paste?: string | null;
+          } | null;
+          if (pixBody?.pix_requires_payment) {
+            const paste = typeof pixBody.pix_copy_paste === 'string' ? pixBody.pix_copy_paste.trim() : '';
+            if (paste) {
+              try {
+                await Clipboard.setString(paste);
+              } catch {
+                /* ignore */
+              }
+            }
+            const hosted = typeof pixBody.hosted_voucher_url === 'string' ? pixBody.hosted_voucher_url.trim() : '';
+            await new Promise<void>((resolve) => {
+              const msg = paste
+                ? 'Copiamos o código Pix para a área de transferência. Abra o comprovante no navegador se preferir; depois pague no app do banco. Quando concluir, toque em Continuar.'
+                : 'Abra o comprovante Pix no navegador, pague no app do banco e toque em Continuar.';
+              const buttons: { text: string; onPress?: () => void }[] = [];
+              if (hosted) {
+                buttons.push({
+                  text: 'Abrir comprovante',
+                  onPress: () => {
+                    void Linking.openURL(hosted);
+                  },
+                });
+              }
+              buttons.push({ text: 'Continuar', onPress: () => resolve() });
+              Alert.alert('Pix', msg, buttons, { cancelable: false });
+            });
+            const paid = await waitForShipmentStripePaymentIntentId('bookings', bookingId);
+            if (!paid) {
               await cancelBooking();
               showAlert(
-                'Pagamento',
-                chargeErrMsg || 'Não foi possível iniciar o Pix; a reserva foi cancelada.',
+                'Pix',
+                'Não detectamos o pagamento a tempo. A reserva foi cancelada; você pode tentar novamente.',
               );
               return;
             }
-            const pixBody = chargeData as {
-              ok?: boolean;
-              pix_requires_payment?: boolean;
-              image_url_png?: string | null;
-              hosted_voucher_url?: string | null;
-              pix_copy_paste?: string | null;
-            } | null;
-            if (pixBody?.pix_requires_payment) {
-              const paste = typeof pixBody.pix_copy_paste === 'string' ? pixBody.pix_copy_paste.trim() : '';
-              if (paste) {
-                try {
-                  await Clipboard.setString(paste);
-                } catch {
-                  /* ignore */
-                }
-              }
-              const hosted = typeof pixBody.hosted_voucher_url === 'string' ? pixBody.hosted_voucher_url.trim() : '';
-              await new Promise<void>((resolve) => {
-                const msg = paste
-                  ? 'Copiamos o código Pix para a área de transferência. Abra o comprovante no navegador se preferir; depois pague no app do banco. Quando concluir, toque em Continuar.'
-                  : 'Abra o comprovante Pix no navegador, pague no app do banco e toque em Continuar.';
-                const buttons: { text: string; onPress?: () => void }[] = [];
-                if (hosted) {
-                  buttons.push({
-                    text: 'Abrir comprovante',
-                    onPress: () => {
-                      void Linking.openURL(hosted);
-                    },
-                  });
-                }
-                buttons.push({ text: 'Continuar', onPress: () => resolve() });
-                Alert.alert('Pix', msg, buttons, { cancelable: false });
-              });
-              const paid = await waitForShipmentStripePaymentIntentId('bookings', bookingId);
-              if (!paid) {
-                await cancelBooking();
-                showAlert(
-                  'Pix',
-                  'Não detectamos o pagamento a tempo. A reserva foi cancelada; você pode tentar novamente.',
-                );
-                return;
-              }
-              chargedAmountCents = previewToUse.totalCents;
-            } else if (pixBody?.ok !== true) {
-              await cancelBooking();
-              showAlert('Pagamento', 'Resposta inesperada do servidor ao iniciar Pix.');
-              return;
-            }
+            chargedAmountCents = previewToUse.totalCents;
+          } else if (pixBody?.ok !== true) {
+            await cancelBooking();
+            showAlert('Pagamento', 'Resposta inesperada do servidor ao iniciar Pix.');
+            return;
           }
+        } else if (params.method === 'dinheiro') {
+          const { data: row, error } = await supabase
+            .from('bookings')
+            .insert({
+              user_id: user.id,
+              scheduled_trip_id: scheduledTripId,
+              origin_address: origin.address,
+              origin_lat: origin.latitude,
+              origin_lng: origin.longitude,
+              destination_address: destination.address,
+              destination_lat: destination.latitude,
+              destination_lng: destination.longitude,
+              passenger_count,
+              bags_count: bagsCount,
+              passenger_data,
+              ...pricingInsert,
+              status: 'pending',
+              payment_method: 'cash',
+              amount_cents: previewToUse.totalCents,
+              platform_fee_extra_debit_cents: 0,
+            })
+            .select('id')
+            .single();
+          if (error) {
+            showAlert(
+              'Erro ao reservar',
+              getUserErrorMessage(error, 'Não foi possível registrar sua viagem. Tente novamente.')
+            );
+            return;
+          }
+          bookingId = row && typeof row === 'object' && 'id' in row ? String((row as { id: string }).id) : '';
+          if (!bookingId) {
+            showAlert('Erro', 'Não foi possível obter o identificador da reserva.');
+            return;
+          }
+          chargedAmountCents = previewToUse.totalCents;
+        } else {
+          showAlert('Pagamento', 'Método de pagamento não suportado.');
+          return;
         }
 
         const summary: PaymentConfirmedBookingParam = {
@@ -677,6 +800,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
     [
       bagsCount,
       destination,
+      driver.driver_id,
       driver.amount_cents,
       driver.arrival,
       driver.departure,
@@ -695,6 +819,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
       pricingPreview,
       appliedPromotionId,
       appliedPromoWorkerRouteId,
+      allowedPaymentMethods,
     ]
   );
 
@@ -886,6 +1011,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
             cancellationPolicyVariant="trip"
             loading={paymentSubmitting || fareLoading}
             onConfirmPayment={handleConfirmPayment}
+            allowedMethods={allowedPaymentMethods}
           />
         </View>
       </ScrollView>

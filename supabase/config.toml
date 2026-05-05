@@ -8,6 +8,12 @@ verify_jwt = false
 [functions.verify-email-code]
 verify_jwt = false
 
+[functions.send-phone-verification-code]
+verify_jwt = false
+
+[functions.verify-phone-code]
+verify_jwt = false
+
 [functions.complete-password-reset]
 verify_jwt = false
 

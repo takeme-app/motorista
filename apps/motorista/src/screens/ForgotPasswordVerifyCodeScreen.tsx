@@ -40,7 +40,10 @@ function getOtpBoxSize(): number {
 }
 
 export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
-  const email = route.params.email.trim();
+  const email = route.params.email?.trim() ?? '';
+  const phone = route.params.phone?.replace(/\D/g, '') ?? '';
+  const channel = phone ? 'phone' : 'email';
+  const destination = channel === 'phone' ? phone : email;
   const { showAlert } = useAppAlert();
   const [digits, setDigits] = useState<string[]>(() => Array.from({ length: CODE_LENGTH }, () => ''));
   const [focusedIndex, setFocusedIndex] = useState(0);
@@ -56,7 +59,9 @@ export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
   const canResend = countdown <= 0 && !resendLoading;
 
   useEffect(() => {
-    setLastRecoveryEmail(email);
+    if (email) {
+      setLastRecoveryEmail(email);
+    }
   }, [email]);
 
   useEffect(() => {
@@ -103,15 +108,18 @@ export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
 
   const handleConfirm = async () => {
     if (!isComplete) return;
+    if (!destination) {
+      showAlert('Erro', 'Não foi possível identificar o destino do código. Solicite um novo código.');
+      return;
+    }
     setLoading(true);
     try {
-      const { data: fnData, error: fnError } = await supabase.functions.invoke('verify-email-code', {
-        body: {
-          email,
-          code,
-          password_reset: true,
-        },
-      });
+      const fnName = channel === 'phone' ? 'verify-phone-code' : 'verify-email-code';
+      const body =
+        channel === 'phone'
+          ? { phone, code, password_reset: true }
+          : { email, code, password_reset: true };
+      const { data: fnData, error: fnError } = await supabase.functions.invoke(fnName, { body });
 
       const payload = parseInvokeData(fnData);
 
@@ -130,7 +138,7 @@ export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
       if (typeof token !== 'string' || !token) {
         showAlert(
           'Erro',
-          'Não foi possível continuar a redefinição. Atualize o app e confira o deploy das Edge Functions (verify-email-code).',
+          'Não foi possível continuar a redefinição. Atualize o app e confira o deploy das Edge Functions.',
         );
         return;
       }
@@ -146,11 +154,18 @@ export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
 
   const handleResendCode = useCallback(async () => {
     if (!canResend) return;
+    if (!destination) {
+      showAlert('Erro', 'Não foi possível identificar o destino do código. Solicite um novo código.');
+      return;
+    }
     setResendLoading(true);
     try {
-      const { data: resendData, error: fnError } = await supabase.functions.invoke('send-email-verification-code', {
-        body: { email, purpose: 'password_reset' },
-      });
+      const fnName = channel === 'phone' ? 'send-phone-verification-code' : 'send-email-verification-code';
+      const body =
+        channel === 'phone'
+          ? { phone, purpose: 'password_reset' as const }
+          : { email, purpose: 'password_reset' as const };
+      const { data: resendData, error: fnError } = await supabase.functions.invoke(fnName, { body });
       const resendPayload = parseInvokeData(resendData);
       if (resendPayload?.error != null) {
         showAlert('Erro', String(resendPayload.error));
@@ -165,13 +180,18 @@ export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
       setFocusedIndex(0);
       setCountdown(RESEND_COOLDOWN_SEC);
       inputRefs.current[0]?.focus();
-      showAlert('Código enviado', 'Enviamos um novo código de 4 dígitos para seu e-mail.');
+      showAlert(
+        'Código enviado',
+        channel === 'phone'
+          ? 'Enviamos um novo código de 4 dígitos para seu WhatsApp.'
+          : 'Enviamos um novo código de 4 dígitos para seu e-mail.'
+      );
     } catch (err: unknown) {
       showAlert('Erro', getUserErrorMessage(err, 'Não foi possível reenviar o código.'));
     } finally {
       setResendLoading(false);
     }
-  }, [canResend, email, showAlert]);
+  }, [canResend, channel, destination, email, phone, showAlert]);
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
@@ -189,10 +209,10 @@ export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
           showsVerticalScrollIndicator={false}
         >
           <View style={[styles.content, { paddingTop: insets.top + 96 }]}>
-            <Text style={styles.title}>Código no e-mail</Text>
+            <Text style={styles.title}>{channel === 'phone' ? 'Código no WhatsApp' : 'Código no e-mail'}</Text>
             <Text style={styles.subtitle}>
               Digite o código de 4 dígitos que enviamos para{'\n'}
-              <Text style={styles.emailEmphasis}>{email}</Text>
+              <Text style={styles.emailEmphasis}>{destination}</Text>
             </Text>
 
             <View style={styles.otpWrapper}>

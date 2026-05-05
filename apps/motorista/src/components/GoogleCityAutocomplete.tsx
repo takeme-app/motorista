@@ -111,6 +111,10 @@ export function GoogleCityAutocomplete({
   }
 
   const handlePick = (item: GoogleGeocodeResult) => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
     setSuggestions([]);
     setOpen(false);
     onSelectPlace(item);

@@ -16,7 +16,7 @@ import { splitFullName, joinFullName } from '../utils/splitFullName';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
 import { storageUrl } from '../utils/storageUrl';
-import { uploadToStorage } from '../utils/uploadToStorage';
+import { avatarStorageObjectPath, uploadImageFromUriToPublicBucket } from '../utils/uploadToStorage';
 import type { ProfileRow, WorkerProfilePersonalRow } from '../types/dbRows';
 import { PersonalInfoFieldRow } from '../components/profile/PersonalInfoFieldRow';
 import { SingleFieldModal } from '../components/profile/SingleFieldModal';
@@ -132,15 +132,38 @@ export function PersonalInfoScreen({ navigation }: Props) {
     showAlert('Erro', getUserErrorMessage(e));
   };
 
-  const uploadAvatarFromUri = async (uri: string) => {
+  const onAvatarError = (e: unknown) => {
+    const raw = e instanceof Error ? e.message : String(e);
+    showAlert('Erro ao trocar foto', raw || getUserErrorMessage(e));
+  };
+
+  const uploadAvatarFromUri = async (uri: string, pickerMimeType?: string | null) => {
     if (!row) return;
-    const path = `${row.userId}/avatar.jpg`;
-    const urlWithBuster = await uploadToStorage('avatars', path, uri, 'image/jpeg');
+    const { data: authData, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !authData.user?.id) {
+      throw new Error('Sessão inválida. Faça login de novo e tente outra vez.');
+    }
+    const path = avatarStorageObjectPath(authData.user.id);
+
+    let urlWithBuster: string;
+    try {
+      urlWithBuster = await uploadImageFromUriToPublicBucket('avatars', path, uri, {
+        pickerMimeType: pickerMimeType ?? null,
+      });
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e);
+      console.warn('[avatar][upload-storage]', raw);
+      throw new Error(`Falha ao enviar a foto para o storage: ${raw}`);
+    }
+
     const { error } = await supabase
       .from('profiles')
       .update({ avatar_url: urlWithBuster, updated_at: new Date().toISOString() } as never)
       .eq('id', row.userId);
-    if (error) throw error;
+    if (error) {
+      console.warn('[avatar][update-profile]', error.message ?? String(error));
+      throw new Error(`Falha ao atualizar o perfil: ${error.message ?? 'erro desconhecido'}`);
+    }
     await load();
   };
 
@@ -156,21 +179,23 @@ export function PersonalInfoScreen({ navigation }: Props) {
       const launch = fromCamera ? ImagePicker.launchCameraAsync : ImagePicker.launchImageLibraryAsync;
       const result = await launch({
         mediaTypes: ['images'],
-        allowsEditing: true,
-        aspect: [1, 1],
+        allowsEditing: false,
         quality: 0.85,
       });
       if (result.canceled || !result.assets?.[0]?.uri) return;
-      await uploadAvatarFromUri(result.assets[0].uri);
+      const a = result.assets[0];
+      await uploadAvatarFromUri(a.uri, a.mimeType ?? null);
     } catch (e: unknown) {
-      onSaveError(e);
+      onAvatarError(e);
     }
   };
 
   const removeAvatar = async () => {
     if (!row) return;
     try {
-      await supabase.storage.from('avatars').remove([`${row.userId}/avatar.jpg`]);
+      const { data: u } = await supabase.auth.getUser();
+      if (!u.user?.id) return;
+      await supabase.storage.from('avatars').remove([avatarStorageObjectPath(u.user.id)]);
     } catch {
       /* arquivo pode não existir */
     }

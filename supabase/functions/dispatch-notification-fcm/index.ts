@@ -78,6 +78,29 @@ async function getAccessToken(clientEmail: string, privateKey: string): Promise<
   });
 }
 
+/** Resposta HTTP v1 da FCM: token inválido/desinstalado — remover linha em profile_fcm_tokens. */
+function fcmErrorIndicatesStaleToken(resJson: unknown): boolean {
+  if (!resJson || typeof resJson !== "object") return false;
+  const root = resJson as { error?: unknown };
+  const err = root.error;
+  if (!err || typeof err !== "object") return false;
+  const e = err as { status?: string; message?: string; details?: unknown[] };
+  if (e.status === "NOT_FOUND") return true;
+  const details = e.details;
+  if (Array.isArray(details)) {
+    for (const d of details) {
+      if (d && typeof d === "object" && (d as { errorCode?: string }).errorCode === "UNREGISTERED") {
+        return true;
+      }
+    }
+  }
+  if (typeof e.message === "string") {
+    if (/Requested entity was not found/i.test(e.message)) return true;
+    if (/not a valid FCM registration token/i.test(e.message)) return true;
+  }
+  return false;
+}
+
 Deno.serve(async (req) => {
   const error_id = crypto.randomUUID();
 
@@ -241,13 +264,22 @@ Deno.serve(async (req) => {
       }
       if (!r.ok) {
         results.push({ token: token.slice(0, 12) + "...", error: resJson });
+        if (fcmErrorIndicatesStaleToken(resJson)) {
+          const { error: delErr } = await supabase.from("profile_fcm_tokens").delete().eq("fcm_token", token);
+          if (delErr) {
+            console.error("dispatch-notification-fcm remove stale token", delErr.message, error_id);
+          }
+        } else {
+          console.error("dispatch-notification-fcm fcm send failed", error_id, resJson);
+        }
       } else {
         results.push({ token: token.slice(0, 12) + "...", ok: true });
       }
     }
 
     const anyFail = results.some((x: any) => x && x.error);
-    return json(anyFail ? 502 : 200, {
+    // 200: webhook tratado; falha de entrega fica em ok / results (502 confundia gateway e gerava retries).
+    return json(200, {
       ok: !anyFail,
       sent: tokens.length,
       results,

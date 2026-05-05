@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import type { RegistrationType } from '../navigation/types';
+import { hasSkippedStripeConnectSetup } from './stripeConnectSkip';
 
 /** Único status que libera o app (definido com o admin). */
 export const MOTORISTA_ACTIVE_STATUS = 'approved';
@@ -82,8 +83,8 @@ export function isStripeConnectReadyForApp(row: {
 }
 
 export type MotoristaGateResult =
-  | { kind: 'active'; subtype: string; stripeState: StripeConnectState }
-  | { kind: 'needs_stripe_connect'; subtype: string; stripeState: StripeConnectState }
+  | { kind: 'active'; role: string; subtype: string; stripeState: StripeConnectState }
+  | { kind: 'needs_stripe_connect'; role: string; subtype: string; stripeState: StripeConnectState }
   /**
    * Usuário autenticado passou pela verificação do PIN (worker_profile existe com
    * status='inactive'), mas abandonou a etapa 2 (Complete seu perfil). Login deve
@@ -124,11 +125,13 @@ export async function checkMotoristaCanAccessApp(userId: string): Promise<Motori
   }
   if (data.status === MOTORISTA_ACTIVE_STATUS) {
     const stripeState = getStripeConnectState(data);
-    const subtype = data.subtype ?? 'takeme';
-    if (!canUseAppWithStripeState(stripeState)) {
-      return { kind: 'needs_stripe_connect', subtype, stripeState };
+    const role = (data.role as string | null) ?? 'driver';
+    const subtype = normalizeWorkerSubtype(role, data.subtype);
+    const skippedStripeConnect = await hasSkippedStripeConnectSetup(userId);
+    if (!canUseAppWithStripeState(stripeState) && !skippedStripeConnect) {
+      return { kind: 'needs_stripe_connect', role, subtype, stripeState };
     }
-    return { kind: 'active', subtype, stripeState };
+    return { kind: 'active', role, subtype, stripeState };
   }
   return { kind: 'pending', status: data.status };
 }
@@ -155,8 +158,19 @@ export function getMotoristaPendingCopy(status: string): { title: string; messag
 }
 
 /** Mapeia subtype do DB para a rota principal correta. */
-export function subtypeToMainRoute(subtype: string): 'Main' | 'MainExcursoes' | 'MainEncomendas' {
+export function subtypeToMainRoute(
+  subtype: string,
+  role: string = 'driver',
+): 'Main' | 'MainExcursoes' | 'MainEncomendas' {
+  if (role === 'preparer' && subtype !== 'excursions') return 'MainEncomendas';
   if (subtype === 'excursions') return 'MainExcursoes';
   if (subtype === 'shipments') return 'MainEncomendas';
   return 'Main';
+}
+
+function normalizeWorkerSubtype(role: string, subtype: string | null | undefined): string {
+  if (role === 'preparer') {
+    return subtype === 'excursions' ? 'excursions' : 'shipments';
+  }
+  return subtype === 'partner' ? 'partner' : 'takeme';
 }

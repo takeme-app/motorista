@@ -1,10 +1,3 @@
-// TODO (onboarding telefone/WhatsApp):
-// - Integrar com a Meta WhatsApp Cloud API quando as credenciais estiverem disponíveis
-//   (WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN, WHATSAPP_TEMPLATE_NAME).
-// - Enquanto não integrado, em ambiente de dev retornamos `dev_code` no payload para
-//   permitir testar o fluxo ponta-a-ponta sem depender do provedor.
-// - Em produção: apenas grava no banco e tenta enviar via WhatsApp; NUNCA devolver `dev_code`.
-
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -30,10 +23,100 @@ function parsePurpose(raw: unknown): Purpose {
 function normalizePhoneBR(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const digits = raw.replace(/\D/g, "");
-  // Aceita 10 (fixo) ou 11 (celular) dígitos com DDD. Não inclui +55 aqui porque o app
-  // repassa apenas dígitos brasileiros.
   if (digits.length < 10 || digits.length > 13) return null;
   return digits;
+}
+
+function normalizePhoneForZapi(phoneDigits: string): string | null {
+  const digits = phoneDigits.replace(/\D/g, "");
+  if (digits.startsWith("55") && (digits.length === 12 || digits.length === 13)) {
+    return digits;
+  }
+  if (digits.length === 10 || digits.length === 11) {
+    return `55${digits}`;
+  }
+  return null;
+}
+
+async function sendZapiCode(input: {
+  phoneDigits: string;
+  code: string;
+}): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const instanceId = Deno.env.get("ZAPI_INSTANCE_ID")?.trim() ?? "";
+  const instanceToken = Deno.env.get("ZAPI_INSTANCE_TOKEN")?.trim() ?? "";
+  const clientToken = Deno.env.get("ZAPI_CLIENT_TOKEN")?.trim() ?? "";
+
+  if (!instanceId || !instanceToken || !clientToken) {
+    return {
+      ok: false,
+      status: 503,
+      error: "WhatsApp não configurado. Defina ZAPI_INSTANCE_ID, ZAPI_INSTANCE_TOKEN e ZAPI_CLIENT_TOKEN.",
+    };
+  }
+
+  const phone = normalizePhoneForZapi(input.phoneDigits);
+  if (!phone) {
+    return {
+      ok: false,
+      status: 400,
+      error: "Telefone inválido para envio via WhatsApp.",
+    };
+  }
+
+  const message = `Seu código Take Me é: ${input.code}. Ele expira em 10 minutos.`;
+  const url = `https://api.z-api.io/instances/${instanceId}/token/${instanceToken}/send-text`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Client-Token": clientToken,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ phone, message }),
+    });
+  } catch (err) {
+    console.error("[send-phone-verification-code] Z-API fetch error:", err);
+    return {
+      ok: false,
+      status: 502,
+      error: "Não foi possível contatar o provedor de WhatsApp.",
+    };
+  }
+
+  if (response.ok) {
+    return { ok: true };
+  }
+
+  let providerMessage = "";
+  try {
+    const body = await response.json();
+    const candidate =
+      typeof body?.message === "string"
+        ? body.message
+        : typeof body?.error === "string"
+        ? body.error
+        : "";
+    providerMessage = candidate.trim();
+  } catch {
+    try {
+      providerMessage = (await response.text()).trim();
+    } catch {
+      providerMessage = "";
+    }
+  }
+
+  console.error("[send-phone-verification-code] Z-API error:", {
+    status: response.status,
+    message: providerMessage || null,
+  });
+
+  return {
+    ok: false,
+    status: response.status >= 400 && response.status < 600 ? response.status : 502,
+    error: providerMessage || "Falha ao enviar WhatsApp. Tente novamente.",
+  };
 }
 
 Deno.serve(async (req) => {
@@ -82,21 +165,41 @@ Deno.serve(async (req) => {
 
     const purpose = parsePurpose(purposeRaw);
 
-    if (purpose === "signup") {
-      const { data: existingPhone } = await supabase
+    const phoneVariants = new Set<string>([phoneDigits]);
+    if (phoneDigits.startsWith("55") && phoneDigits.length > 12) {
+      phoneVariants.add(phoneDigits.slice(2));
+    }
+
+    let existingPhoneId: string | null = null;
+    for (const candidate of phoneVariants) {
+      const { data } = await supabase
         .from("profiles")
         .select("id")
-        .eq("phone", phoneDigits)
+        .eq("phone", candidate)
         .limit(1)
         .maybeSingle();
-      if (existingPhone) {
-        return new Response(
-          JSON.stringify({
-            error: "Este telefone já está cadastrado. Faça login ou use outro número.",
-          }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
+      if (data?.id) {
+        existingPhoneId = data.id as string;
+        break;
       }
+    }
+
+    if (purpose === "signup" && existingPhoneId) {
+      return new Response(
+        JSON.stringify({
+          error: "Este telefone já está cadastrado. Faça login ou use outro número.",
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    if (purpose === "password_reset" && !existingPhoneId) {
+      return new Response(
+        JSON.stringify({
+          error: "Não encontramos uma conta com este telefone. Verifique o número ou cadastre-se.",
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
     // Limpa códigos anteriores para esse telefone/purpose.
@@ -137,26 +240,26 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Integração real com WhatsApp Cloud API — TODO. Por enquanto:
-    //  - Em prod: devolvemos ok=true sem enviar.
-    //  - Em dev (APP_ENV !== "prod"): devolvemos dev_code para o app conseguir testar.
-    const appEnv = Deno.env.get("APP_ENV")?.trim() ?? "dev";
-    const isProd = appEnv === "prod";
-    console.log(
-      "[send-phone-verification-code] código gerado para",
-      phoneDigits,
+    const zapiResult = await sendZapiCode({ phoneDigits, code });
+    if (!zapiResult.ok) {
+      await supabase
+        .from("phone_verification_codes")
+        .delete()
+        .eq("phone", phoneDigits)
+        .eq("purpose", purpose);
+
+      return new Response(JSON.stringify({ error: zapiResult.error }), {
+        status: zapiResult.status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    console.log("[send-phone-verification-code] código enviado via Z-API", {
+      phone: phoneDigits,
       purpose,
-      isProd ? "(prod: não retorna dev_code)" : "(dev: retorna dev_code)",
-    );
+    });
 
-    // Quando o envio real estiver ativo, substituir este log pela chamada ao endpoint da Meta:
-    // await fetch("https://graph.facebook.com/v20.0/<PHONE_NUMBER_ID>/messages", {...});
-    console.log("[send-phone-verification-code] STUB: WhatsApp ainda não integrado. Código:", code);
-
-    const responseBody: Record<string, unknown> = { ok: true };
-    if (!isProd) responseBody.dev_code = code;
-
-    return new Response(JSON.stringify(responseBody), {
+    return new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

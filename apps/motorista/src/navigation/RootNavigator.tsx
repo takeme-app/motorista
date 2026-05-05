@@ -4,6 +4,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AuthRecoveryHandler } from './AuthRecoveryHandler';
 import { NotificationDeeplinkHandler } from './NotificationDeeplinkHandler';
 import { RootNavigationProvider } from './RootNavigationContext';
+import { SessionEnvironmentGuard } from './SessionEnvironmentGuard';
 import { SplashScreen } from '../screens/SplashScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
 import { LoginScreen } from '../screens/LoginScreen';
@@ -64,6 +65,7 @@ export function RootNavigator({ initialRouteName, initialRouteParams }: RootNavi
   return (
     <NavigationContainer ref={navigationRef}>
       <AuthRecoveryHandler navigationRef={navigationRef} />
+      <SessionEnvironmentGuard navigationRef={navigationRef} />
       <NotificationDeeplinkHandler navigationRef={navigationRef} />
       <RootNavigationProvider navigationRef={navigationRef}>
         <Stack.Navigator

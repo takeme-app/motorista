@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -20,10 +20,12 @@ import {
   formatPricingBreakdown,
   normalizeApplyPromotion,
   PricingDenominatorOverflowError,
+  formatDependentShipmentCode,
   type PricingResult,
 } from '@take-me/shared';
 import { snapshotFromPricingResult } from '../../lib/orderPricingSnapshot';
 import { dependentShipmentTotalPassengers, maxBagsForTrip } from '../../lib/tripCapacityLimits';
+import { fetchDriverStripeChargesEnabled } from '../../lib/driverStripeConnect';
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'ConfirmDependentShipment'>;
 
@@ -35,7 +37,7 @@ const COLORS = {
 };
 
 function orderIdFromUuid(uuid: string): string {
-  return uuid.replace(/-/g, '').slice(-4).toUpperCase();
+  return formatDependentShipmentCode(uuid);
 }
 
 function formatPhoneDisplay(digits: string): string {
@@ -62,8 +64,12 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     photoUri,
   } = route.params;
   const driver = route.params.driver;
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>(null);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('dinheiro');
   const [submitting, setSubmitting] = useState(false);
+  /** Stripe Connect (`charges_enabled`): só então cartão/Pix ficam disponíveis. */
+  const [connectChargesEnabled, setConnectChargesEnabled] = useState<boolean | null>(null);
+  const [connectStatusLoading, setConnectStatusLoading] = useState(() => Boolean(driver?.driver_id?.trim()));
+  const connectFetchGen = useRef(0);
   const [pricingPreview, setPricingPreview] = useState<PricingResult | null>(null);
   const [appliedPromotionId, setAppliedPromotionId] = useState<string | null>(null);
   const [appliedPromoWorkerRouteId, setAppliedPromoWorkerRouteId] = useState<string | null>(null);
@@ -138,6 +144,35 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     };
   }, [amountCents]);
 
+  const allowedPaymentMethods = useMemo((): PaymentMethodType[] => {
+    if (connectStatusLoading) return ['dinheiro'];
+    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix', 'dinheiro'];
+    return ['dinheiro'];
+  }, [connectChargesEnabled, connectStatusLoading]);
+
+  useEffect(() => {
+    const wid = driver?.driver_id?.trim();
+    if (!wid) {
+      setConnectChargesEnabled(false);
+      setConnectStatusLoading(false);
+      return;
+    }
+    const gen = ++connectFetchGen.current;
+    setConnectStatusLoading(true);
+    void fetchDriverStripeChargesEnabled(wid).then((ok) => {
+      if (connectFetchGen.current !== gen) return;
+      setConnectChargesEnabled(ok);
+      setConnectStatusLoading(false);
+    });
+  }, [driver?.driver_id]);
+
+  useEffect(() => {
+    if (selectedPaymentMethod == null) return;
+    if (!allowedPaymentMethods.includes(selectedPaymentMethod)) {
+      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'dinheiro');
+    }
+  }, [allowedPaymentMethods, selectedPaymentMethod]);
+
   const displayTotalCents = pricingPreview?.totalCents ?? amountCents;
 
   const uploadPhotoAndGetPath = useCallback(
@@ -178,6 +213,13 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     async (params: { method: PaymentMethodType; paymentMethodId?: string }) => {
       setSubmitting(true);
       try {
+        if (!allowedPaymentMethods.includes(params.method)) {
+          showAlert(
+            'Método de pagamento',
+            'Este método não está disponível para este envio. Escolha outra opção ou volte mais tarde.',
+          );
+          return;
+        }
         const {
           data: { user },
           error: authError,
@@ -352,6 +394,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
       photoUri,
       uploadPhotoAndGetPath,
       driver,
+      allowedPaymentMethods,
     ]
   );
 
@@ -421,7 +464,9 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           onConfirmPayment={handleConfirmPayment}
           confirmLabel="Confirmar envio"
           cancellationPolicyVariant="shipment_debit"
-          loading={submitting}
+          loading={submitting || connectStatusLoading}
+          allowedMethods={allowedPaymentMethods}
+          connectCashOnlyContext="dependent_shipment"
         />
       </ScrollView>
     </View>

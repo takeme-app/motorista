@@ -179,7 +179,7 @@ export function PagamentosHistoricoEncomendasScreen({ navigation }: Props) {
     const { data: rows } = await supabase
       .from('shipments')
       .select('id, amount_cents, delivered_at')
-      .eq('driver_id' as never, user.id)
+      .eq('preparer_id' as never, user.id)
       .eq('base_id' as never, myBaseId as never)
       .eq('status', 'delivered')
       .gte('delivered_at', startIso)

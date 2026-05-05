@@ -17,6 +17,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
+import { avatarStorageObjectPath, uploadImageFromUriToPublicBucket } from '../../utils/uploadToStorage';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'EditAvatar'>;
 
@@ -63,10 +64,8 @@ export function EditAvatarScreen({ navigation }: Props) {
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-      base64: true,
+      allowsEditing: false,
+      quality: 0.85,
     });
     if (result.canceled || !result.assets[0]?.uri) return;
 
@@ -78,31 +77,21 @@ export function EditAvatarScreen({ navigation }: Props) {
     }
 
     try {
-      const path = `${user.id}/avatar.jpg`;
       const asset = result.assets[0];
-      let body: Blob | ArrayBuffer;
-
-      if (asset.base64) {
-        const binary = atob(asset.base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        body = bytes.buffer;
-      } else {
-        const response = await fetch(asset.uri);
-        body = await response.blob();
-      }
-
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(path, body, { contentType: 'image/jpeg', upsert: true });
-
-      if (uploadError) {
+      const storagePath = avatarStorageObjectPath(user.id);
+      let publicUrl: string;
+      try {
+        publicUrl = await uploadImageFromUriToPublicBucket('avatars', storagePath, asset.uri, {
+          pickerMimeType: asset.mimeType ?? null,
+        });
+      } catch (uploadErr: unknown) {
+        const raw = uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
+        console.warn('[avatar][upload-storage]', raw);
         const isBucketMissing =
-          uploadError.message?.toLowerCase().includes('bucket') ||
-          uploadError.message?.toLowerCase().includes('not found');
+          raw.toLowerCase().includes('bucket') || raw.toLowerCase().includes('not found');
         const msg = isBucketMissing
           ? 'O bucket de fotos ainda não foi criado. No Supabase Dashboard vá em Storage > New bucket, crie um bucket com id "avatars" e marque como público.'
-          : getUserErrorMessage(uploadError, 'Não foi possível enviar a foto.');
+          : `Falha ao enviar a foto para o storage: ${raw}`;
         showAlert('Erro ao enviar foto', msg);
         setLoading(false);
         return;
@@ -110,20 +99,25 @@ export function EditAvatarScreen({ navigation }: Props) {
 
       const { error: updateError } = await supabase
         .from('profiles')
-        .update({ avatar_url: path, updated_at: new Date().toISOString() })
+        .update({ avatar_url: publicUrl, updated_at: new Date().toISOString() })
         .eq('id', user.id);
 
       if (updateError) {
-        showAlert('Erro', getUserErrorMessage(updateError, 'Não foi possível atualizar a foto de perfil.'));
+        console.warn('[avatar][update-profile]', updateError.message ?? String(updateError));
+        showAlert(
+          'Erro',
+          `Falha ao atualizar o perfil: ${updateError.message ?? 'erro desconhecido'}`,
+        );
         setLoading(false);
         return;
       }
-      setProfile({ avatar_url: path });
-      navigation.goBack();
+      setProfile({ avatar_url: publicUrl });
+      setTimeout(() => navigation.goBack(), 0);
     } catch (e) {
       showAlert('Erro', getUserErrorMessage(e, 'Não foi possível enviar a foto.'));
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const removePhoto = () => {
@@ -143,10 +137,7 @@ export function EditAvatarScreen({ navigation }: Props) {
               setLoading(false);
               return;
             }
-            const path = profile?.avatar_url?.startsWith('http') ? undefined : profile?.avatar_url;
-            if (path) {
-              await supabase.storage.from('avatars').remove([path]);
-            }
+            await supabase.storage.from('avatars').remove([avatarStorageObjectPath(user.id)]);
             await supabase
               .from('profiles')
               .update({ avatar_url: null, updated_at: new Date().toISOString() })

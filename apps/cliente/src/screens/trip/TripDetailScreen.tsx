@@ -39,6 +39,7 @@ import { parsePassengerData } from '../../lib/clientBookingTripLive';
 import { formatVehicleDescription, formatTripFareBrl } from '../../lib/tripDriverDisplay';
 import { onlyDigits } from '../../utils/formatCpf';
 import { TipModal } from '../../components/TipModal';
+import { formatTripCode } from '@take-me/shared';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'TripDetail'>;
 
@@ -746,7 +747,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
           <View style={styles.cardStatusRow}>
             <StatusBadge variant={clientViagemStatusBadge(detail.status, detail.trip_status, detail.cancellation_reason)} />
           </View>
-          <Text style={styles.tripId}>VG{detail.id.slice(-6).toUpperCase()}</Text>
+          <Text style={styles.tripId}>{formatTripCode(detail.id)}</Text>
           <Text style={styles.cardDate}>{formatDetailDate(detail.created_at)}</Text>
           <Text style={styles.cardSummary}>
             {detail.passenger_count} {detail.passenger_count === 1 ? 'passageiro' : 'passageiros'} ·{' '}

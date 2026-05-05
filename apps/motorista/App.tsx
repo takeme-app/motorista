@@ -126,8 +126,10 @@ export default function App() {
       return { name: 'CompleteDriverRegistration', params: { driverType } };
     }
     if (gate.kind === 'pending') return { name: 'MotoristaPendingApproval' };
-    if (gate.kind === 'needs_stripe_connect') return { name: 'StripeConnectSetup' };
-    return { name: subtypeToMainRoute(gate.subtype) };
+    if (gate.kind === 'needs_stripe_connect') {
+      return { name: 'StripeConnectSetup', params: { subtype: gate.subtype } };
+    }
+    return { name: subtypeToMainRoute(gate.subtype, gate.role) };
   }, []);
 
   useEffect(() => {

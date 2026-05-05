@@ -48,7 +48,7 @@ export function MotoristaPendingApprovalScreen({ navigation }: Props) {
       }
       const gate = await checkMotoristaCanAccessApp(user.id);
       if (gate.kind === 'active') {
-        navigation.reset({ index: 0, routes: [{ name: subtypeToMainRoute(gate.subtype) }] });
+        navigation.reset({ index: 0, routes: [{ name: subtypeToMainRoute(gate.subtype, gate.role) }] });
         return;
       }
       if (gate.kind === 'needs_stripe_connect') {
@@ -98,7 +98,7 @@ export function MotoristaPendingApprovalScreen({ navigation }: Props) {
       </TouchableOpacity>
 
       <TouchableOpacity style={styles.secondary} onPress={handleSignOut} activeOpacity={0.85}>
-        <Text style={styles.secondaryText}>Sair</Text>
+        <Text style={styles.secondaryText}>Voltar</Text>
       </TouchableOpacity>
     </View>
   );

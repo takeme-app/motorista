@@ -102,8 +102,8 @@ export type RootStackParamList = {
   PaymentHistory: undefined;
   ForgotPassword: undefined;
   ForgotPasswordEmailSent: { email: string };
-  /** Recuperação de senha: código de 4 dígitos após envio por e-mail. */
-  ForgotPasswordVerifyCode: { email: string };
+  /** Recuperação de senha: código de 4 dígitos após envio por e-mail ou telefone. */
+  ForgotPasswordVerifyCode: { email?: string; phone?: string };
   /** Com `passwordResetToken` (fluxo código); sem params (link recovery do e-mail com sessão). */
   ResetPassword: { passwordResetToken?: string };
   ResetPasswordSuccess: undefined;

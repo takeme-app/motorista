@@ -18,6 +18,7 @@ import { getCurrentPlace, distanceKm, formatDistanceKm } from '../../lib/locatio
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { useCurrentLocation } from '../../contexts/CurrentLocationContext';
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
+import { guessCityFromPtAddress } from '../../lib/shipmentOriginCity';
 import { useRecentDestinationsSorted } from '../../hooks/useRecentDestinationsSorted';
 import { formatRecentDestinationDisplay } from '../../lib/recentDestinations';
 import { useWhenTimeSelection } from '../../hooks/useWhenTimeSelection';
@@ -49,6 +50,10 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
   const [destinationLat, setDestinationLat] = useState(DEFAULT_DEST_COORDS.latitude);
   const [destinationLng, setDestinationLng] = useState(DEFAULT_DEST_COORDS.longitude);
   const [destinationConfirmed, setDestinationConfirmed] = useState(false);
+  /** Origem com coordenadas válidas: GPS/reverse geocode ou escolha nas sugestões (igual encomendas/viagens). */
+  const [originConfirmed, setOriginConfirmed] = useState(false);
+  /** Cidade vinda da sugestão (Nominatim); GPS usa só `guessCityFromPtAddress`. */
+  const [originCityHint, setOriginCityHint] = useState<string | undefined>();
   const [locationLoading, setLocationLoading] = useState(false);
 
   const { sortedRecentDestinations, saveRecentDestination, loadRecentDestinations } =
@@ -66,8 +71,11 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
       setOriginAddress(place.address);
       setOriginLat(place.latitude);
       setOriginLng(place.longitude);
+      setOriginConfirmed(true);
+      setOriginCityHint(undefined);
     } else {
       setOriginAddress('Permita acesso à localização');
+      setOriginConfirmed(false);
     }
   }, []);
 
@@ -76,6 +84,8 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
       setOriginAddress(currentPlace.address);
       setOriginLat(currentPlace.latitude);
       setOriginLng(currentPlace.longitude);
+      setOriginConfirmed(true);
+      setOriginCityHint(undefined);
     } else {
       loadOrigin();
     }
@@ -89,6 +99,8 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
         setOriginAddress(place.address);
         setOriginLat(place.latitude);
         setOriginLng(place.longitude);
+        setOriginConfirmed(true);
+        setOriginCityHint(undefined);
       } else {
         showAlert('Localização', 'Não foi possível usar sua localização.');
       }
@@ -100,6 +112,18 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
   }, [refreshLocation, showAlert]);
 
   const goToDriverSelection = useCallback(() => {
+    const orig = originAddress.trim();
+    if (!orig || orig === 'Obtendo sua localização...') {
+      showAlert('Atenção', 'Informe o ponto de partida.');
+      return;
+    }
+    if (!originConfirmed) {
+      showAlert(
+        'Atenção',
+        'Selecione o ponto de partida a partir das sugestões para garantir a localização correta (ou use Minha localização).',
+      );
+      return;
+    }
     const dest = destinationAddress.trim();
     if (!dest) {
       showAlert('Atenção', 'Informe o destino da viagem.');
@@ -110,10 +134,12 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
       return;
     }
     const timeResult = when.getResult();
+    const originCityTag = (originCityHint?.trim() || guessCityFromPtAddress(orig)).trim() || undefined;
     const originParam: ShipmentPlaceParam = {
-      address: originAddress,
+      address: orig,
       latitude: originLat,
       longitude: originLng,
+      ...(originCityTag ? { city: originCityTag } : {}),
     };
     const destinationParam: ShipmentPlaceParam = {
       address: dest,
@@ -151,6 +177,7 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
     originAddress,
     originLat,
     originLng,
+    originConfirmed,
     when,
     fullName,
     contactPhone,
@@ -162,6 +189,7 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
     navigation,
     showAlert,
     saveRecentDestination,
+    originCityHint,
   ]);
 
   const handleRecentDestinationPress = useCallback(
@@ -197,8 +225,24 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.label}>Ponto de partida</Text>
+        <AddressAutocomplete
+          value={originAddress}
+          onChangeText={(text) => {
+            setOriginAddress(text);
+            setOriginConfirmed(false);
+            setOriginCityHint(undefined);
+          }}
+          onSelectPlace={(place) => {
+            setOriginAddress(place.address);
+            setOriginLat(place.latitude);
+            setOriginLng(place.longitude);
+            setOriginConfirmed(true);
+            setOriginCityHint(place.city?.trim() || undefined);
+          }}
+          placeholder="Ex: Seu endereço, ponto de encontro..."
+          style={styles.autocomplete}
+        />
         <View style={styles.addressRow}>
-          <Text style={styles.addressText} numberOfLines={1}>{originAddress}</Text>
           <TouchableOpacity
             style={styles.useLocationBtn}
             onPress={useMyLocation}
@@ -309,11 +353,10 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 24 },
   label: { fontSize: 15, fontWeight: '500', color: COLORS.black, marginBottom: 8 },
-  addressRow: { marginBottom: 20 },
-  addressText: { fontSize: 16, color: COLORS.black, marginBottom: 8 },
+  addressRow: { marginBottom: 20, marginTop: 4 },
   useLocationBtn: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   useLocationText: { fontSize: 14, color: COLORS.black, fontWeight: '500' },
-  autocomplete: { marginBottom: 12 },
+  autocomplete: { marginBottom: 8 },
   recentsSection: { marginBottom: 16 },
   recentsTitle: { fontSize: 14, fontWeight: '600', color: COLORS.neutral700, marginBottom: 12 },
   recentRow: {

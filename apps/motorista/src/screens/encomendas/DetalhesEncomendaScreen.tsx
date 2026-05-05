@@ -32,6 +32,7 @@ import {
 import type { LatLng, MapRegion } from '../../components/googleMaps';
 import { getGoogleMapsApiKey, getMapboxAccessToken } from '../../lib/googleMapsConfig';
 import { getRouteWithDuration } from '../../lib/route';
+import { formatShipmentCode } from '@take-me/shared';
 
 let Location: any = null;
 try {
@@ -48,7 +49,7 @@ type Props = NativeStackScreenProps<ColetasEncomendasStackParamList, 'DetalhesEn
 
 type ShipmentDetail = {
   id: string;
-  tripId: string;
+  orderCode: string;
   originAddress: string;
   /** Destino final do envio (após a base). */
   finalDestinationAddress: string;
@@ -67,8 +68,8 @@ type ShipmentDetail = {
   finalDestCoord: LatLng | null;
 };
 
-function tripId(id: string): string {
-  return 'VG' + id.replace(/-/g, '').slice(-6).toUpperCase();
+function shipmentOrderCode(id: string): string {
+  return formatShipmentCode(id);
 }
 
 function formatDateTime(iso: string): string {
@@ -174,7 +175,7 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
 
     setDetail({
       id: row.id,
-      tripId: tripId(row.id),
+      orderCode: shipmentOrderCode(row.id),
       originAddress: row.origin_address,
       finalDestinationAddress: row.destination_address,
       baseAddress: baseAddress || '—',
@@ -390,10 +391,9 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
           </View>
 
           <View style={styles.card}>
-            {/* Trip ID */}
             <View style={styles.tripIdRow}>
-              <Text style={styles.tripIdLabel}>Id da viagem</Text>
-              <Text style={styles.tripIdValue}>{detail.tripId}</Text>
+              <Text style={styles.tripIdLabel}>ID do pedido</Text>
+              <Text style={styles.tripIdValue}>{detail.orderCode}</Text>
             </View>
 
             {/* Route */}

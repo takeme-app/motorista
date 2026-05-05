@@ -12,10 +12,12 @@ const config = getDefaultConfig(projectRoot);
 
 // Garante que o Metro use a pasta do app como raiz (build local / monorepo)
 config.projectRoot = projectRoot;
-// Mesma raiz HTTP que metro.config.js na raiz do monorepo: evita URL
-// .../apps/cliente/index.ts.bundle em um lugar e .../index.ts.bundle em outro
-// (Expo Dev Client pode cachear o caminho e falhar ao conectar).
-config.server = { ...(config.server ?? {}), unstable_serverRoot: monorepoRoot };
+// Dev: mesma raiz HTTP que o metro na raiz do monorepo (URLs estáveis no Dev Client).
+// Release/embed: build-release-apk.js define EXPO_NO_METRO_WORKSPACE_ROOT=1; o expo-updates
+// precisa que URLs de entrada coincidam com projectRoot, senão resolve /index.ts na raiz do repo.
+const serverRoot =
+  process.env.EXPO_NO_METRO_WORKSPACE_ROOT === '1' ? projectRoot : monorepoRoot;
+config.server = { ...(config.server ?? {}), unstable_serverRoot: serverRoot };
 config.watchFolders = [monorepoRoot];
 config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, 'node_modules'),

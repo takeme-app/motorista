@@ -103,8 +103,11 @@ export function SignUpTypeScreen({ navigation }: Props) {
     }
   };
 
+  const FOOTER_HEIGHT = 88;
+  const footerBottomPadding = Math.max(insets.bottom, 12);
+
   return (
-    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom + 24 }]}>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar style="dark" />
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBackToWelcome} activeOpacity={0.7}>
@@ -114,7 +117,10 @@ export function SignUpTypeScreen({ navigation }: Props) {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: FOOTER_HEIGHT + footerBottomPadding },
+        ]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
@@ -200,7 +206,9 @@ export function SignUpTypeScreen({ navigation }: Props) {
             </View>
           </TouchableOpacity>
         </View>
+      </ScrollView>
 
+      <View style={[styles.footer, { paddingBottom: footerBottomPadding }]} pointerEvents="box-none">
         <TouchableOpacity
           style={[styles.nextButton, (!selected || submitting) && styles.nextButtonDisabled]}
           onPress={handleNext}
@@ -213,7 +221,7 @@ export function SignUpTypeScreen({ navigation }: Props) {
             <Text style={styles.nextButtonText}>{authUserId ? 'Continuar' : 'Próximo'}</Text>
           )}
         </TouchableOpacity>
-      </ScrollView>
+      </View>
     </View>
   );
 }
@@ -223,7 +231,23 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 20, paddingBottom: 16 },
   backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 24, paddingBottom: 32 },
+  scrollContent: { paddingHorizontal: 24, paddingBottom: 24 },
+  footer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 8,
+  },
   title: { fontSize: 24, fontWeight: '700', color: '#111827', marginBottom: 8 },
   subtitle: { fontSize: 15, color: '#6B7280', marginBottom: 24 },
   section: { marginBottom: 24 },

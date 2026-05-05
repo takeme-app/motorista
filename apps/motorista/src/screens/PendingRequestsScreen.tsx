@@ -105,6 +105,34 @@ function nestedScheduledTripStatus(
   return Array.isArray(st) ? (st[0]?.status ?? null) : (st.status ?? null);
 }
 
+function requestItemPriority(item: RequestItem): number {
+  switch (item.kind) {
+    case 'shipment_offer':
+      return 0;
+    case 'booking':
+      return 1;
+    case 'dependent_shipment':
+      return 2;
+    case 'shipment':
+      return 3;
+  }
+}
+
+function dedupePendingRequests(items: RequestItem[]): RequestItem[] {
+  const byEntity = new Map<string, RequestItem>();
+  for (const item of items) {
+    const entityKey =
+      item.kind === 'shipment' || item.kind === 'shipment_offer'
+        ? `shipment:${item.rawId}`
+        : `${item.kind}:${item.rawId}`;
+    const current = byEntity.get(entityKey);
+    if (!current || requestItemPriority(item) < requestItemPriority(current)) {
+      byEntity.set(entityKey, item);
+    }
+  }
+  return Array.from(byEntity.values());
+}
+
 /** Countdown até o limite (ex.: 30 min antes da partida). HH:mm:ss; urgente nos últimos 5 min. */
 function formatCountdown(expiresAt: Date): { label: string; urgent: boolean } | null {
   const ms = expiresAt.getTime() - Date.now();
@@ -367,7 +395,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
       const { data: shipRows } = await supabase
         .from('shipments')
         .select(
-          'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, scheduled_trip_id',
+          'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, scheduled_trip_id, client_preferred_driver_id, current_offer_driver_id, driver_offer_index',
         )
         .in('scheduled_trip_id', tripIds)
         .is('driver_id', null)
@@ -383,7 +411,17 @@ export function PendingRequestsScreen({ navigation }: Props) {
         user_id: string;
         package_size: string;
         scheduled_trip_id: string;
+        client_preferred_driver_id: string | null;
+        current_offer_driver_id: string | null;
+        driver_offer_index: number | null;
       }[]) {
+        // A oferta dirigida é a fonte canônica para encomendas escolhidas pelo
+        // cliente. Sem isso, o mesmo envio aparece também como "encomenda da
+        // rota", gerando dois cards e dois botões de aceite.
+        if (offerSeen.has(s.id)) continue;
+        if (s.current_offer_driver_id || s.client_preferred_driver_id || (s.driver_offer_index ?? -1) >= 0) {
+          continue;
+        }
         const depAt = tripDeparture.get(s.scheduled_trip_id);
         if (!depAt) continue;
         const { data: prof } = await supabase
@@ -473,8 +511,9 @@ export function PendingRequestsScreen({ navigation }: Props) {
       }
     }
 
-    all.sort((a, b) => a.expiresAt.getTime() - b.expiresAt.getTime());
-    setItems(all);
+    const deduped = dedupePendingRequests(all);
+    deduped.sort((a, b) => a.expiresAt.getTime() - b.expiresAt.getTime());
+    setItems(deduped);
     if (!silent) setLoading(false);
   }, []);
 

@@ -10,7 +10,6 @@ import {
   MapboxMarker,
   MapboxPolyline,
   sanitizeMapRegion,
-  regionFromOriginDestination,
   isValidTripCoordinate,
 } from '../../components/mapbox';
 import { requestLocationPermission, getCurrentOrLastKnownCoords } from '../../lib/location';
@@ -182,7 +181,16 @@ export function TripInProgressScreen({ navigation, route }: Props) {
   const [liveDriverRouteCoords, setLiveDriverRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
   const [liveDriverEta, setLiveDriverEta] = useState<string | undefined>(undefined);
 
-  const { coords: liveDriver } = useScheduledTripLiveLocation(live?.scheduledTripId ?? null);
+  /** Garante o id da viagem agendada para o live location mesmo se os params da rota não trouxerem. */
+  const [resolvedScheduledTripId, setResolvedScheduledTripId] = useState<string | null>(
+    () => live?.scheduledTripId ?? null,
+  );
+
+  useEffect(() => {
+    if (live?.scheduledTripId) setResolvedScheduledTripId(live.scheduledTripId);
+  }, [live?.scheduledTripId]);
+
+  const { coords: liveDriver } = useScheduledTripLiveLocation(resolvedScheduledTripId);
 
   const mapRef = useRef<MapboxMapRef>(null);
 
@@ -223,20 +231,34 @@ export function TripInProgressScreen({ navigation, route }: Props) {
   const isLastStep = currentStepIndex === totalSteps - 1;
   const allCompleted = steps.length > 0 && steps.every((s) => s.completed);
 
+  /** Inclui o motorista na área visível (mesma ideia que DriverOnTheWayScreen). Sem isso o pin atualiza mas pode ficar fora do enquadramento. */
   const mapRegion = useMemo(() => {
-    if (steps.length >= 2) {
-      const r = regionFromOriginDestination(
-        steps[0].latitude,
-        steps[0].longitude,
-        steps[1].latitude,
-        steps[1].longitude
-      );
-      if (r) return sanitizeMapRegion(r);
+    const pts: { latitude: number; longitude: number }[] = [];
+    for (const s of steps) {
+      if (isValidTripCoordinate(s.latitude, s.longitude)) {
+        pts.push({ latitude: s.latitude, longitude: s.longitude });
+      }
     }
-    if (steps.length >= 1) {
+    if (liveDriver && isValidTripCoordinate(liveDriver.latitude, liveDriver.longitude)) {
+      pts.push({ latitude: liveDriver.latitude, longitude: liveDriver.longitude });
+    }
+    if (pts.length >= 2) {
+      const latMin = Math.min(...pts.map((p) => p.latitude));
+      const latMax = Math.max(...pts.map((p) => p.latitude));
+      const lngMin = Math.min(...pts.map((p) => p.longitude));
+      const lngMax = Math.max(...pts.map((p) => p.longitude));
+      const pad = 0.012;
       return sanitizeMapRegion({
-        latitude: steps[0].latitude,
-        longitude: steps[0].longitude,
+        latitude: (latMin + latMax) / 2,
+        longitude: (lngMin + lngMax) / 2,
+        latitudeDelta: Math.max(0.04, latMax - latMin + pad * 2),
+        longitudeDelta: Math.max(0.04, lngMax - lngMin + pad * 2),
+      });
+    }
+    if (pts.length === 1) {
+      return sanitizeMapRegion({
+        latitude: pts[0].latitude,
+        longitude: pts[0].longitude,
         latitudeDelta: 0.06,
         longitudeDelta: 0.06,
       });
@@ -247,7 +269,7 @@ export function TripInProgressScreen({ navigation, route }: Props) {
       latitudeDelta: 0.06,
       longitudeDelta: 0.06,
     });
-  }, [steps]);
+  }, [steps, liveDriver?.latitude, liveDriver?.longitude]);
 
   useEffect(() => {
     let cancelled = false;
@@ -264,6 +286,9 @@ export function TripInProgressScreen({ navigation, route }: Props) {
           return;
         }
         const { booking } = data;
+        if (booking.scheduled_trip_id) {
+          setResolvedScheduledTripId(booking.scheduled_trip_id);
+        }
         setSteps(buildStepsFromBooking(booking));
         setPickupCode(booking.pickup_code?.trim() || null);
         setBagsNote(

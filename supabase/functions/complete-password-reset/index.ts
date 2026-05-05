@@ -28,15 +28,25 @@ async function hmacSha256Hex(secret: string, message: string): Promise<string> {
   return [...arr].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-type PwdResetPayload = { sub: string; email: string; exp: number; typ: "pwd_reset" };
+type PwdResetPayload = {
+  sub: string;
+  /** Legacy: tokens antigos por e-mail. */
+  email?: string;
+  /** Atual: e-mail real, e-mail fake de telefone ou telefone mascarado. */
+  identifier?: string;
+  exp: number;
+  typ: "pwd_reset";
+};
 
 function getPasswordResetSecret(): string {
   const a = Deno.env.get("PASSWORD_RESET_TOKEN_SECRET");
   if (a && a.trim().length >= 16) return a.trim();
-  const b = Deno.env.get("SUPABASE_JWT_SECRET");
+  const b = Deno.env.get("DRIVER_DEFERRED_SIGNUP_SECRET");
   if (b && b.trim().length >= 16) return b.trim();
-  const c = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (c && c.trim().length >= 32) return c.trim().slice(0, 64);
+  const c = Deno.env.get("SUPABASE_JWT_SECRET");
+  if (c && c.trim().length >= 16) return c.trim();
+  const d = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (d && d.trim().length >= 32) return d.trim().slice(0, 64);
   throw new Error("Defina PASSWORD_RESET_TOKEN_SECRET ou SUPABASE_JWT_SECRET (mín. 16 caracteres)");
 }
 
@@ -58,7 +68,9 @@ async function verifyPasswordResetToken(token: string): Promise<PwdResetPayload>
   if (expected !== sigHex) throw new Error("Token inválido");
   const json = base64UrlDecodeToString(payloadB64);
   const payload = JSON.parse(json) as PwdResetPayload;
-  if (payload.typ !== "pwd_reset" || !payload.sub || !payload.email) throw new Error("Token inválido");
+  if (payload.typ !== "pwd_reset" || !payload.sub || (!payload.email && !payload.identifier)) {
+    throw new Error("Token inválido");
+  }
   if (payload.exp < Math.floor(Date.now() / 1000)) throw new Error("Token expirado. Solicite um novo código.");
   return payload;
 }

@@ -34,6 +34,7 @@ import {
 } from '../components/googleMaps';
 import { useBottomSheetDrag } from '../hooks/useBottomSheetDrag';
 import * as DocumentPicker from 'expo-document-picker';
+import { formatTripCode as formatSharedTripCode } from '@take-me/shared';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'TripDetail'>;
 
@@ -73,6 +74,7 @@ type Booking = {
   bags_count: number | null;
   status: string;
   amount_cents: number | null;
+  worker_earning_cents?: number | null;
   profiles: Profile | null;
 };
 
@@ -84,6 +86,15 @@ type Shipment = {
   destination_address: string | null;
   recipient_name: string | null;
   status: string | null;
+  amount_cents: number | null;
+  worker_earning_cents?: number | null;
+};
+
+type DependentShipment = {
+  id: string;
+  status: string | null;
+  amount_cents: number | null;
+  worker_earning_cents?: number | null;
 };
 
 type DocumentAsset = {
@@ -123,7 +134,7 @@ function shortAddr(addr: string): string {
 }
 
 function tripCode(id: string): string {
-  return 'VG' + id.replace(/-/g, '').slice(0, 6).toUpperCase();
+  return formatSharedTripCode(id);
 }
 
 function getInitials(name: string | null | undefined): string {
@@ -135,6 +146,18 @@ function getInitials(name: string | null | undefined): string {
 
 function formatCurrency(cents: number): string {
   return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function amountForDriverTotal(amountCents: number | null | undefined, workerEarningCents: number | null | undefined): number {
+  const worker = Number(workerEarningCents);
+  if (Number.isFinite(worker) && worker > 0) return Math.floor(worker);
+  const amount = Number(amountCents);
+  return Number.isFinite(amount) && amount > 0 ? Math.floor(amount) : 0;
+}
+
+function countsAsTripTotal(status: string | null | undefined): boolean {
+  const s = String(status ?? '').trim().toLowerCase();
+  return s !== 'cancelled' && s !== 'rejected' && s !== 'expired';
 }
 
 function durationLabel(departure: string, arrival: string | null): string {
@@ -399,6 +422,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const [trip, setTrip] = useState<Trip | null>(null);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [shipments, setShipments] = useState<Shipment[]>([]);
+  const [dependentShipments, setDependentShipments] = useState<DependentShipment[]>([]);
   const [hasAcceptedDependent, setHasAcceptedDependent] = useState(false);
 
   const [cancelVisible, setCancelVisible] = useState(false);
@@ -439,7 +463,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
         supabase
           .from('bookings')
           .select(
-            'id, passenger_count, bags_count, status, amount_cents, profiles(full_name, avatar_url, rating)'
+            'id, passenger_count, bags_count, status, amount_cents, worker_earning_cents, profiles(full_name, avatar_url, rating)'
           )
           .eq('scheduled_trip_id', tripId)
           .in('status', ['pending', 'paid', 'confirmed', 'in_progress']),
@@ -447,21 +471,22 @@ export function TripDetailScreen({ route, navigation }: Props) {
           ? supabase
               .from('shipments')
               .select(
-                'id, instructions, package_size, origin_address, destination_address, recipient_name, status',
+                'id, instructions, package_size, origin_address, destination_address, recipient_name, status, amount_cents, worker_earning_cents',
               )
               .eq('scheduled_trip_id', tripId)
               .eq('driver_id', uid)
           : Promise.resolve({ data: [] as Shipment[], error: null }),
         supabase
           .from('dependent_shipments')
-          .select('id')
+          .select('id, status, amount_cents, worker_earning_cents')
           .eq('scheduled_trip_id', tripId)
-          .in('status', ['confirmed', 'in_progress']),
+          .in('status', ['confirmed', 'in_progress', 'delivered']),
       ]);
 
     if (tripData) setTrip(tripData as Trip);
     if (bookingsData) setBookings(bookingsData as Booking[]);
     if (shipmentsData) setShipments(shipmentsData as Shipment[]);
+    setDependentShipments((dependentsData ?? []) as DependentShipment[]);
     setHasAcceptedDependent(Boolean(dependentsData && dependentsData.length > 0));
 
     setLoadingTrip(false);
@@ -700,10 +725,17 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const bookingsInTrip = [...awaitingBookings, ...confirmedTripBookings];
   const totalPax = bookingsInTrip.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
   const totalBags = bookingsInTrip.reduce((s, b) => s + (b.bags_count ?? 0), 0);
-  const totalRevenueCents = confirmedTripBookings.reduce(
-    (s, b) => s + (b.amount_cents ?? 0),
-    0,
-  );
+  const totalRevenueCents =
+    confirmedTripBookings.reduce(
+      (s, b) => s + amountForDriverTotal(b.amount_cents, b.worker_earning_cents ?? null),
+      0,
+    ) +
+    shipments
+      .filter((s) => countsAsTripTotal(s.status))
+      .reduce((sum, s) => sum + amountForDriverTotal(s.amount_cents, s.worker_earning_cents ?? null), 0) +
+    dependentShipments
+      .filter((d) => countsAsTripTotal(d.status))
+      .reduce((sum, d) => sum + amountForDriverTotal(d.amount_cents, d.worker_earning_cents ?? null), 0);
 
   const bagsCapacity = trip?.bags_available ?? 0;
   const bagsOccupancyPct =

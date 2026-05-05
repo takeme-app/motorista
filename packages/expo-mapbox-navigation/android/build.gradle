@@ -34,6 +34,8 @@ android {
 }
 
 dependencies {
+  implementation "androidx.constraintlayout:constraintlayout:2.2.1"
+
   // Mapbox Navigation SDK Android v3. Requer `MAPBOX_DOWNLOADS_TOKEN` em
   // `~/.gradle/gradle.properties` ou nas envs do EAS para autenticar com
   // o registry Maven `https://api.mapbox.com/downloads/v2/releases/maven`.

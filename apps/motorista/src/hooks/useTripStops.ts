@@ -1098,17 +1098,17 @@ async function enrichPassengerBookingCodes(stops: TripStop[]): Promise<TripStop[
  * `trip_stops.code`, e a validação client-side usa `stop.code` antes de chamar `complete_trip_stop`.
  */
 async function enrichShipmentPackageCodes(stops: TripStop[]): Promise<TripStop[]> {
-  const missing = new Set<string>();
+  const shipmentIds = new Set<string>();
   for (const s of stops) {
     if ((s.stopType === 'package_pickup' || s.stopType === 'package_dropoff') && s.entityId) {
-      if (onlyDigits(s.code ?? '').length !== 4) missing.add(String(s.entityId));
+      shipmentIds.add(String(s.entityId));
     }
   }
-  if (missing.size === 0) return stops;
+  if (shipmentIds.size === 0) return stops;
   const { data } = await supabase
     .from('shipments')
     .select('id, pickup_code, delivery_code, base_to_driver_code, base_id')
-    .in('id', [...missing]);
+    .in('id', [...shipmentIds]);
   type Row = {
     id: string;
     pickup_code?: string | null;
@@ -1122,7 +1122,7 @@ async function enrichShipmentPackageCodes(stops: TripStop[]): Promise<TripStop[]
   }
   return stops.map((s) => {
     if (s.stopType !== 'package_pickup' && s.stopType !== 'package_dropoff') return s;
-    if (!s.entityId || onlyDigits(s.code ?? '').length === 4) return s;
+    if (!s.entityId) return s;
     const r = byId.get(String(s.entityId));
     if (!r) return s;
     // PDF cenário 3 (com base): retirada do motorista valida base_to_driver_code (PIN C).

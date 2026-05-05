@@ -37,3 +37,9 @@ export type {
   PricingResult,
   ApplyPromotionResult,
 } from './orderPricing';
+export {
+  formatDependentShipmentCode,
+  formatEntityCode,
+  formatShipmentCode,
+  formatTripCode,
+} from './orderCodes';
