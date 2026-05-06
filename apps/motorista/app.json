@@ -16,6 +16,7 @@
     "userInterfaceStyle": "light",
     "ios": {
       "bundleIdentifier": "com.takeme.motorista",
+      "buildNumber": "1",
       "googleServicesFile": "./GoogleService-Info-motorista.plist",
       "supportsTablet": true
     },
@@ -88,7 +89,8 @@
         {
           "microphonePermission": "O Take Me Motorista usa o microfone para mensagens de voz no chat."
         }
-      ]
+      ],
+      "expo-apple-authentication"
     ]
   }
 }

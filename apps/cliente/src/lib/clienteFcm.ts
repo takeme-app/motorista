@@ -2,18 +2,28 @@ import { Platform, PermissionsAndroid } from 'react-native';
 import { supabase } from './supabase';
 
 /**
- * Android: obtém token FCM e associa ao perfil autenticado (login / Home).
- * iOS: no-op até APNs configurado no Firebase.
+ * Obtém token FCM e associa ao perfil autenticado (login / Home).
+ * Android: pede POST_NOTIFICATIONS no Android 13+. iOS: pede autorização e
+ * registra para remote messages antes de getToken().
  */
 export async function syncClienteProfileFcmToken(): Promise<void> {
-  if (Platform.OS !== 'android') return;
+  if (Platform.OS !== 'android' && Platform.OS !== 'ios') return;
   try {
     const messaging = (await import('@react-native-firebase/messaging')).default;
-    if (typeof Platform.Version === 'number' && Platform.Version >= 33) {
-      const status = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
-      );
-      if (status !== PermissionsAndroid.RESULTS.GRANTED) return;
+    if (Platform.OS === 'android') {
+      if (typeof Platform.Version === 'number' && Platform.Version >= 33) {
+        const status = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+        );
+        if (status !== PermissionsAndroid.RESULTS.GRANTED) return;
+      }
+    } else {
+      const auth = await messaging().requestPermission();
+      const ok =
+        auth === messaging.AuthorizationStatus.AUTHORIZED ||
+        auth === messaging.AuthorizationStatus.PROVISIONAL;
+      if (!ok) return;
+      await messaging().registerDeviceForRemoteMessages();
     }
     const {
       data: { session },
@@ -23,7 +33,7 @@ export async function syncClienteProfileFcmToken(): Promise<void> {
     if (!token) return;
     const { error } = await supabase.rpc('upsert_profile_fcm_token', {
       p_fcm_token: token,
-      p_platform: 'android',
+      p_platform: Platform.OS,
       p_app_slug: 'cliente',
     });
     if (error) console.warn('upsert_profile_fcm_token', error.message);
@@ -34,7 +44,7 @@ export async function syncClienteProfileFcmToken(): Promise<void> {
 
 /** Remove vínculo do token atual no Supabase e invalida token local (logout). */
 export async function unregisterClienteProfileFcmToken(): Promise<void> {
-  if (Platform.OS !== 'android') return;
+  if (Platform.OS !== 'android' && Platform.OS !== 'ios') return;
   try {
     const messaging = (await import('@react-native-firebase/messaging')).default;
     const {

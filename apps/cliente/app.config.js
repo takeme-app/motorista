@@ -25,6 +25,10 @@ function supabaseFromEnv() {
 
 const sb = supabaseFromEnv();
 
+/** APNs entitlement precisa bater com o tipo de provisioning profile do build. */
+const apsEnvironment =
+  process.env.EAS_BUILD_PROFILE === 'development' ? 'development' : 'production';
+
 const expo = {
   ...appJson.expo,
   extra: {
@@ -34,8 +38,14 @@ const expo = {
   },
   ios: {
     ...appJson.expo.ios,
+    entitlements: {
+      ...(appJson.expo.ios?.entitlements || {}),
+      'aps-environment': apsEnvironment,
+    },
     infoPlist: {
+      ...(appJson.expo.ios?.infoPlist || {}),
       ITSAppUsesNonExemptEncryption: false,
+      UIBackgroundModes: ['fetch', 'remote-notification'],
     },
   },
   plugins: [

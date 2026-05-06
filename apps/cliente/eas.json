@@ -21,6 +21,11 @@
   },
   "submit": {
     "production": {
+      "ios": {
+        "ascApiKeyPath": "./AuthKey_V6T5SNUUFP.p8",
+        "ascApiKeyId": "V6T5SNUUFP",
+        "ascApiKeyIssuerId": "e0e07eb6-dbbb-4cd2-8068-0a79da299bdb"
+      },
       "android": { "serviceAccountKeyPath": "./google-service-account.json" }
     }
   }

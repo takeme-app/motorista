@@ -53,15 +53,31 @@ if (!googleMapsKey) {
   );
 }
 
+/** APNs entitlement precisa bater com o tipo de provisioning profile do build. */
+const apsEnvironment =
+  process.env.EAS_BUILD_PROFILE === 'development' ? 'development' : 'production';
+
 module.exports = {
   expo: {
     ...appJson.expo,
+    runtimeVersion: '1.0.0',
+    updates: {
+      url: 'https://u.expo.dev/6cd990d2-9b66-4dd6-88d7-54eb5dffa103',
+    },
     plugins: [...(appJson.expo.plugins || [])],
     ios: {
       ...appJson.expo.ios,
       config: {
         ...(appJson.expo.ios?.config || {}),
         googleMapsApiKey: googleMapsKey,
+      },
+      entitlements: {
+        ...(appJson.expo.ios?.entitlements || {}),
+        'aps-environment': apsEnvironment,
+      },
+      infoPlist: {
+        ...(appJson.expo.ios?.infoPlist || {}),
+        UIBackgroundModes: ['fetch', 'remote-notification'],
       },
     },
     android: {

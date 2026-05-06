@@ -15,6 +15,8 @@ import { useAppAlert } from '../contexts/AppAlertContext';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { GoogleLogo } from '../components/GoogleLogo';
 import { StatusBar } from 'expo-status-bar';
+import * as AppleAuthentication from 'expo-apple-authentication';
+import * as Crypto from 'expo-crypto';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
@@ -63,6 +65,7 @@ export function LoginScreen({ navigation }: Props) {
   const [hidePassword, setHidePassword] = useState(true);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [appleLoading, setAppleLoading] = useState(false);
 
   const loginIdentifierChannel = useMemo(
     () => detectPhoneOrEmailChannel(phoneOrEmail),
@@ -217,11 +220,64 @@ export function LoginScreen({ navigation }: Props) {
     }
   };
 
-  const handleAppleSignIn = () => {
-    showAlert(
-      'Em desenvolvimento',
-      'Login com Apple ainda está em desenvolvimento. Use e-mail ou telefone com senha, ou Google.'
-    );
+  const handleAppleSignIn = async () => {
+    if (Platform.OS !== 'ios') {
+      showAlert('Apple', 'Login com Apple disponível apenas no iOS.');
+      return;
+    }
+    if (!isSupabaseConfigured) {
+      showAlert('Configuração', 'Login não configurado. Verifique as variáveis do Supabase no .env.');
+      return;
+    }
+    setAppleLoading(true);
+    try {
+      /** Apple exige nonce hashed (SHA256) na request; o raw nonce vai pro Supabase validar o id_token. */
+      const rawNonce = Crypto.randomUUID();
+      const hashedNonce = await Crypto.digestStringAsync(
+        Crypto.CryptoDigestAlgorithm.SHA256,
+        rawNonce,
+      );
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+        nonce: hashedNonce,
+      });
+      if (!credential.identityToken) {
+        showAlert('Apple', 'Não foi possível obter o token da Apple. Tente novamente.');
+        return;
+      }
+      const { error } = await supabase.auth.signInWithIdToken({
+        provider: 'apple',
+        token: credential.identityToken,
+        nonce: rawNonce,
+      });
+      if (error) {
+        showAlert('Apple', error.message);
+        return;
+      }
+      const { data: { session: oauthSession } } = await supabase.auth.getSession();
+      if (!oauthSession?.user) {
+        showAlert('Apple', 'Não foi possível obter a sessão. Tente novamente.');
+        return;
+      }
+      const gate = await assertClientePassengerOnlyAccount(oauthSession.user.id);
+      if (!gate.ok) {
+        await supabase.auth.signOut();
+        showAlert('Acesso não permitido', gate.message);
+        return;
+      }
+      await syncClienteProfileFcmToken();
+      navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
+    } catch (e: unknown) {
+      /** Cancelamento do usuário (ERR_REQUEST_CANCELED) não é erro: silenciar. */
+      const code = (e as { code?: string } | null | undefined)?.code;
+      if (code === 'ERR_REQUEST_CANCELED') return;
+      showAlert('Apple', getUserErrorMessage(e, 'Não foi possível entrar com a Apple.'));
+    } finally {
+      setAppleLoading(false);
+    }
   };
 
   return (
@@ -319,14 +375,23 @@ export function LoginScreen({ navigation }: Props) {
           </>
         )}
       </TouchableOpacity>
-      <TouchableOpacity
-        style={styles.socialButton}
-        activeOpacity={0.8}
-        onPress={handleAppleSignIn}
-      >
-        <Ionicons name="logo-apple" size={22} color="#000000" style={styles.socialIconImage} />
-        <Text style={styles.socialButtonText}>Continuar com Apple</Text>
-      </TouchableOpacity>
+      {Platform.OS === 'ios' && (
+        <TouchableOpacity
+          style={[styles.socialButton, (loading || appleLoading) && styles.continueButtonDisabled]}
+          activeOpacity={0.8}
+          onPress={handleAppleSignIn}
+          disabled={loading || appleLoading}
+        >
+          {appleLoading ? (
+            <ActivityIndicator color="#111827" />
+          ) : (
+            <>
+              <Ionicons name="logo-apple" size={22} color="#000000" style={styles.socialIconImage} />
+              <Text style={styles.socialButtonText}>Continuar com Apple</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      )}
         </View>
 
       </KeyboardAvoidingView>

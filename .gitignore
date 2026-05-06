@@ -6,6 +6,10 @@ node_modules/
 .env.local
 .env.*.local
 
+# Credenciais / docs sensíveis (qualquer .local.md fica fora do git)
+*.local.md
+CREDENTIALS.local.md
+
 # Supabase CLI cache (máquina local)
 supabase/.temp/
 

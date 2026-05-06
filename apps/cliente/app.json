@@ -15,6 +15,7 @@
     "userInterfaceStyle": "light",
     "ios": {
       "bundleIdentifier": "com.takeme.cliente",
+      "buildNumber": "1",
       "googleServicesFile": "./GoogleService-Info-cliente.plist",
       "supportsTablet": true
     },
@@ -90,7 +91,8 @@
           "merchantIdentifier": "merchant.com.takeme.cliente"
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-apple-authentication"
     ],
     "runtimeVersion": "1.0.0",
     "updates": {

@@ -2,18 +2,28 @@ import { Platform, PermissionsAndroid } from 'react-native';
 import { supabase } from './supabase';
 
 /**
- * Android: FCM + Supabase RPC `upsert_profile_fcm_token` com app_slug motorista.
- * iOS: no-op até APNs + ajuste de permissões.
+ * FCM + Supabase RPC `upsert_profile_fcm_token` com app_slug motorista.
+ * Android: pede POST_NOTIFICATIONS no Android 13+. iOS: pede autorização e
+ * registra para remote messages antes de getToken().
  */
 export async function syncMotoristaProfileFcmToken(): Promise<void> {
-  if (Platform.OS !== 'android') return;
+  if (Platform.OS !== 'android' && Platform.OS !== 'ios') return;
   try {
     const messaging = (await import('@react-native-firebase/messaging')).default;
-    if (typeof Platform.Version === 'number' && Platform.Version >= 33) {
-      const status = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
-      );
-      if (status !== PermissionsAndroid.RESULTS.GRANTED) return;
+    if (Platform.OS === 'android') {
+      if (typeof Platform.Version === 'number' && Platform.Version >= 33) {
+        const status = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+        );
+        if (status !== PermissionsAndroid.RESULTS.GRANTED) return;
+      }
+    } else {
+      const auth = await messaging().requestPermission();
+      const ok =
+        auth === messaging.AuthorizationStatus.AUTHORIZED ||
+        auth === messaging.AuthorizationStatus.PROVISIONAL;
+      if (!ok) return;
+      await messaging().registerDeviceForRemoteMessages();
     }
     const {
       data: { session },
@@ -23,7 +33,7 @@ export async function syncMotoristaProfileFcmToken(): Promise<void> {
     if (!token) return;
     const { error } = await supabase.rpc('upsert_profile_fcm_token', {
       p_fcm_token: token,
-      p_platform: 'android',
+      p_platform: Platform.OS,
       p_app_slug: 'motorista',
     });
     if (error) console.warn('upsert_profile_fcm_token', error.message);
@@ -33,7 +43,7 @@ export async function syncMotoristaProfileFcmToken(): Promise<void> {
 }
 
 export async function unregisterMotoristaProfileFcmToken(): Promise<void> {
-  if (Platform.OS !== 'android') return;
+  if (Platform.OS !== 'android' && Platform.OS !== 'ios') return;
   try {
     const messaging = (await import('@react-native-firebase/messaging')).default;
     const {
