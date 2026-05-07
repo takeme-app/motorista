@@ -60,10 +60,6 @@ const apsEnvironment =
 module.exports = {
   expo: {
     ...appJson.expo,
-    runtimeVersion: '1.0.0',
-    updates: {
-      url: 'https://u.expo.dev/6cd990d2-9b66-4dd6-88d7-54eb5dffa103',
-    },
     plugins: [...(appJson.expo.plugins || [])],
     ios: {
       ...appJson.expo.ios,
