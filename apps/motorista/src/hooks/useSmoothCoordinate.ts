@@ -16,11 +16,13 @@ type Options = {
 };
 
 const DEFAULT_DURATION_MS = 240;
-// Heading agora chega em ~2 Hz (GPS) + ~10 Hz (bússola). Para passar a sensação
-// de "rotação contínua" sem amarrar na próxima leitura, usar duração curta.
-// Como a interpolação é exponencial (lerp por frame), 200 ms já fica fluido e
-// ainda absorve jitter do sensor — overshoot zero (curva é assintótica).
-const DEFAULT_HEADING_DURATION_MS = 200;
+// Heading chega em ~2 Hz (GPS) + ~10 Hz (bússola). Antes 200 ms era fluido
+// mas absorvia pouco jitter — sample isolado errado virava giro visível ("a
+// seta gira do nada"). Subir para 350 ms estende a constante de tempo da
+// lerp (assintótica): saltos espúrios se diluem em 2-3 frames antes que o
+// próximo fix válido (ou rejeição de jitter no caller) corrija o alvo.
+// Continua fluido para curvas reais, que são monotônicas e mantêm o alvo.
+const DEFAULT_HEADING_DURATION_MS = 350;
 /** Deslocamento mínimo em graus que ainda justifica re-render. */
 const COORD_EPSILON = 1e-7;
 /** Diferença mínima de heading (graus) que justifica re-render. */

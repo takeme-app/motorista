@@ -4,6 +4,12 @@ import { resolveCurrentPlace, type AddressSuggestion } from '../lib/location';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { guessCityFromPtAddress } from '../lib/shipmentOriginCity';
 
+/**
+ * Coordenada-placeholder usada SÓ enquanto a localização real não chegou.
+ * O `originReady` (false) sinaliza que esse valor é placeholder — o consumidor
+ * deve esconder o mapa com um overlay até `originReady` virar true, evitando
+ * o flash que partia de Campina Grande/PB e "saltava" para a posição real.
+ */
 const DEFAULT_COORDS = { latitude: -7.3289, longitude: -35.3328 };
 
 type Options = {
@@ -21,12 +27,24 @@ export function useOriginLocation(options: Options = {}) {
   const [originLng, setOriginLng] = useState(DEFAULT_COORDS.longitude);
   const [originCityTag, setOriginCityTag] = useState('');
   const [locationLoading, setLocationLoading] = useState(false);
+  /**
+   * `true` somente após coords reais (do GPS / cache) terem sido aplicadas.
+   * Consumidores devem usar isso para decidir se já podem renderizar o mapa.
+   */
+  const [originReady, setOriginReady] = useState(false);
+  /**
+   * `true` apenas quando ainda estamos resolvendo a localização inicial
+   * (boot do app, sem cache). Permite exibir um chip "Obtendo sua localização".
+   * Depois que resolveu uma vez (com sucesso ou falha), fica false.
+   */
+  const [initialResolving, setInitialResolving] = useState(true);
 
   const applyPlace = useCallback(
     (address: string, lat: number, lng: number) => {
       setOriginAddress(address);
       setOriginLat(lat);
       setOriginLng(lng);
+      setOriginReady(true);
       if (extractCity) setOriginCityTag(guessCityFromPtAddress(address));
     },
     [extractCity],
@@ -35,6 +53,7 @@ export function useOriginLocation(options: Options = {}) {
   useEffect(() => {
     if (currentPlace) {
       applyPlace(currentPlace.address, currentPlace.latitude, currentPlace.longitude);
+      setInitialResolving(false);
       return;
     }
     let cancelled = false;
@@ -47,6 +66,7 @@ export function useOriginLocation(options: Options = {}) {
       } else {
         setOriginAddress('GPS indisponível — toque em "Minha localização"');
       }
+      setInitialResolving(false);
     });
     return () => {
       cancelled = true;
@@ -83,6 +103,10 @@ export function useOriginLocation(options: Options = {}) {
     originLng,
     originCityTag,
     locationLoading,
+    /** Coordenadas reais já aplicadas (não é mais o placeholder de PB). */
+    originReady,
+    /** Estamos no primeiro fetch (boot do app, sem cache do contexto). */
+    initialResolving,
     useMyLocationForOrigin,
     setOriginFromAutocomplete,
   };

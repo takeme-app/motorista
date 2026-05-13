@@ -16,7 +16,7 @@
     "userInterfaceStyle": "light",
     "ios": {
       "bundleIdentifier": "com.takeme.motorista",
-      "buildNumber": "5",
+      "buildNumber": "7",
       "googleServicesFile": "./GoogleService-Info-motorista.plist",
       "supportsTablet": true
     },

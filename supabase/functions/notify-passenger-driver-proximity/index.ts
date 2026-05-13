@@ -313,6 +313,7 @@ Deno.serve(async (req) => {
         } as never);
         if (!ins5) {
           stats.milestones_5min += 1;
+          skipEtaRefresh = true;
           await admin
             .from("bookings")
             .update({ driver_eta_5min_notified_at: new Date().toISOString() } as never)
@@ -407,6 +408,7 @@ Deno.serve(async (req) => {
         } as never);
         if (!ins5) {
           stats.milestones_5min += 1;
+          skipEtaRefreshDs = true;
           await admin
             .from("dependent_shipments")
             .update({ driver_eta_5min_notified_at: new Date().toISOString() } as never)

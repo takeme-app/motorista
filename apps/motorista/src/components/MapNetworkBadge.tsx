@@ -2,46 +2,73 @@ import { View, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Text } from './Text';
 
+export type MapNetworkBadgeState = 'online' | 'offline-cached' | 'offline-no-cache';
+
 type Props = {
-  online: boolean;
+  /**
+   * Estado tri-valorado. Para retrocompat, aceita também `online: boolean` —
+   * `true`/`false` mapeiam para `'online'` / `'offline-cached'`.
+   */
+  online?: boolean;
+  state?: MapNetworkBadgeState;
   /** Mostrar o badge mesmo online (verde "online"). Default: false. */
   showWhenOnline?: boolean;
   style?: StyleProp<ViewStyle>;
 };
 
 /**
- * Badge sutil para o overlay do mapa indicar quando estamos sem internet
- * (basemap segue funcionando se houver pack offline; rota/ETA não).
+ * Badge sutil para o overlay do mapa indicar o estado de rede.
  *
- * Posicionamento: o componente é apenas a "pílula"; o pai é responsável por
- * colocar dentro de um wrapper absoluto com `top` desejado.
+ * - `online`: oculto por padrão; verde se `showWhenOnline`.
+ * - `offline-cached`: cinza/escuro — basemap segue (pack baixado) e a polyline
+ *    cacheada é exibida.
+ * - `offline-no-cache`: âmbar — sem internet e sem rota salva; rota/ETA
+ *    indisponíveis. Mapa pode estar parcialmente em branco.
  */
-export function MapNetworkBadge({ online, showWhenOnline = false, style }: Props) {
-  if (online && !showWhenOnline) return null;
+export function MapNetworkBadge(props: Props) {
+  const state: MapNetworkBadgeState =
+    props.state ?? (props.online === false ? 'offline-cached' : 'online');
+  const { showWhenOnline = false, style } = props;
+
+  if (state === 'online' && !showWhenOnline) return null;
+
+  const content = renderContent(state);
+
   return (
     <View
-      style={[
-        styles.pill,
-        online ? styles.pillOnline : styles.pillOffline,
-        style,
-      ]}
+      style={[styles.pill, stylesByState[state], style]}
       pointerEvents="none"
     >
-      <MaterialIcons
-        name={online ? 'wifi' : 'wifi-off'}
-        size={14}
-        color={online ? '#15803d' : '#fff'}
-      />
-      <Text
-        style={[
-          styles.text,
-          online ? styles.textOnline : styles.textOffline,
-        ]}
-      >
-        {online ? 'Online' : 'Sem internet — mapa offline'}
-      </Text>
+      <MaterialIcons name={content.icon} size={14} color={content.iconColor} />
+      <Text style={[styles.text, { color: content.textColor }]}>{content.label}</Text>
     </View>
   );
+}
+
+function renderContent(state: MapNetworkBadgeState): {
+  label: string;
+  icon: 'wifi' | 'wifi-off' | 'cloud-off';
+  iconColor: string;
+  textColor: string;
+} {
+  switch (state) {
+    case 'online':
+      return { label: 'Online', icon: 'wifi', iconColor: '#15803d', textColor: '#15803d' };
+    case 'offline-cached':
+      return {
+        label: 'Sem internet — usando rota salva',
+        icon: 'wifi-off',
+        iconColor: '#fff',
+        textColor: '#fff',
+      };
+    case 'offline-no-cache':
+      return {
+        label: 'Sem internet e sem rota salva',
+        icon: 'cloud-off',
+        iconColor: '#92400e',
+        textColor: '#92400e',
+      };
+  }
 }
 
 const styles = StyleSheet.create({
@@ -58,13 +85,11 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     elevation: 4,
   },
-  pillOffline: {
-    backgroundColor: 'rgba(17,24,39,0.92)',
-  },
-  pillOnline: {
-    backgroundColor: '#DCFCE7',
-  },
   text: { fontSize: 12, fontWeight: '600' },
-  textOffline: { color: '#fff' },
-  textOnline: { color: '#15803d' },
 });
+
+const stylesByState: Record<MapNetworkBadgeState, ViewStyle> = {
+  online: { backgroundColor: '#DCFCE7' },
+  'offline-cached': { backgroundColor: 'rgba(17,24,39,0.92)' },
+  'offline-no-cache': { backgroundColor: '#FEF3C7' },
+};

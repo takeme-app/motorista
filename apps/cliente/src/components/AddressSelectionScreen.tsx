@@ -233,17 +233,25 @@ export function AddressSelectionScreen({
 
       {/* Map background */}
       <View style={[styles.mapContainer, { height: MAP_HEIGHT + insets.top }]}>
+        {/*
+         * Antes da localização real chegar, o mapa renderizava no placeholder
+         * (Campina Grande/PB) e "saltava" para a posição do usuário em ~2-5s.
+         * Cobrimos com um overlay opaco enquanto `originReady === false` —
+         * o pin de origem só aparece depois que as coords reais foram aplicadas.
+         */}
         <MapboxMap
           style={styles.map}
           initialRegion={mapRegion}
           scrollEnabled
           showControls={false}
         >
-          <MapboxMarker
-            id="origin-pin"
-            coordinate={{ latitude: origin.originLat, longitude: origin.originLng }}
-            pinColor={MAPBOX_ORIGIN_MARKER_COLOR}
-          />
+          {origin.originReady && (
+            <MapboxMarker
+              id="origin-pin"
+              coordinate={{ latitude: origin.originLat, longitude: origin.originLng }}
+              pinColor={MAPBOX_ORIGIN_MARKER_COLOR}
+            />
+          )}
           {destinationConfirmed && (
             <>
               <MapboxMarker
@@ -257,6 +265,15 @@ export function AddressSelectionScreen({
             </>
           )}
         </MapboxMap>
+
+        {!origin.originReady && (
+          <View pointerEvents="none" style={styles.mapLoadingOverlay}>
+            <View style={styles.mapLoadingChip}>
+              <ActivityIndicator size="small" color="#FFFFFF" style={styles.mapLoadingSpinner} />
+              <Text style={styles.mapLoadingText}>Obtendo sua localização…</Text>
+            </View>
+          </View>
+        )}
 
         {/* Back button floating on map */}
         <TouchableOpacity
@@ -441,6 +458,22 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 4,
   },
+  mapLoadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(17,24,39,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapLoadingChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: 'rgba(17,24,39,0.9)',
+  },
+  mapLoadingSpinner: { marginRight: 8 },
+  mapLoadingText: { color: '#FFFFFF', fontSize: 13, fontWeight: '600' },
 
   cardContainer: {
     flex: 1,

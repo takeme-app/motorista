@@ -47,6 +47,7 @@ import {
 } from '../../lib/navigationCamera';
 import { snapToRoutePolyline, trimPolylineFromSnap } from '../../lib/routeSnap';
 import { getRouteWithDuration, formatEta } from '../../lib/route';
+import { getCachedRoute, setCachedRoute, hashWaypoints } from '../../lib/routeCache';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import {
   assertPreparerShipmentsForShipment,
@@ -383,6 +384,11 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     setFullRouteCoords([]);
     (async () => {
       setLoading(true);
+      // Hidrata polyline do cache imediatamente — funciona offline.
+      if (shipmentId) {
+        const cached = await getCachedRoute(`shipment-${shipmentId}`);
+        if (cached?.coordinates?.length) setFullRouteCoords(cached.coordinates);
+      }
       const { data } = await supabase
         .from('shipments')
         .select(
@@ -500,12 +506,21 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       if (row.status === 'in_progress' || row.picked_up_at) setStep('to_delivery');
 
       const fullRoute = await getRouteWithDuration(s.pickupCoord, s.deliveryCoord, routeOpts);
-      if (fullRoute) setFullRouteCoords(fullRoute.coordinates);
-      else if (
+      if (fullRoute) {
+        setFullRouteCoords(fullRoute.coordinates);
+        const waypointsHash = await hashWaypoints([s.pickupCoord, s.deliveryCoord]);
+        await setCachedRoute(`shipment-${s.id}`, {
+          coordinates: fullRoute.coordinates,
+          durationSeconds: fullRoute.durationSeconds,
+          computedAt: Date.now(),
+          waypointsHash,
+        });
+      } else if (
         isValidGlobeCoordinate(s.pickupCoord.latitude, s.pickupCoord.longitude) &&
         isValidGlobeCoordinate(s.deliveryCoord.latitude, s.deliveryCoord.longitude)
       ) {
-        setFullRouteCoords([s.pickupCoord, s.deliveryCoord]);
+        // Não sobrescreve uma rota cacheada por linha reta.
+        setFullRouteCoords((prev) => (prev.length >= 2 ? prev : [s.pickupCoord, s.deliveryCoord]));
       }
 
       setLoading(false);
@@ -575,12 +590,20 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       if (row.status === 'in_progress' || row.picked_up_at) setStep('to_delivery');
 
       const fullRoute = await getRouteWithDuration(s.pickupCoord, s.deliveryCoord, routeOpts);
-      if (fullRoute) setFullRouteCoords(fullRoute.coordinates);
-      else if (
+      if (fullRoute) {
+        setFullRouteCoords(fullRoute.coordinates);
+        const waypointsHash = await hashWaypoints([s.pickupCoord, s.deliveryCoord]);
+        await setCachedRoute(`shipment-${s.id}`, {
+          coordinates: fullRoute.coordinates,
+          durationSeconds: fullRoute.durationSeconds,
+          computedAt: Date.now(),
+          waypointsHash,
+        });
+      } else if (
         isValidGlobeCoordinate(s.pickupCoord.latitude, s.pickupCoord.longitude) &&
         isValidGlobeCoordinate(s.deliveryCoord.latitude, s.deliveryCoord.longitude)
       ) {
-        setFullRouteCoords([s.pickupCoord, s.deliveryCoord]);
+        setFullRouteCoords((prev) => (prev.length >= 2 ? prev : [s.pickupCoord, s.deliveryCoord]));
       }
 
       setLoading(false);
@@ -1220,7 +1243,9 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
             style={[styles.networkBadgeWrap, { top: insets.top + 12 }]}
             pointerEvents="none"
           >
-            <MapNetworkBadge online={false} />
+            <MapNetworkBadge
+              state={fullRouteCoords.length >= 2 ? 'offline-cached' : 'offline-no-cache'}
+            />
           </View>
         )}
 

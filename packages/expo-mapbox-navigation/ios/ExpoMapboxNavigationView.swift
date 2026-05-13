@@ -218,6 +218,16 @@ public class ExpoMapboxNavigationView: ExpoView {
         }
       } catch {
         await MainActor.run {
+          // Se já existe um NavigationViewController ativo, a sessão de
+          // navegação atual continua válida (rota, posição, manobras pré-
+          // calculadas funcionam offline). Não disparamos onCancel — o JS
+          // caía em `fallbackToLegacyNavigation` e tirava o motorista do
+          // SDK no meio da viagem assim que a rede oscilava.
+          // Só notificamos quando ainda não há controller (primeira tentativa
+          // falhou) — aí o fallback é o caminho correto.
+          if self.navigationViewController != nil {
+            return
+          }
           self.onCancel(["reason": "error", "message": "\(error)"])
         }
       }

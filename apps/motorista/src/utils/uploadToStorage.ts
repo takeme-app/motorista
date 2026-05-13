@@ -7,60 +7,16 @@ export function avatarStorageObjectPath(userId: string): string {
 }
 
 /**
- * Decodifica base64 → Uint8Array sem dependências externas.
- * `atob` está disponível no Hermes (RN 0.72+).
- */
-function base64ToUint8Array(b64: string): Uint8Array {
-  const binary = global.atob ? global.atob(b64) : decodeAtobFallback(b64);
-  const len = binary.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-const ATOB_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-function decodeAtobFallback(input: string): string {
-  const str = input.replace(/=+$/, '');
-  let output = '';
-  if (str.length % 4 === 1) throw new Error('base64 inválido');
-  let bc = 0;
-  let bs = 0;
-  for (let i = 0; i < str.length; i += 1) {
-    const c = str[i];
-    const idx = ATOB_ALPHABET.indexOf(c);
-    if (idx === -1) continue;
-    bs = bc % 4 ? bs * 64 + idx : idx;
-    if (bc % 4) {
-      output += String.fromCharCode(255 & (bs >> ((-2 * bc) & 6)));
-    }
-    bc += 1;
-  }
-  return output;
-}
-
-/**
- * Lê bytes de uma URI local (`file://`, `content://`, `ph://`) como em
- * ActiveTripScreen / AddDependentScreen: `fetch` → ArrayBuffer; fallback base64
- * (Expo FileSystem) quando o fetch não é suportado.
- */
-async function localUriToUint8Array(localUri: string): Promise<Uint8Array> {
-  try {
-    const res = await fetch(localUri);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = await res.arrayBuffer();
-    return new Uint8Array(buf);
-  } catch {
-    const base64 = await FileSystem.readAsStringAsync(localUri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    if (!base64) throw new Error('Arquivo de imagem vazio.');
-    return base64ToUint8Array(base64);
-  }
-}
-
-/**
- * Faz upload de uma imagem local para um bucket público via `supabase-js`
- * (mesmo caminho que Documentos CNH, comprovantes de viagem, etc.).
+ * Upload de imagem local para bucket público.
+ *
+ * Implementação via `FileSystem.uploadAsync` (igual `uploadToStorage`) em vez
+ * do caminho `supabase.storage.from(...).upload(bytes)`. Motivo: em RN/Expo,
+ * o caminho via `supabase-js` ocasionalmente enviava as requests de Storage
+ * com o `apikey` anon em vez do JWT do usuário (race entre `refreshSession`
+ * e a chamada interna). Isso fazia `auth.role()` cair em `'anon'` e a policy
+ * `Profile avatars upload` (que exige `'authenticated'`) rejeitava com
+ * "new row violates row-level security policy". Anexar o `Authorization`
+ * explicitamente elimina essa janela de erro.
  */
 export async function uploadImageFromUriToPublicBucket(
   bucket: string,
@@ -70,22 +26,50 @@ export async function uploadImageFromUriToPublicBucket(
 ): Promise<string> {
   const contentType = pickContentTypeForImage(localUri, options?.pickerMimeType ?? null);
 
+  // Renova a sessão antes de capturar o token — se o refresh falhar, a sessão
+  // existente é tentada do mesmo jeito (servidor retornará 401 e a UI mostrará
+  // erro claro de autenticação).
+  await supabase.auth.refreshSession().catch(() => {});
   const {
     data: { session },
   } = await supabase.auth.getSession();
   if (!session?.access_token) throw new Error('Usuário não autenticado.');
-  await supabase.auth.refreshSession().catch(() => {});
 
-  const bytes = await localUriToUint8Array(localUri);
-  if (bytes.byteLength < 1) throw new Error('Arquivo de imagem vazio.');
+  // Validação dura: confirma que o JWT identifica um usuário real (não anon)
+  // antes de subir bytes. Se a sessão estiver corrompida, falhar aqui é mais
+  // claro que o erro RLS subsequente do Storage.
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  if (userErr || !userData.user?.id) {
+    throw new Error('Sessão inválida. Faça login de novo e tente outra vez.');
+  }
 
-  const { error } = await supabase.storage.from(bucket).upload(storagePath, bytes, {
-    contentType,
-    upsert: true,
+  const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
+  const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error('Configuração do Supabase ausente (URL ou anon key).');
+  }
+  const target = `${supabaseUrl}/storage/v1/object/${bucket}/${storagePath}`;
+
+  const result = await FileSystem.uploadAsync(target, localUri, {
+    httpMethod: 'POST',
+    uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${session.access_token}`,
+      'Content-Type': contentType,
+      'x-upsert': 'true',
+    },
   });
 
-  if (error) {
-    throw new Error(error.message || 'Falha no upload para o storage.');
+  if (result.status < 200 || result.status >= 300) {
+    let detail = '';
+    try {
+      const j = JSON.parse(result.body) as { message?: string; error?: string };
+      detail = [j.message, j.error].filter((x) => typeof x === 'string' && x.trim()).join(' — ') || '';
+    } catch {
+      detail = (result.body || '').trim().slice(0, 300);
+    }
+    throw new Error(detail || `Upload falhou (HTTP ${result.status}).`);
   }
 
   const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);

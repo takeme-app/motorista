@@ -14,6 +14,7 @@ import {
 } from '../../components/mapbox';
 import { requestLocationPermission, getCurrentOrLastKnownCoords } from '../../lib/location';
 import { LiveDriverMapMarker } from '../../components/LiveDriverMapMarker';
+import { DriverLiveStatusChip } from '../../components/DriverLiveStatusChip';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripFollowStackParamList, TripLiveDriverDisplay } from '../../navigation/types';
@@ -31,6 +32,7 @@ import { useAppAlert } from '../../contexts/AppAlertContext';
 import { onlyDigits } from '../../utils/formatCpf';
 import { getMainTabBarStyleFromInsets } from '../../navigation/mainTabBarStyle';
 import { useScheduledTripLiveLocation } from '../../lib/useScheduledTripLiveLocation';
+import { useSmoothLatLng } from '../../hooks/useSmoothLatLng';
 
 type Props = NativeStackScreenProps<TripFollowStackParamList, 'TripInProgress'>;
 
@@ -190,9 +192,45 @@ export function TripInProgressScreen({ navigation, route }: Props) {
     if (live?.scheduledTripId) setResolvedScheduledTripId(live.scheduledTripId);
   }, [live?.scheduledTripId]);
 
-  const { coords: liveDriver } = useScheduledTripLiveLocation(resolvedScheduledTripId);
+  const { coords: liveDriver, isStale: liveDriverStale, ageMs: liveDriverAgeMs } =
+    useScheduledTripLiveLocation(resolvedScheduledTripId);
+  /** Interpola entre os fixes (motorista publica a cada 2s) — pin desliza em vez de pular. */
+  const { coord: smoothDriverCoord } = useSmoothLatLng(
+    liveDriver
+      ? { latitude: liveDriver.latitude, longitude: liveDriver.longitude }
+      : null,
+  );
+  /** Posição efetiva exibida: a suavizada, com fallback para a crua (1º render). */
+  const driverDisplayCoord = smoothDriverCoord ?? (liveDriver
+    ? { latitude: liveDriver.latitude, longitude: liveDriver.longitude }
+    : null);
 
   const mapRef = useRef<MapboxMapRef>(null);
+
+  /**
+   * Centraliza a câmera na posição atual do motorista. Usa a posição suavizada
+   * quando disponível (mesmo objeto que o pin); se não há fix ainda, mostra
+   * aviso e não move o mapa.
+   */
+  const handleFocusOnDriver = useCallback(() => {
+    const target = driverDisplayCoord ?? liveDriver;
+    if (!target || !isValidTripCoordinate(target.latitude, target.longitude)) {
+      showAlert({
+        title: 'Motorista ainda não localizado',
+        message: 'Quando o motorista iniciar a viagem você poderá acompanhar a posição em tempo real aqui.',
+      });
+      return;
+    }
+    mapRef.current?.animateToRegion(
+      {
+        latitude: target.latitude,
+        longitude: target.longitude,
+        latitudeDelta: 0.005,
+        longitudeDelta: 0.005,
+      },
+      500,
+    );
+  }, [driverDisplayCoord, liveDriver, showAlert]);
 
   const handleRecenterOnMe = useCallback(async () => {
     try {
@@ -480,10 +518,10 @@ export function TripInProgressScreen({ navigation, route }: Props) {
         {liveDriverRouteCoords.length >= 2 ? (
           <MapboxPolyline coordinates={liveDriverRouteCoords} strokeColor="#C9A227" strokeWidth={4} />
         ) : null}
-        {liveDriver && isValidTripCoordinate(liveDriver.latitude, liveDriver.longitude) ? (
+        {driverDisplayCoord && isValidTripCoordinate(driverDisplayCoord.latitude, driverDisplayCoord.longitude) ? (
           <MapboxMarker
             id="driver-live"
-            coordinate={{ latitude: liveDriver.latitude, longitude: liveDriver.longitude }}
+            coordinate={driverDisplayCoord}
             title="Motorista"
             anchor={{ x: 0.5, y: 0.5 }}
           >
@@ -530,6 +568,33 @@ export function TripInProgressScreen({ navigation, route }: Props) {
           </MapboxMarker>
         ))}
       </MapboxMap>
+      <DriverLiveStatusChip
+        loading={!liveDriver}
+        isStale={Boolean(liveDriver) && liveDriverStale}
+        ageMs={liveDriverAgeMs}
+        mapFocused={mapFocused}
+        topInset={insets.top}
+      />
+      <TouchableOpacity
+        accessibilityLabel="Centralizar no motorista"
+        style={[
+          styles.focusDriverButton,
+          {
+            // Alinha com a coluna de controles do MapboxMap (top-right). Os
+            // controles têm 3 botões (36px) + gap 6 + spacer 4 + gap 6 = 130 px
+            // de altura. Empilhamos logo abaixo do último (my-location) com
+            // um respiro de 8 px.
+            top: (mapFocused ? insets.top + 56 : 10) + 130 + 8,
+            right: mapFocused ? Math.max(insets.right, 12) + 4 : 10,
+          },
+          !liveDriver && styles.focusDriverButtonDisabled,
+        ]}
+        activeOpacity={0.8}
+        onPress={handleFocusOnDriver}
+        disabled={!liveDriver}
+      >
+        <MaterialIcons name="directions-car" size={20} color={COLORS.black} />
+      </TouchableOpacity>
       <View
         style={[
           styles.timeBadge,
@@ -815,6 +880,22 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   backArrow: { fontSize: 22, color: COLORS.black, fontWeight: '600' },
+  // Casa visualmente com `controlBtn` do `MapboxMap` (mesmo tamanho/sombra/raio).
+  focusDriverButton: {
+    position: 'absolute',
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+  },
+  focusDriverButtonDisabled: { opacity: 0.45 },
   stepsSidebar: {
     position: 'absolute',
     left: 16,

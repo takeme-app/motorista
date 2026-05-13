@@ -201,6 +201,13 @@ export type LoadClientScheduledTripsOptions = {
    * Desligar em fluxos que reutilizam a lista mas não são reserva de passageiro (ex.: escolher motorista para encomenda).
    */
   applyBookingsPromoToList?: boolean;
+  /**
+   * Quando true, filtra por `bags_available > 0` em vez de `seats_available > 0`.
+   * Encomenda não ocupa assento, só mala — antes uma viagem cheia de passageiros
+   * mas com espaço de bagagem ficava invisível na lista de envios.
+   * Padrão (false/undefined): mantém o filtro de assentos (Viagens / Dependentes).
+   */
+  bagsOnly?: boolean;
 };
 
 type PromoBatchRow = {
@@ -303,6 +310,8 @@ export async function loadClientScheduledTrips(opts?: LoadClientScheduledTripsOp
 }> {
   const sb = supabase as { from: (table: string) => any };
   const nowIso = new Date().toISOString();
+  // Viagens / Dependentes filtram por assentos; Encomendas (bagsOnly=true) filtra por bagagem.
+  const capacityColumn = opts?.bagsOnly ? 'bags_available' : 'seats_available';
   const { data: tripsRaw, error: tripsErr } = await sb
     .from('scheduled_trips')
     .select(
@@ -312,7 +321,7 @@ export async function loadClientScheduledTrips(opts?: LoadClientScheduledTripsOp
     .eq('is_active', true)
     .is('driver_journey_started_at', null)
     .gt('departure_at', nowIso)
-    .gt('seats_available', 0)
+    .gt(capacityColumn, 0)
     .order('departure_at');
   if (tripsErr) {
     return { items: [], error: getUserErrorMessage(tripsErr, 'Não foi possível carregar as viagens.') };

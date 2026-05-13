@@ -5,6 +5,7 @@ import { AuthRecoveryHandler } from './AuthRecoveryHandler';
 import { NotificationDeeplinkHandler } from './NotificationDeeplinkHandler';
 import { RootNavigationProvider } from './RootNavigationContext';
 import { SessionEnvironmentGuard } from './SessionEnvironmentGuard';
+import { useOfflineQueueFlusher } from '../hooks/useOfflineQueueFlusher';
 import { SplashScreen } from '../screens/SplashScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
 import { LoginScreen } from '../screens/LoginScreen';
@@ -61,6 +62,9 @@ type RootNavigatorProps = {
 
 export function RootNavigator({ initialRouteName, initialRouteParams }: RootNavigatorProps) {
   const navigationRef = useRef<NavigationContainerRef<RootStackParamList>>(null);
+  // Faz flush automático da fila offline (complete_trip_stop, start_journey)
+  // sempre que a rede volta. Idempotente; flushQueue() é serializada.
+  useOfflineQueueFlusher();
 
   return (
     <NavigationContainer ref={navigationRef}>

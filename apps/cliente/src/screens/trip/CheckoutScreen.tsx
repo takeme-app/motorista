@@ -1002,6 +1002,34 @@ export function CheckoutScreen({ navigation, route }: Props) {
           </View>
         ) : null}
 
+        {pricingPreview ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Detalhes do preço</Text>
+            {formatPricingBreakdown(pricingPreview).map((line, idx) => {
+              const fmt = formatTripFareBrl(Math.abs(line.valueCents));
+              const displayValue = line.valueCents < 0 ? `- ${fmt}` : fmt;
+              return (
+                <View
+                  key={`${line.label}-${idx}`}
+                  style={line.isTotal ? styles.breakdownTotalRow : styles.breakdownRow}
+                >
+                  <Text style={line.isTotal ? styles.breakdownTotalLabel : styles.breakdownLabel}>
+                    {line.label}
+                  </Text>
+                  <Text style={line.isTotal ? styles.breakdownTotalValue : styles.breakdownValue}>
+                    {displayValue}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        ) : pricingError ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Preço</Text>
+            <Text style={styles.meta}>{pricingError}</Text>
+          </View>
+        ) : null}
+
         <View style={styles.card}>
           <PaymentMethodSection
             amountCents={displayChargeCents ?? 0}

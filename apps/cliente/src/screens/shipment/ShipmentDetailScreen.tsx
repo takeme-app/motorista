@@ -111,6 +111,8 @@ type ShipmentDetail = {
   base_id: string | null;
   picked_up_at: string | null;
   picked_up_by_preparer_at: string | null;
+  /** Viagem associada — necessária para o acompanhamento em tempo real (mapa com posição do motorista). */
+  scheduled_trip_id: string | null;
 };
 
 type DriverProfileRow = { full_name: string | null; avatar_url: string | null };
@@ -164,7 +166,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
       const { data: shipment, error: shipErr } = await supabase
         .from('shipments')
         .select(
-          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents, tip_status, tip_paid_at, driver_id, pickup_code, delivery_code, cancellation_reason, base_id, picked_up_at, picked_up_by_preparer_at'
+          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents, tip_status, tip_paid_at, driver_id, pickup_code, delivery_code, cancellation_reason, base_id, picked_up_at, picked_up_by_preparer_at, scheduled_trip_id'
         )
         .eq('id', shipmentId)
         .eq('user_id', user.id)
@@ -197,6 +199,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         base_id: string | null;
         picked_up_at: string | null;
         picked_up_by_preparer_at: string | null;
+        scheduled_trip_id: string | null;
       };
       setDetail({
         id: row.id,
@@ -222,6 +225,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         base_id: row.base_id ?? null,
         picked_up_at: row.picked_up_at ?? null,
         picked_up_by_preparer_at: row.picked_up_by_preparer_at ?? null,
+        scheduled_trip_id: row.scheduled_trip_id ?? null,
       });
       if (row.driver_id) {
         const { data: prof } = await supabase
@@ -307,6 +311,49 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
   const hasAssignedDriver = Boolean(detail?.driver_id);
   const driverOnWay =
     hasAssignedDriver && detail?.status && ['confirmed', 'in_progress'].includes(detail.status);
+
+  /**
+   * Parâmetros para abrir `TripInProgress` (acompanhamento em tempo real).
+   * Só é montado quando há motorista atribuído, viagem associada e coords
+   * válidas — sem isso o mapa live não tem o que mostrar.
+   */
+  const shipmentTripLiveParams = useMemo(() => {
+    if (!detail) return null;
+    if (!detail.driver_id) return null;
+    if (!detail.scheduled_trip_id) return null;
+    const origin = isValidTripCoordinate(detail.origin_lat, detail.origin_lng)
+      ? {
+          latitude: detail.origin_lat as number,
+          longitude: detail.origin_lng as number,
+          address: detail.origin_address,
+        }
+      : undefined;
+    const destination = isValidTripCoordinate(detail.destination_lat, detail.destination_lng)
+      ? {
+          latitude: detail.destination_lat as number,
+          longitude: detail.destination_lng as number,
+          address: detail.destination_address,
+        }
+      : undefined;
+    return {
+      driverName: driverProfile?.full_name ?? 'Motorista',
+      rating: 0,
+      vehicleLabel: 'Veículo a confirmar',
+      amountCents: detail.amount_cents,
+      bookingId: detail.id,
+      scheduledTripId: detail.scheduled_trip_id,
+      origin,
+      destination,
+      mapFocused: true,
+    };
+  }, [detail, driverProfile]);
+
+  const canOpenShipmentLive = useMemo(() => {
+    if (!shipmentTripLiveParams || !detail?.driver_id || !hasValidShipmentMapCoords) return false;
+    const s = (detail.status ?? '').toLowerCase();
+    if (s === 'cancelled' || s === 'delivered') return false;
+    return ['confirmed', 'in_progress'].includes(s);
+  }, [shipmentTripLiveParams, detail?.driver_id, detail?.status, hasValidShipmentMapCoords]);
 
   const awaitingDriverMessage = (() => {
     if (!detail || hasAssignedDriver) return null;
@@ -531,7 +578,16 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
               </MapboxMap>
             )}
           </View>
-          <TouchableOpacity style={styles.trackButton} activeOpacity={0.8}>
+          <TouchableOpacity
+            style={[styles.trackButton, !canOpenShipmentLive && styles.trackButtonDisabled]}
+            activeOpacity={0.8}
+            disabled={!canOpenShipmentLive}
+            onPress={() => {
+              if (shipmentTripLiveParams && canOpenShipmentLive) {
+                navigation.navigate('TripInProgress', shipmentTripLiveParams);
+              }
+            }}
+          >
             <MaterialIcons name="visibility" size={20} color={COLORS.neutral700} />
             <Text style={styles.trackButtonText}>Acompanhar em tempo real</Text>
           </TouchableOpacity>
@@ -972,6 +1028,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
   },
   trackButtonText: { fontSize: 14, fontWeight: '500', color: COLORS.neutral700 },
+  trackButtonDisabled: { opacity: 0.45 },
   pinSection: { marginHorizontal: 24, marginTop: 24 },
   pinLabel: { fontSize: 14, fontWeight: '700', color: COLORS.black, marginBottom: 10 },
   pinRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { View, TouchableOpacity, StyleSheet, ScrollView, Platform, ActivityIndicator } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -6,19 +6,24 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   MapboxMap,
+  type MapboxMapRef,
   MapboxMarker,
   MapboxPolyline,
   sanitizeMapRegion,
   isValidTripCoordinate,
 } from '../../components/mapbox';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripFollowStackParamList } from '../../navigation/types';
 import { formatDriverRatingLabel } from '../../lib/tripDriverDisplay';
 import { loadBookingTripLiveContext, parsePassengerData } from '../../lib/clientBookingTripLive';
 import { onlyDigits } from '../../utils/formatCpf';
 import { useScheduledTripLiveLocation } from '../../lib/useScheduledTripLiveLocation';
+import { useSmoothLatLng } from '../../hooks/useSmoothLatLng';
 import { getRouteWithDuration, formatDuration } from '../../lib/route';
 import { LiveDriverMapMarker } from '../../components/LiveDriverMapMarker';
+import { DriverLiveStatusChip } from '../../components/DriverLiveStatusChip';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type Props = NativeStackScreenProps<TripFollowStackParamList, 'DriverOnTheWay'>;
 
@@ -52,7 +57,41 @@ export function DriverOnTheWayScreen({ navigation, route }: Props) {
   const [driverEtaText, setDriverEtaText] = useState<string | undefined>(undefined);
   const [driverRouteCoords, setDriverRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
 
-  const { coords: liveDriver } = useScheduledTripLiveLocation(live?.scheduledTripId ?? null);
+  const { coords: liveDriver, isStale: liveDriverStale, ageMs: liveDriverAgeMs } =
+    useScheduledTripLiveLocation(live?.scheduledTripId ?? null);
+  const insets = useSafeAreaInsets();
+  const mapRef = useRef<MapboxMapRef>(null);
+  const { showAlert } = useAppAlert();
+  /** Interpola entre os fixes — pin desliza em vez de saltar a cada 2s. */
+  const { coord: smoothDriverCoord } = useSmoothLatLng(
+    liveDriver ? { latitude: liveDriver.latitude, longitude: liveDriver.longitude } : null,
+  );
+  const driverDisplayCoord = smoothDriverCoord ?? (liveDriver
+    ? { latitude: liveDriver.latitude, longitude: liveDriver.longitude }
+    : null);
+
+  /** Centraliza a câmera na posição atual do motorista. */
+  const handleFocusOnDriver = useCallback(() => {
+    const target = driverDisplayCoord ?? (liveDriver
+      ? { latitude: liveDriver.latitude, longitude: liveDriver.longitude }
+      : null);
+    if (!target || !isValidTripCoordinate(target.latitude, target.longitude)) {
+      showAlert({
+        title: 'Motorista ainda não localizado',
+        message: 'Quando o motorista iniciar a viagem você poderá acompanhar a posição em tempo real aqui.',
+      });
+      return;
+    }
+    mapRef.current?.animateToRegion(
+      {
+        latitude: target.latitude,
+        longitude: target.longitude,
+        latitudeDelta: 0.005,
+        longitudeDelta: 0.005,
+      },
+      500,
+    );
+  }, [driverDisplayCoord, liveDriver, showAlert]);
 
   useEffect(() => {
     const o = live?.origin;
@@ -164,7 +203,7 @@ export function DriverOnTheWayScreen({ navigation, route }: Props) {
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
       <View style={styles.mapWrap}>
-        <MapboxMap style={styles.map} initialRegion={mapRegion} scrollEnabled>
+        <MapboxMap ref={mapRef} style={styles.map} initialRegion={mapRegion} scrollEnabled>
           {driverRouteCoords.length >= 2 ? (
             <MapboxPolyline coordinates={driverRouteCoords} strokeWidth={4} />
           ) : null}
@@ -189,10 +228,10 @@ export function DriverOnTheWayScreen({ navigation, route }: Props) {
               iconSize={14}
             />
           ) : null}
-          {liveDriver && isValidTripCoordinate(liveDriver.latitude, liveDriver.longitude) ? (
+          {driverDisplayCoord && isValidTripCoordinate(driverDisplayCoord.latitude, driverDisplayCoord.longitude) ? (
             <MapboxMarker
               id="driver-live"
-              coordinate={{ latitude: liveDriver.latitude, longitude: liveDriver.longitude }}
+              coordinate={driverDisplayCoord}
               title="Motorista"
               anchor={{ x: 0.5, y: 0.5 }}
             >
@@ -200,6 +239,22 @@ export function DriverOnTheWayScreen({ navigation, route }: Props) {
             </MapboxMarker>
           ) : null}
         </MapboxMap>
+        <DriverLiveStatusChip
+          loading={!liveDriver}
+          isStale={Boolean(liveDriver) && liveDriverStale}
+          ageMs={liveDriverAgeMs}
+          mapFocused={false}
+          topInset={insets.top}
+        />
+        <TouchableOpacity
+          accessibilityLabel="Centralizar no motorista"
+          style={[styles.focusDriverButton, !liveDriver && styles.focusDriverButtonDisabled]}
+          activeOpacity={0.8}
+          onPress={handleFocusOnDriver}
+          disabled={!liveDriver}
+        >
+          <MaterialIcons name="directions-car" size={22} color={COLORS.black} />
+        </TouchableOpacity>
       </View>
       <View style={styles.banner}>
         <MaterialIcons name="check-circle" size={24} color="#FFFFFF" />
@@ -282,6 +337,23 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   mapWrap: { height: 200, width: '100%' },
   map: { width: '100%', height: '100%' },
+  focusDriverButton: {
+    position: 'absolute',
+    right: 12,
+    bottom: 12,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: COLORS.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  focusDriverButtonDisabled: { opacity: 0.45 },
   banner: {
     flexDirection: 'row',
     alignItems: 'center',

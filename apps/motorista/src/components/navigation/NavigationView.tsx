@@ -120,6 +120,21 @@ export const NavigationView = React.forwardRef<GoogleMapsMapRef, NavigationViewP
       if (nativeNavigationActive && !canUseNative) onNativeUnavailable?.();
     }, [canUseNative, nativeNavigationActive, onNativeUnavailable]);
 
+    /**
+     * Marca se a SDK nativa já ficou pronta pelo menos uma vez nesta sessão de
+     * navegação. Usado para distinguir cancelamentos:
+     *  - `user-cancel`: motorista clicou fechar → propagar fallback (sair).
+     *  - `error` / `session-end`: pode acontecer offline quando algum prop
+     *    muda (recenter, waypoint, profile) e a SDK tenta `calculateRoutes`
+     *    sem rede. Se a SDK já estava navegando (readyOnce=true), a sessão
+     *    atual continua válida — NÃO propagar fallback. Antes da primeira
+     *    `onReady`, propagar (build sem SDK, falha de boot inicial, etc.).
+     */
+    const readyOnceRef = React.useRef(false);
+    React.useEffect(() => {
+      if (!useNative) readyOnceRef.current = false;
+    }, [useNative]);
+
     if (!useNative) {
       return (
         <View style={[styles.root, style]}>
@@ -155,11 +170,26 @@ export const NavigationView = React.forwardRef<GoogleMapsMapRef, NavigationViewP
         onReroute={(_e: { nativeEvent: RerouteEvent }) => onReroute?.()}
         onOffRoute={() => onOffRoute?.()}
         onCancel={(e: { nativeEvent: CancelEvent }) => {
-          // `session-end` pode acontecer quando o SDK cancela uma requisição de rota antiga
-          // durante rebuild/recenter. Não é falha de navegação e não deve derrubar para legado.
-          if (e.nativeEvent.reason !== 'session-end') onCancel?.();
+          const reason = e.nativeEvent.reason;
+          // `user-cancel`: motorista realmente quis sair → propaga.
+          if (reason === 'user-cancel') {
+            onCancel?.();
+            return;
+          }
+          // `session-end` / `error`: cancelamentos internos do SDK que ocorrem
+          // quando uma requisição de rota é abortada (rebuild offline,
+          // recenter, mudança de profile). Se a SDK já navegava (rota válida
+          // calculada antes), a sessão atual segue funcionando — não derrubar
+          // para legado só porque a rede oscilou.
+          if (readyOnceRef.current) return;
+          // Ainda não ficou ready uma vez: provável falha de boot/build sem
+          // SDK ou primeira tentativa offline. Aí o fallback é correto.
+          onCancel?.();
         }}
-        onReady={() => onReady?.()}
+        onReady={() => {
+          readyOnceRef.current = true;
+          onReady?.();
+        }}
       >
         {children}
       </ExpoMapboxNavigationView>

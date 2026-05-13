@@ -15,8 +15,6 @@ import { useAppAlert } from '../contexts/AppAlertContext';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { GoogleLogo } from '../components/GoogleLogo';
 import { StatusBar } from 'expo-status-bar';
-import * as AppleAuthentication from 'expo-apple-authentication';
-import * as Crypto from 'expo-crypto';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
@@ -231,6 +229,9 @@ export function LoginScreen({ navigation }: Props) {
     }
     setAppleLoading(true);
     try {
+      /** Lazy: módulos nativos só carregam quando o usuário aciona Apple Sign In, evitando crash em dev clients antigos. */
+      const AppleAuthentication = await import('expo-apple-authentication');
+      const Crypto = await import('expo-crypto');
       /** Apple exige nonce hashed (SHA256) na request; o raw nonce vai pro Supabase validar o id_token. */
       const rawNonce = Crypto.randomUUID();
       const hashedNonce = await Crypto.digestStringAsync(

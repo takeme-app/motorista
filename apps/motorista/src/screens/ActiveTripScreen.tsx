@@ -60,6 +60,8 @@ import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { useRouteOfflinePack } from '../hooks/useRouteOfflinePack';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getRouteWithDuration, getMultiPointRoute, formatEta } from '../lib/route';
+import { getCachedRoute, setCachedRoute, hashWaypoints } from '../lib/routeCache';
+import { enqueueMutation } from '../lib/offlineQueue';
 import { getGoogleMapsApiKey, getMapboxAccessToken } from '../lib/googleMapsConfig';
 import { getUserErrorMessage, isTripRatingsUnavailableError } from '../utils/errorMessage';
 import { onlyDigits } from '../utils/formatCpf';
@@ -145,11 +147,39 @@ const WRONG_DIRECTION_LEAVE_MS = 1_500;
 const WRONG_DIRECTION_MIN_SPEED_MPS = 2;
 
 /**
- * Abaixo desta velocidade, o curso reportado pelo GPS é instável (ruído de
- * fix); priorizamos a bússola para alimentar o heading do ícone.
- *  - 1.5 m/s ≈ 5.4 km/h (caminhada rápida / manobra lenta)
+ * Abaixo desta velocidade o GPS heading vira ruído; deixamos a bússola
+ * alimentar o ícone — mas só nesse intervalo bem estreito (basicamente
+ * quase parado). Antes era 1.5 m/s, mas isso cobria manobras urbanas inteiras
+ * em que a bússola "girava sozinha" porque reflete a direção do *celular*,
+ * não a do veículo (ex.: motorista ajeitando o aparelho no suporte).
+ *  - 0.6 m/s ≈ 2.2 km/h (parado ou rolando devagarinho)
  */
-const COMPASS_HEADING_MAX_SPEED_MPS = 1.5;
+const COMPASS_HEADING_MAX_SPEED_MPS = 0.6;
+/**
+ * iOS reporta `accuracy` no callback de `watchHeadingAsync` em escala 0–3
+ * (3 = high). Bússola sem calibração entrega leituras erráticas e foi a causa
+ * do "a seta gira do nada". Descartamos < 2 no iOS. Android costuma omitir
+ * (ou retornar -1) — nesse caso aceitamos.
+ */
+const COMPASS_HEADING_MIN_ACCURACY_IOS = 2;
+/**
+ * Salto angular máximo aceito entre duas leituras consecutivas em curto
+ * intervalo (≤ 600 ms). Acima disso, é jitter de sensor — descartamos a
+ * amostra. A próxima leitura válida (ou outro sensor) corrige.
+ */
+const HEADING_MAX_JUMP_DEG = 60;
+const HEADING_MAX_JUMP_WINDOW_MS = 600;
+/**
+ * Velocidade abaixo da qual consideramos o motorista "parado" para fins de
+ * congelamento do heading. Maior que zero porque GPS reporta ruído residual.
+ */
+const STATIONARY_SPEED_MPS = 0.4;
+/**
+ * Tempo parado contínuo a partir do qual paramos de aceitar atualizações de
+ * heading (qualquer fonte). Resolve "celular na mão no semáforo gira a seta".
+ * 2.5 s evita congelar em paradas curtíssimas (frenagem normal).
+ */
+const HEADING_FREEZE_AFTER_STATIONARY_MS = 2500;
 /** Vibração curta ao detectar desvio — feedback tátil universal (iOS + Android). */
 const REROUTE_HAPTIC_MS = 40;
 
@@ -367,7 +397,7 @@ function countsAsTripTotal(status: string | null | undefined): boolean {
  *   - dependente: embarque E desembarque (cenário 2 do PDF, etapas 1-3 e 5-7).
  */
 function requiresDriverEnteredPin(s: Stop): boolean {
-  if (s.stopType === 'package_pickup' && !isPackagePickupAtBase(s)) return false;
+  if (s.stopType === 'package_pickup') return false;
   if (isPackage(s)) return true;
   return (
     s.stopType === 'passenger_pickup' ||
@@ -559,8 +589,7 @@ function confirmPickupSubtitle(stop: Stop | null | undefined): string {
   if (!stop) return '';
   if (stop.stopType === 'package_pickup') {
     if (isPackagePickupAtBase(stop)) {
-      // PDF cenário 3, etapas 10-11: motorista solicita o código à base e digita.
-      return 'Solicite o código de 4 dígitos à base e digite abaixo para retirar a encomenda.';
+      return 'Mostre o código de 4 dígitos abaixo para a base confirmar a retirada da encomenda.';
     }
     return 'Informe este código ao cliente. Ele deve digitar no app dele para validar a coleta; depois toque abaixo para avançar.';
   }
@@ -867,6 +896,9 @@ function pickGeographicNearestNavTarget(
 export function ActiveTripScreen({ navigation, route }: Props) {
   const { tripId } = route.params;
   const { showAlert } = useAppAlert();
+  // Hoisted: `isOnline` precisa estar visível para os efeitos de cálculo de rota
+  // (~L2128) e para a propagação ao `<NavigationView nativeNavigationActive>`.
+  const { online: isOnline } = useNetworkStatus();
 
   /** Mapa em tela cheia: esconde a barra de status enquanto esta tela está em foco. */
   useFocusEffect(
@@ -930,6 +962,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
    */
   const [driverHeadingDeg, setDriverHeadingDeg] = useState<number | null>(null);
   const driverHeadingLastFlushRef = useRef<{ t: number; deg: number | null }>({ t: 0, deg: null });
+  /**
+   * Carimbo de "desde quando o motorista está parado" (`speedMps < STATIONARY_SPEED_MPS`).
+   * Quando passa de `HEADING_FREEZE_AFTER_STATIONARY_MS`, ignoramos atualizações
+   * de heading — assim a bússola não "gira sozinha" com o celular na mão.
+   */
+  const stationarySinceRef = useRef<number | null>(null);
   const locationSub = useRef<any>(null);
   const mapRef = useRef<GoogleMapsMapRef>(null);
   const hasFramedDriverOnMap = useRef(false);
@@ -1099,12 +1137,23 @@ export function ActiveTripScreen({ navigation, route }: Props) {
    * porque o gargalo agora é o sensor (GPS @ 2 Hz; bússola pode ir mais alto):
    *  - 50 ms: deixa passar bússola sem amarrar
    *  - 2.5°: ainda corta tremor < 1 frame de animação
+   *  - rejeita saltos > HEADING_MAX_JUMP_DEG em < HEADING_MAX_JUMP_WINDOW_MS
+   *    (sample isolado, jitter de bússola descalibrada)
+   *  - rejeita atualizações enquanto o motorista está parado há muito tempo
    *
    * O `useSmoothCoordinate` interpola entre estes alvos, então qualquer
-   * jitter pequeno é absorvido na animação.
+   * jitter pequeno restante é absorvido na animação.
    */
   const flushDriverHeadingToUi = useCallback((deg: number | null) => {
     const now = Date.now();
+    // Parado há mais de HEADING_FREEZE_AFTER_STATIONARY_MS: congela o heading
+    // (qualquer fonte). O último valor permanece exibido até o motorista andar.
+    if (
+      stationarySinceRef.current != null &&
+      now - stationarySinceRef.current > HEADING_FREEZE_AFTER_STATIONARY_MS
+    ) {
+      return;
+    }
     const last = driverHeadingLastFlushRef.current;
     if (now - last.t < 50) return;
     const prev = last.deg;
@@ -1114,6 +1163,10 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       // Comparação angular curta (cruza 359↔0 sem disparar 359° de mudança).
       const delta = Math.abs(((deg - prev + 540) % 360) - 180);
       if (delta < 2.5) return;
+      // Salto suspeito em curto intervalo: provável jitter — descarta.
+      if (delta > HEADING_MAX_JUMP_DEG && now - last.t < HEADING_MAX_JUMP_WINDOW_MS) {
+        return;
+      }
     }
     driverHeadingLastFlushRef.current = { t: now, deg };
     setDriverHeadingDeg(deg);
@@ -1421,6 +1474,13 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               headingDeg,
               timestamp: Date.now(),
             };
+            // Atualiza estado "parado": serve para congelar o heading depois
+            // de um tempo (vide HEADING_FREEZE_AFTER_STATIONARY_MS).
+            if ((speedMps ?? 0) < STATIONARY_SPEED_MPS) {
+              if (stationarySinceRef.current == null) stationarySinceRef.current = Date.now();
+            } else {
+              stationarySinceRef.current = null;
+            }
             // Acima de COMPASS_HEADING_MAX_SPEED_MPS, o curso do GPS é mais
             // estável que a bússola (que reflete a direção do celular, não a
             // do veículo). Abaixo, deixamos a bússola comandar (ver effect do
@@ -1569,26 +1629,57 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     };
   }, [showAlert, scheduleNavFrame, accumulateTripOdometer, flushDriverPositionToUi, flushDriverHeadingToUi]);
 
-  /** Publica posição para o app do passageiro (`scheduled_trip_live_locations`) enquanto a viagem está ativa. */
+  /**
+   * Publica posição para o app do passageiro (`scheduled_trip_live_locations`).
+   *
+   * Gatilho: `tripId` definido E (status='active' OU `driver_journey_started_at` setado).
+   * O segundo cobre a janela onde o motorista entra na tela antes de `setTrip`
+   * hidratar — antes era `status !== 'active'` e nunca publicava nesse caso.
+   *
+   * Erros do upsert eram silenciados (`void`) e a tabela ficou vazia mesmo com
+   * viagens reais — agora logamos para diagnóstico em produção. Também logamos
+   * uma vez se o GPS não entrega `fix` por 10s (provável falta de permissão).
+   */
   useEffect(() => {
-    if (trip?.status !== 'active') return;
+    if (!tripId) return;
+    if (!(trip?.status === 'active' || trip?.driver_journey_started_at)) return;
+    let noFixSince = 0;
+    let warnedNoFix = false;
     const publish = () => {
       const fix = latestDriverFixRef.current;
-      if (!fix || !isValidGlobeCoordinate(fix.latitude, fix.longitude)) return;
-      void (supabase as any).from('scheduled_trip_live_locations').upsert(
-        {
-          scheduled_trip_id: tripId,
-          latitude: fix.latitude,
-          longitude: fix.longitude,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'scheduled_trip_id' },
-      );
+      if (!fix || !isValidGlobeCoordinate(fix.latitude, fix.longitude)) {
+        noFixSince += 1;
+        if (!warnedNoFix && noFixSince >= 5) {
+          warnedNoFix = true;
+          console.warn(
+            '[live-location] sem GPS válido por 10s — verificar permissão de localização e Location.watchPositionAsync',
+          );
+        }
+        return;
+      }
+      noFixSince = 0;
+      warnedNoFix = false;
+      supabase
+        .from('scheduled_trip_live_locations')
+        .upsert(
+          {
+            scheduled_trip_id: tripId,
+            latitude: fix.latitude,
+            longitude: fix.longitude,
+            updated_at: new Date().toISOString(),
+          } as never,
+          { onConflict: 'scheduled_trip_id' },
+        )
+        .then(({ error }) => {
+          if (error) {
+            console.warn('[live-location][upsert]', error.message ?? String(error));
+          }
+        });
     };
     publish();
     const id = setInterval(publish, 2000);
     return () => clearInterval(id);
-  }, [tripId, trip?.status]);
+  }, [tripId, trip?.status, trip?.driver_journey_started_at]);
 
   /**
    * Bússola SEMPRE ativa enquanto a tela está montada. Tem dois papéis:
@@ -1608,7 +1699,15 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         const s = await Location.watchHeadingAsync((h: {
           trueHeading?: number;
           magHeading?: number;
+          accuracy?: number;
         }) => {
+          // iOS reporta `accuracy` em escala 0–3 (3 = high). < 2 indica
+          // calibração ruim — leituras viram lixo e fazem a seta girar
+          // sozinha. Android tipicamente omite ou retorna -1; nesse caso
+          // aceitamos (não conseguimos descartar).
+          if (Platform.OS === 'ios' && typeof h.accuracy === 'number' && h.accuracy < COMPASS_HEADING_MIN_ACCURACY_IOS) {
+            return;
+          }
           const th = h.trueHeading;
           const mh = h.magHeading;
           const v =
@@ -2127,6 +2226,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
    */
   useEffect(() => {
     if (loading) return;
+    // Offline: não tenta refetch — a hidratação do cache cuida da polyline.
+    // Sem isso, todos os fetches retornariam null e zerariam stopsRouteCoords.
+    if (!isOnline) return;
     let cancelled = false;
     const controller = new AbortController();
     const signal = controller.signal;
@@ -2146,9 +2248,22 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         ? dpLive
         : driverPosition;
 
-    const commit = (coords: LatLng[]) => {
+    const commit = (coords: LatLng[], durationSeconds?: number) => {
       setStopsRouteCoords(coords);
       handledRerouteKeyRef.current = Math.max(handledRerouteKeyRef.current, snapshotRerouteKey);
+      // Persiste a rota fresca para uso offline. Hash inclui só os stops (sem GPS),
+      // estável entre fixes consecutivos.
+      if (tripId && coords.length >= 2) {
+        void (async () => {
+          const waypointsHash = await hashWaypoints(stopPts);
+          await setCachedRoute(`trip-${tripId}`, {
+            coordinates: coords,
+            durationSeconds: durationSeconds ?? 0,
+            computedAt: Date.now(),
+            waypointsHash,
+          });
+        })();
+      }
     };
 
     (async () => {
@@ -2159,14 +2274,14 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             : stopPts;
         const r = await getMultiPointRoute(withDriver, routeOpts);
         if (!cancelled && r?.coordinates?.length) {
-          commit(r.coordinates);
+          commit(r.coordinates, r.durationSeconds);
           return;
         }
       }
       if (dp && isValidGlobeCoordinate(dp.latitude, dp.longitude) && stopPts.length === 1) {
         const r = await getRouteWithDuration(dp, stopPts[0]!, routeOpts);
         if (!cancelled && r?.coordinates?.length) {
-          commit(r.coordinates);
+          commit(r.coordinates, r.durationSeconds);
           return;
         }
       }
@@ -2174,18 +2289,20 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       if (dp && isValidGlobeCoordinate(dp.latitude, dp.longitude) && navDest) {
         const r = await getRouteWithDuration(dp, navDest, routeOpts);
         if (!cancelled && r?.coordinates?.length) {
-          commit(r.coordinates);
+          commit(r.coordinates, r.durationSeconds);
           return;
         }
       }
-      if (!cancelled) setStopsRouteCoords([]);
+      // Não apaga uma polyline já hidratada do cache: só zera se ainda estava vazia.
+      if (!cancelled && stopsRouteCoords.length === 0) setStopsRouteCoords([]);
     })();
 
     return () => {
       cancelled = true;
       controller.abort();
     };
-  }, [loading, stops, finalDestination, driverPositionKey, currentStopIndex, rerouteKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, isOnline, stops, finalDestination, driverPositionKey, currentStopIndex, rerouteKey, tripId]);
 
   // Trecho imediato: GPS → alvo geograficamente mais próximo (paradas restantes + destino da viagem).
   useEffect(() => {
@@ -3000,12 +3117,38 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         }
       }
 
+      const confirmationCode = requiresDriverEnteredPin(stop) ? confirmCode.trim() : null;
+
+      // Offline: enfileira para replay quando voltar a rede. Não há como
+      // validar o código do servidor agora — confiamos na validação local
+      // já feita acima (digitsIn !== expectedDigits).
+      if (!isOnline) {
+        await enqueueMutation({
+          kind: 'complete_trip_stop',
+          payload: { trip_stop_id: stopId, confirmation_code: confirmationCode },
+          enqueuedAt: Date.now(),
+        });
+        showAlert(
+          'Sem internet',
+          'Parada salva localmente. Será sincronizada quando a conexão voltar.',
+        );
+        confirmTargetStopRef.current = null;
+        setConfirmUiStop(null);
+        setConfirmError('');
+        setConfirmCode('');
+        confirmSheetSlide.setValue(600);
+        setConfirmPickupVisible(false);
+        setConfirmDeliveryVisible(false);
+        syncCloseDetailOnly();
+        return;
+      }
+
       try {
         const { data: rpcData, error: rpcError } = await supabase.rpc(
           'complete_trip_stop' as never,
           {
             p_trip_stop_id: stopId,
-            p_confirmation_code: requiresDriverEnteredPin(stop) ? confirmCode.trim() : null,
+            p_confirmation_code: confirmationCode,
           } as never,
         );
 
@@ -3017,8 +3160,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         const payload = rpcData as { ok?: boolean; error?: string } | null;
         if (payload && payload.ok === false) {
           const err = String(payload.error ?? '');
-          const msg =
-            err === 'invalid_code'
+          const waitingForBase =
+            isPackagePickupAtBase(stop) &&
+            (err === 'code_length' || err === 'invalid_code' || err === 'missing_code' || err === 'pickup_not_confirmed');
+          const msg = waitingForBase
+            ? 'A base ainda não confirmou a retirada. Mostre o código à base e peça para ela confirmar no app antes de prosseguir.'
+            : err === 'invalid_code'
               ? isPassenger(stop) || isDependent(stop)
                 ? 'Código incorreto. Confira o código no app do passageiro ou do responsável.'
                 : 'Código incorreto. Verifique com o cliente.'
@@ -3039,6 +3186,24 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           return;
         }
       } catch (e: unknown) {
+        const msg = ((e as { message?: string } | null)?.message ?? '').toLowerCase();
+        const transient =
+          msg.includes('network') ||
+          msg.includes('fetch') ||
+          msg.includes('timeout') ||
+          msg.includes('connection');
+        if (transient) {
+          await enqueueMutation({
+            kind: 'complete_trip_stop',
+            payload: { trip_stop_id: stopId, confirmation_code: confirmationCode },
+            enqueuedAt: Date.now(),
+          });
+          showAlert(
+            'Sem conexão',
+            'Parada salva localmente. Será sincronizada quando a conexão voltar.',
+          );
+          return;
+        }
         showAlert('Erro', getUserErrorMessage(e));
         return;
       }
@@ -3304,11 +3469,37 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   // ---------------------------------------------------------------------------
   // Auto-download do pack offline cobrindo a rota dourada (`stopsRouteCoords`).
   // É idempotente por `trip-<id>`: só baixa uma vez por viagem nesta sessão.
-  const { online: isOnline } = useNetworkStatus();
+  // (`isOnline` declarado no topo do componente.)
   useRouteOfflinePack({
     packName: tripId ? `trip-${tripId}` : null,
     coords: stopsRouteCoords,
   });
+
+  /**
+   * Hidrata `stopsRouteCoords` do cache persistido ao trocar de viagem.
+   * Permite abrir a tela offline e ver a polyline imediatamente — o efeito
+   * de cálculo online sobrescreve com a versão fresca quando houver rede.
+   */
+  const hydratedTripIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!tripId || hydratedTripIdRef.current === tripId) return;
+    hydratedTripIdRef.current = tripId;
+    let cancelled = false;
+    void (async () => {
+      const cached = await getCachedRoute(`trip-${tripId}`);
+      if (!cancelled && cached?.coordinates?.length && stopsRouteCoords.length === 0) {
+        setStopsRouteCoords(cached.coordinates);
+        if (cached.durationSeconds) setEtaSeconds(cached.durationSeconds);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tripId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Estado tri-valorado do badge: cobre o caso "offline mas tenho rota salva". */
+  const networkBadgeState =
+    isOnline ? 'online' : stopsRouteCoords.length >= 2 ? 'offline-cached' : 'offline-no-cache';
 
   const handleNativeWaypointArrival = useCallback((waypointIndex: number) => {
     const relativeIndex = Math.max(0, waypointIndex - 1);
@@ -3393,43 +3584,6 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 aboveLayerID={MAPBOX_STREETS_ROUTE_ABOVE_LAYER_ID}
               />
             )}
-            {immediateLegLineForMap.length >= 2 && (
-              <>
-                <MapPolyline
-                  key={`trip-immediate-under-${dashedRouteSegmentKey}`}
-                  id="trip-immediate-under"
-                  coordinates={immediateLegLineForMap}
-                  strokeColor="#0a0a0a"
-                  strokeWidth={12}
-                  lineOpacity={0.55}
-                  aboveLayerID={
-                    (goldLineForMap?.length ?? 0) >= 2 ? 'trip-gold-layer' : MAPBOX_STREETS_ROUTE_ABOVE_LAYER_ID
-                  }
-                  layerIndex={982}
-                />
-                <MapPolyline
-                  key={`trip-immediate-core-${dashedRouteSegmentKey}`}
-                  id="trip-immediate-core"
-                  coordinates={immediateLegLineForMap}
-                  strokeColor="#000000"
-                  strokeWidth={4}
-                  lineOpacity={0.95}
-                  aboveLayerID="trip-immediate-under-layer"
-                  layerIndex={983}
-                />
-                <MapPolyline
-                  key={`trip-immediate-${dashedRouteSegmentKey}`}
-                  id="trip-immediate"
-                  coordinates={immediateLegLineForMap}
-                  strokeColor="#000000"
-                  strokeWidth={8}
-                  lineOpacity={1}
-                  lineDasharray={NEAREST_ROUTE_LINE_DASH}
-                  aboveLayerID="trip-immediate-core-layer"
-                  layerIndex={984}
-                />
-              </>
-            )}
           </>
         ) : null}
 
@@ -3496,7 +3650,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             style={[styles.networkBadgeWrap, { top: insets.top + 12 }]}
             pointerEvents="none"
           >
-            <MapNetworkBadge online={false} />
+            <MapNetworkBadge state={networkBadgeState} />
           </View>
         )}
 
@@ -4067,9 +4221,13 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                     />
                   </>
                 ) : null}
-                {isPackagePickupWithClientValidation(confirmSheetStop) ? (
+                {isPackagePickupWithClientValidation(confirmSheetStop) || isPackagePickupAtBase(confirmSheetStop) ? (
                   <View style={styles.handoffCodeWrap}>
-                    <Text style={styles.fieldLabel}>Código para informar ao cliente</Text>
+                    <Text style={styles.fieldLabel}>
+                      {isPackagePickupAtBase(confirmSheetStop)
+                        ? 'Código para mostrar à base'
+                        : 'Código para informar ao cliente'}
+                    </Text>
                     <View style={styles.handoffCodeBox}>
                       <Text style={styles.handoffCodeText}>
                         {onlyDigits(confirmSheetStop?.code ?? '').length === 4
@@ -4078,8 +4236,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                       </Text>
                     </View>
                     <Text style={styles.handoffCodeHint}>
-                      Peça para o cliente digitar esse código no app dele. Quando ele confirmar,
-                      toque no botão abaixo para avançar para a próxima parada.
+                      {isPackagePickupAtBase(confirmSheetStop)
+                        ? 'Mostre este código à base. Quando ela confirmar a retirada, toque no botão abaixo para avançar.'
+                        : 'Peça para o cliente digitar esse código no app dele. Quando ele confirmar, toque no botão abaixo para avançar para a próxima parada.'}
                     </Text>
                   </View>
                 ) : null}

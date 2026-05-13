@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -33,6 +33,11 @@ import {
   latLngFromDbColumns,
 } from '../components/googleMaps';
 import { useBottomSheetDrag } from '../hooks/useBottomSheetDrag';
+import { useNetworkStatus } from '../hooks/useNetworkStatus';
+import { useRouteOfflinePack } from '../hooks/useRouteOfflinePack';
+import { getRouteWithDuration } from '../lib/route';
+import { getMapboxAccessToken, getGoogleMapsApiKey } from '../lib/googleMapsConfig';
+import { getCachedRoute, setCachedRoute, hashWaypoints } from '../lib/routeCache';
 import * as DocumentPicker from 'expo-document-picker';
 import { formatTripCode as formatSharedTripCode } from '@take-me/shared';
 
@@ -767,12 +772,63 @@ export function TripDetailScreen({ route, navigation }: Props) {
     return regionFromLatLngPoints([tripOriginLL ?? tripDestLL!]);
   }, [tripOriginLL, tripDestLL]);
 
+  const [cachedRouteCoords, setCachedRouteCoords] = useState<
+    { latitude: number; longitude: number }[]
+  >([]);
+
+  /**
+   * Polyline a desenhar: prefere a rota real (Mapbox) cacheada.
+   * Fallback: linha reta origem→destino enquanto o fetch não retorna.
+   */
   const routeCoords = useMemo(() => {
-    const out = [];
+    if (cachedRouteCoords.length >= 2) return cachedRouteCoords;
+    const out: { latitude: number; longitude: number }[] = [];
     if (tripOriginLL) out.push(tripOriginLL);
     if (tripDestLL) out.push(tripDestLL);
     return out;
-  }, [tripOriginLL, tripDestLL]);
+  }, [cachedRouteCoords, tripOriginLL, tripDestLL]);
+
+  const { online: isOnline } = useNetworkStatus();
+
+  /**
+   * Pré-download silencioso: ao abrir a viagem, calcula a rota real (online)
+   * e cacheia para uso posterior em ActiveTripScreen sem internet. Idempotente
+   * via cache TTL de 24h.
+   */
+  useEffect(() => {
+    if (!trip?.id || !tripOriginLL || !tripDestLL) return;
+    let cancelled = false;
+    void (async () => {
+      const cached = await getCachedRoute(`trip-${trip.id}`);
+      if (!cancelled && cached?.coordinates?.length) {
+        setCachedRouteCoords(cached.coordinates);
+      }
+      if (!isOnline) return;
+      const result = await getRouteWithDuration(tripOriginLL, tripDestLL, {
+        mapboxToken: getMapboxAccessToken(),
+        googleMapsApiKey: getGoogleMapsApiKey(),
+      });
+      if (cancelled || !result?.coordinates?.length) return;
+      setCachedRouteCoords(result.coordinates);
+      const waypointsHash = await hashWaypoints([tripOriginLL, tripDestLL]);
+      await setCachedRoute(`trip-${trip.id}`, {
+        coordinates: result.coordinates,
+        durationSeconds: result.durationSeconds,
+        computedAt: Date.now(),
+        waypointsHash,
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [trip?.id, tripOriginLL, tripDestLL, isOnline]);
+
+  /** Pack de tiles offline cobrindo a rota: baixa em background quando online. */
+  useRouteOfflinePack({
+    packName: trip?.id ? `trip-${trip.id}` : null,
+    coords: routeCoords,
+    enabled: isOnline,
+  });
 
   // ── Status badge ──────────────────────────────────────────────────────────────
 

@@ -85,6 +85,22 @@ export default function ViagemDetalheScreen() {
   const [imageZoomOpen, setImageZoomOpen] = useState(false);
   const [acompanharTempoReal, setAcompanharTempoReal] = useState(false);
   const [linkedShipments, setLinkedShipments] = useState<TripShipmentListItem[]>([]);
+  type BaseHandoff = {
+    id: string;
+    recipient_name: string | null;
+    base_id: string | null;
+    delivered_to_base_at: string | null;
+    base_to_driver_confirmed_at: string | null;
+    picked_up_by_driver_from_base_at: string | null;
+    base_name: string | null;
+  };
+  const [baseHandoffs, setBaseHandoffs] = useState<BaseHandoff[]>([]);
+  const [baseHandoffRefresh, setBaseHandoffRefresh] = useState(0);
+  const [baseHandoffOpenId, setBaseHandoffOpenId] = useState<string | null>(null);
+  const [baseHandoffPin, setBaseHandoffPin] = useState('');
+  const [baseHandoffSubmitting, setBaseHandoffSubmitting] = useState(false);
+  const [baseHandoffError, setBaseHandoffError] = useState('');
+  const [baseHandoffSuccessFor, setBaseHandoffSuccessFor] = useState<string | null>(null);
   const [tripCoords] = useTripMapCoords(detail);
 
   const t: ViagemRow | null = useMemo(() => {
@@ -228,6 +244,77 @@ export default function ViagemDetalheScreen() {
     });
     return () => { cancel = true; };
   }, [detail?.listItem?.tripId]);
+
+  // Encomendas desta viagem que têm base — para a seção de validação do PIN da base
+  useEffect(() => {
+    const tripId = detail?.listItem?.tripId;
+    if (!tripId) { setBaseHandoffs([]); return; }
+    let cancel = false;
+    (supabase as any)
+      .from('shipments')
+      .select('id, recipient_name, base_id, delivered_to_base_at, base_to_driver_confirmed_at, picked_up_by_driver_from_base_at, bases:base_id ( name, city, state )')
+      .eq('scheduled_trip_id', tripId)
+      .not('base_id', 'is', null)
+      .then((res: { data: any[] | null; error: { message: string } | null }) => {
+        if (cancel) return;
+        const rows = res.data ?? [];
+        setBaseHandoffs(rows.map((r) => ({
+          id: r.id,
+          recipient_name: r.recipient_name ?? null,
+          base_id: r.base_id ?? null,
+          delivered_to_base_at: r.delivered_to_base_at ?? null,
+          base_to_driver_confirmed_at: r.base_to_driver_confirmed_at ?? null,
+          picked_up_by_driver_from_base_at: r.picked_up_by_driver_from_base_at ?? null,
+          base_name: r.bases?.name
+            ? r.bases.name + (r.bases?.state ? ' / ' + r.bases.state : '')
+            : null,
+        })));
+      });
+    return () => { cancel = true; };
+  }, [detail?.listItem?.tripId, baseHandoffRefresh]);
+
+  const handleBaseHandoffConfirm = useCallback(async () => {
+    if (!baseHandoffOpenId) return;
+    const digits = baseHandoffPin.replace(/\D/g, '');
+    if (digits.length !== 4) {
+      setBaseHandoffError('O código deve ter 4 dígitos.');
+      return;
+    }
+    setBaseHandoffSubmitting(true);
+    setBaseHandoffError('');
+    try {
+      const { data, error: rpcErr } = await (supabase as any).rpc(
+        'base_confirm_driver_pickup',
+        { p_shipment_id: baseHandoffOpenId, p_code: digits },
+      );
+      if (rpcErr) {
+        setBaseHandoffError(rpcErr.message ?? 'Falha ao confirmar.');
+        return;
+      }
+      const payload = data as { ok?: boolean; error?: string } | null;
+      if (payload && payload.ok === false) {
+        const e = String(payload.error ?? '');
+        const msg =
+          e === 'invalid_code' ? 'Código incorreto. Confira com o motorista.' :
+          e === 'shipment_not_found' ? 'Encomenda não encontrada.' :
+          e === 'no_base_handoff' ? 'Esta encomenda não passa por base.' :
+          e === 'not_delivered_to_base' ? 'O preparador ainda não entregou a encomenda na base.' :
+          e === 'not_authenticated' ? 'Faça login novamente.' :
+          'Não foi possível confirmar.';
+        setBaseHandoffError(msg);
+        return;
+      }
+      setBaseHandoffSuccessFor(baseHandoffOpenId);
+      setBaseHandoffOpenId(null);
+      setBaseHandoffPin('');
+      setBaseHandoffRefresh((t) => t + 1);
+      window.setTimeout(() => setBaseHandoffSuccessFor(null), 3000);
+    } catch (e: unknown) {
+      setBaseHandoffError((e as { message?: string } | null)?.message ?? 'Erro inesperado.');
+    } finally {
+      setBaseHandoffSubmitting(false);
+    }
+  }, [baseHandoffOpenId, baseHandoffPin]);
 
   /** Alinhado a `bookings.passenger_count`: titular + extras em `passenger_data`, sem duplicar nome do titular. */
   const passengerDisplayRows = useMemo(() => {
@@ -634,6 +721,105 @@ export default function ViagemDetalheScreen() {
       : React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
           ...linkedShipments.map(shipmentRow)));
 
+  // ── Retirada na base — código + validação ──────────────────────────
+  const fmtBaseDateTime = (iso: string | null): string => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
+  const shortShipmentId = (id: string) => id.slice(0, 8);
+  const baseHandoffRow = (h: BaseHandoff) => {
+    const isOpen = baseHandoffOpenId === h.id;
+    const isCompleted = !!h.picked_up_by_driver_from_base_at;
+    const isConfirmed = !!h.base_to_driver_confirmed_at;
+    const awaitingDelivery = !h.delivered_to_base_at;
+    const stateLabel = isCompleted ? 'Concluída'
+      : isConfirmed ? 'Aguardando motorista concluir'
+      : awaitingDelivery ? 'Aguardando preparador entregar na base'
+      : 'Aguardando confirmação da base';
+    const stateColor = isCompleted ? { bg: '#dcfce7', fg: '#166534' }
+      : isConfirmed ? { bg: '#dbeafe', fg: '#1e40af' }
+      : awaitingDelivery ? { bg: '#fef3c7', fg: '#92400e' }
+      : { bg: '#fee2e2', fg: '#991b1b' };
+    return React.createElement('div', {
+      key: h.id,
+      style: { border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, background: '#fff', display: 'flex', flexDirection: 'column' as const, gap: 12 },
+    },
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' as const } },
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+          React.createElement('div', { style: { fontSize: 12, color: '#767676', letterSpacing: 0.4, textTransform: 'uppercase' as const, fontFamily: 'Inter, sans-serif' } }, 'Encomenda ' + shortShipmentId(h.id)),
+          React.createElement('div', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' } }, h.recipient_name ?? 'Destinatário não informado'),
+          React.createElement('div', { style: { fontSize: 13, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Base: ' + (h.base_name ?? '—')),
+          React.createElement('div', { style: { fontSize: 12, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Entregue na base em ' + fmtBaseDateTime(h.delivered_to_base_at)),
+          isConfirmed ? React.createElement('div', { style: { fontSize: 12, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Base confirmou em ' + fmtBaseDateTime(h.base_to_driver_confirmed_at)) : null,
+          isCompleted ? React.createElement('div', { style: { fontSize: 12, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Motorista retirou em ' + fmtBaseDateTime(h.picked_up_by_driver_from_base_at)) : null,
+        ),
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, alignItems: 'flex-end', gap: 8 } },
+          React.createElement('span', { style: { fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 999, background: stateColor.bg, color: stateColor.fg, fontFamily: 'Inter, sans-serif' } }, stateLabel),
+          !isConfirmed && !isCompleted && !isOpen
+            ? React.createElement('button', {
+                onClick: () => {
+                  setBaseHandoffOpenId(h.id);
+                  setBaseHandoffPin('');
+                  setBaseHandoffError('');
+                  setBaseHandoffSuccessFor(null);
+                },
+                disabled: awaitingDelivery,
+                style: { backgroundColor: awaitingDelivery ? '#9ca3af' : '#0d0d0d', color: '#fff', padding: '10px 16px', borderRadius: 8, border: 'none', cursor: awaitingDelivery ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: 14, fontFamily: 'Inter, sans-serif' },
+              }, awaitingDelivery ? 'Aguardando preparador' : 'Validar PIN')
+            : null,
+        ),
+      ),
+      isOpen ? React.createElement('div', { style: { borderTop: '1px solid #e5e7eb', paddingTop: 12, display: 'flex', flexDirection: 'column' as const, gap: 10 } },
+        React.createElement('label', { style: { fontSize: 13, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' } }, 'PIN exibido no app do motorista'),
+        React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' as const } },
+          React.createElement('input', {
+            type: 'text',
+            inputMode: 'numeric' as const,
+            pattern: '[0-9]*',
+            maxLength: 4,
+            placeholder: 'Ex: 1234',
+            value: baseHandoffPin,
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+              const v = e.target.value.replace(/\D/g, '').slice(0, 4);
+              setBaseHandoffPin(v);
+              if (baseHandoffError) setBaseHandoffError('');
+            },
+            autoFocus: true,
+            disabled: baseHandoffSubmitting,
+            style: { width: 140, height: 44, borderRadius: 8, border: '1px solid #e5e7eb', background: '#f9fafb', padding: '0 16px', fontSize: 22, letterSpacing: 6, textAlign: 'center' as const, fontFamily: 'Inter, sans-serif', color: '#0d0d0d' },
+          }),
+          React.createElement('button', {
+            onClick: () => void handleBaseHandoffConfirm(),
+            disabled: baseHandoffSubmitting || baseHandoffPin.length !== 4,
+            style: { backgroundColor: baseHandoffPin.length === 4 ? '#0d0d0d' : '#9ca3af', color: '#fff', padding: '12px 20px', borderRadius: 8, border: 'none', cursor: baseHandoffPin.length === 4 && !baseHandoffSubmitting ? 'pointer' : 'not-allowed', fontWeight: 600, fontSize: 14, fontFamily: 'Inter, sans-serif' },
+          }, baseHandoffSubmitting ? 'Confirmando…' : 'Confirmar retirada'),
+          React.createElement('button', {
+            onClick: () => { setBaseHandoffOpenId(null); setBaseHandoffPin(''); setBaseHandoffError(''); },
+            disabled: baseHandoffSubmitting,
+            style: { backgroundColor: 'transparent', color: '#b53838', padding: '12px 16px', borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 500, fontSize: 14, fontFamily: 'Inter, sans-serif' },
+          }, 'Cancelar'),
+        ),
+        baseHandoffError ? React.createElement('div', { style: { color: '#b53838', fontSize: 13, fontFamily: 'Inter, sans-serif' } }, baseHandoffError) : null,
+      ) : null,
+    );
+  };
+
+  const retiradaBaseSection = React.createElement('div', { style: { ...webStyles.detailPassageirosSection, borderBottom: 'none' } },
+    React.createElement('h2', { style: webStyles.detailSectionTitle }, 'Retirada na base'),
+    React.createElement('p', { style: { fontSize: 14, color: '#767676', fontFamily: 'Inter, sans-serif', maxWidth: 720, lineHeight: 1.5, marginTop: -8, marginBottom: 16 } },
+      'Quando o motorista chegar à base para retirar a encomenda, peça para ele mostrar o PIN de 4 dígitos no app e digite aqui para liberar a retirada.'),
+    baseHandoffSuccessFor ? React.createElement('div', {
+      style: { background: '#dcfce7', color: '#166534', border: '1px solid #86efac', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 14, fontFamily: 'Inter, sans-serif' },
+    }, `Retirada confirmada para a encomenda ${shortShipmentId(baseHandoffSuccessFor)}.`) : null,
+    baseHandoffs.length === 0
+      ? React.createElement('div', {
+          style: { background: '#f9fafb', border: '1px dashed #e5e7eb', borderRadius: 12, padding: 20, color: '#767676', fontSize: 14, fontFamily: 'Inter, sans-serif', lineHeight: 1.5 },
+        }, 'Nenhuma encomenda desta viagem passa por base. A validação aparece aqui quando uma encomenda com `base_id` for atribuída a esta viagem agendada.')
+      : React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12 } },
+          ...baseHandoffs.map(baseHandoffRow)));
+
   const imageZoomModal = imageZoomOpen
     ? React.createElement('div', {
         style: {
@@ -740,10 +926,10 @@ export default function ViagemDetalheScreen() {
       }, 'Confirmar substituição')));
 
   const contextSections = isMotoristas
-    ? [motoristasDispSection, passageirosSection, encomendasSection]
+    ? [motoristasDispSection, passageirosSection, encomendasSection, retiradaBaseSection]
     : isPassageiros
-    ? [passageirosSection, motoristaSection, encomendasSection]
-    : [motoristaSection, passageirosSection, encomendasSection];
+    ? [passageirosSection, motoristaSection, encomendasSection, retiradaBaseSection]
+    : [motoristaSection, passageirosSection, encomendasSection, retiradaBaseSection];
 
   const docToastEl = docActionToast
     ? React.createElement('div', {

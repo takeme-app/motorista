@@ -752,6 +752,17 @@ class ExpoMapboxNavigationView(context: Context, appContext: AppContext) :
         }
 
         override fun onFailure(reasons: List<RouterFailure>, routeOptions: RouteOptions) {
+          // Se já existe uma rota ativa (calculada quando estávamos online),
+          // a sessão de navegação atual continua válida — polyline, posição e
+          // manobras pré-calculadas funcionam offline. Não dispara onCancel
+          // para o JS, que cairia em `fallbackToLegacyNavigation` e tiraria o
+          // motorista da SDK no meio da viagem assim que a rede oscilasse.
+          // Quando ainda não há rotas (primeira tentativa), o fallback é o
+          // caminho correto.
+          val hasActiveRoutes = mapboxNavigation?.getNavigationRoutes()?.isNotEmpty() == true
+          if (hasActiveRoutes) {
+            return
+          }
           onCancel(
             mapOf(
               "reason" to "error",

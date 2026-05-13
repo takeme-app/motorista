@@ -32,6 +32,10 @@ import {
 import type { LatLng, MapRegion } from '../../components/googleMaps';
 import { getGoogleMapsApiKey, getMapboxAccessToken } from '../../lib/googleMapsConfig';
 import { getRouteWithDuration } from '../../lib/route';
+import { getCachedRoute, setCachedRoute, hashWaypoints } from '../../lib/routeCache';
+import { useNetworkStatus } from '../../hooks/useNetworkStatus';
+import { useRouteOfflinePack } from '../../hooks/useRouteOfflinePack';
+import { MapNetworkBadge } from '../../components/MapNetworkBadge';
 import { formatShipmentCode } from '@take-me/shared';
 
 let Location: any = null;
@@ -200,11 +204,34 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
       isValidGlobeCoordinate(originCoord.latitude, originCoord.longitude) &&
       isValidGlobeCoordinate(routeEnd.latitude, routeEnd.longitude)
     ) {
+      // Hidrata do cache primeiro (instantâneo, funciona offline).
+      const cached = await getCachedRoute(`shipment-${shipmentId}`);
+      if (cached?.coordinates?.length) setRouteCoords(cached.coordinates);
+
       const routeOpts = { mapboxToken: getMapboxAccessToken(), googleMapsApiKey: getGoogleMapsApiKey() };
       const res = await getRouteWithDuration(originCoord, routeEnd, routeOpts);
-      if (res?.coordinates?.length) setRouteCoords(res.coordinates);
+      if (res?.coordinates?.length) {
+        setRouteCoords(res.coordinates);
+        const waypointsHash = await hashWaypoints([originCoord, routeEnd]);
+        await setCachedRoute(`shipment-${shipmentId}`, {
+          coordinates: res.coordinates,
+          durationSeconds: res.durationSeconds,
+          computedAt: Date.now(),
+          waypointsHash,
+        });
+      }
     }
   }, [shipmentId]);
+
+  const { online: isOnline } = useNetworkStatus();
+  /** Pack de tiles offline cobrindo a rota da encomenda. */
+  useRouteOfflinePack({
+    packName: shipmentId ? `shipment-${shipmentId}` : null,
+    coords: routeCoords,
+    enabled: isOnline,
+  });
+  const networkBadgeState =
+    isOnline ? 'online' : routeCoords.length >= 2 ? 'offline-cached' : 'offline-no-cache';
 
   useEffect(() => { load(); }, [load]);
 
@@ -374,6 +401,11 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
                       }}
                     />
                   </View>
+                  {!isOnline && (
+                    <View style={{ position: 'absolute', top: 12, alignSelf: 'center' }} pointerEvents="none">
+                      <MapNetworkBadge state={networkBadgeState} />
+                    </View>
+                  )}
                 </View>
                 </View>
               </>

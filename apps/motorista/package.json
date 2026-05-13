@@ -65,5 +65,13 @@
     "eslint": "^9.0.0",
     "eslint-config-expo": "~10.0.0",
     "typescript": "~5.9.2"
+  },
+  "expo": {
+    "autolinking": {
+      "exclude": [
+        "expo-updates",
+        "expo-eas-client"
+      ]
+    }
   }
 }

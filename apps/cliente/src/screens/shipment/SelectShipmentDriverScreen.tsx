@@ -70,6 +70,7 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
       originLng: origin.longitude,
       destinationLat: destination.latitude,
       destinationLng: destination.longitude,
+      bagsOnly: true,
     });
     if (err) setDriversError(err);
     setItems(list);

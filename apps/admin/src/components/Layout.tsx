@@ -16,6 +16,7 @@ const navTabsList = [
   { label: 'Motoristas', path: '/motoristas' },
   { label: 'Destinos', path: '/destinos' },
   { label: 'Encomendas', path: '/encomendas' },
+  { label: 'Retirada Motorista', path: '/retirada-motorista' },
   { label: 'Preparadores', path: '/preparadores' },
   { label: 'Promoções', path: '/promocoes' },
   { label: 'Pagamentos', path: '/pagamentos' },

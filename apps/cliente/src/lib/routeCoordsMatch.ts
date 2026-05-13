@@ -18,13 +18,19 @@ export function haversineDistanceMeters(
 }
 
 /**
- * Mesma rota para efeito de envio / fila de motoristas: origem e destino próximos o suficiente
- * (geocodificação do cliente vs pontos gravados na viagem costumam diferir centenas de metros).
+ * Mesma rota para efeito de envio / fila de motoristas: origem e destino próximos o suficiente.
+ *
+ * Tolerância 15 000 m em cada extremo — paridade com o fluxo de Viagens
+ * (`SearchTripScreen` usa caixa de ~0.15° = ~16.5 km lat). Antes era 1500 m,
+ * mas geocoding do mesmo endereço em devices/providers diferentes costuma
+ * variar 300–1 000 m — fazia a viagem do motorista \"sumir\" em Encomendas/
+ * Dependentes em um device mas não em outro, mesmo com Viagens funcionando.
+ * Tem que casar com `public.shipment_same_route_as_trip` no banco.
  */
 export function sameShipmentRouteCoords(
   a: { originLat: number; originLng: number; destinationLat: number; destinationLng: number },
   b: { originLat: number; originLng: number; destinationLat: number; destinationLng: number },
-  maxEndpointMeters = 1500
+  maxEndpointMeters = 15_000
 ): boolean {
   return (
     haversineDistanceMeters(a.originLat, a.originLng, b.originLat, b.originLng) <= maxEndpointMeters &&
