@@ -16,7 +16,6 @@ import MotoristasScreen from './screens/MotoristasScreen';
 import MotoristaEditScreen from './screens/MotoristaEditScreen';
 import DestinosScreen from './screens/DestinosScreen';
 import EncomendasScreen from './screens/EncomendasScreen';
-import RetiradaMotoristaScreen from './screens/RetiradaMotoristaScreen';
 import PreparadoresScreen from './screens/PreparadoresScreen';
 import PreparadorEditScreen from './screens/PreparadorEditScreen';
 import PromocoesScreen from './screens/PromocoesScreen';
@@ -28,6 +27,7 @@ import PagamentoPreparadorEncomendaDetailScreen from './screens/PagamentoPrepara
 import PagamentoMotoristaDetailScreen from './screens/PagamentoMotoristaDetailScreen';
 import MultasMotoristasScreen from './screens/MultasMotoristasScreen';
 import EncomendaEditScreen from './screens/EncomendaEditScreen';
+import EncomendaDetalheScreen from './screens/EncomendaDetalheScreen';
 import PlaceholderScreen from './screens/PlaceholderScreen';
 import AtendimentosScreen from './screens/AtendimentosScreen';
 import AtendimentoDetalheScreen from './screens/AtendimentoDetalheScreen';
@@ -68,7 +68,7 @@ export const router = createBrowserRouter([
           { path: '/motoristas/:id/editar', element: React.createElement(MotoristaEditScreen) },
           { path: '/destinos', element: React.createElement(DestinosScreen) },
           { path: '/encomendas', element: React.createElement(EncomendasScreen) },
-          { path: '/retirada-motorista', element: React.createElement(RetiradaMotoristaScreen) },
+          { path: '/encomendas/:id', element: React.createElement(EncomendaDetalheScreen) },
           { path: '/encomendas/:id/editar', element: React.createElement(EncomendaEditScreen) },
           { path: '/encomendas/:eid/viagem/:id', element: React.createElement(ViagemDetalheScreen) },
           { path: '/preparadores', element: React.createElement(PreparadoresScreen) },

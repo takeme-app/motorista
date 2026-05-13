@@ -8,8 +8,14 @@ import {
   webStyles,
   filterIconSvg,
 } from '../styles/webStyles';
-import { fetchMotoristas, fetchMotoristaTableRows, fetchAllMotoristaProfiles, updateWorkerStatus } from '../data/queries';
-import type { MotoristaListItem, WorkerApprovalRow, WorkerApprovalStatus } from '../data/types';
+import {
+  fetchMotoristas,
+  fetchMotoristaTableRows,
+  fetchAllMotoristaProfiles,
+  fetchMotoristasComTaxaPlataformaDevida,
+  updateWorkerStatus,
+} from '../data/queries';
+import type { MotoristaListItem, MotoristaPlatformFeeDebtItem, WorkerApprovalRow, WorkerApprovalStatus } from '../data/types';
 import type { MotoristaTableRow } from '../data/queries';
 import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
 import { supabase } from '../lib/supabase';
@@ -57,6 +63,7 @@ export default function MotoristasScreen() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [cadastrosSearch, setCadastrosSearch] = useState('');
   const [resolvedAvatars, setResolvedAvatars] = useState<Record<string, string>>({});
+  const [platformFeeDebts, setPlatformFeeDebts] = useState<MotoristaPlatformFeeDebtItem[]>([]);
   useEffect(() => {
     const paths = [...new Set([
       ...tableData.map((t) => t.avatarUrl).filter(Boolean),
@@ -78,11 +85,17 @@ export default function MotoristasScreen() {
   useEffect(() => {
     let cancelled = false;
     setProfilesLoading(true);
-    Promise.all([fetchMotoristas(), fetchMotoristaTableRows(), fetchAllMotoristaProfiles()]).then(([stats, rows, profiles]) => {
+    Promise.all([
+      fetchMotoristas(),
+      fetchMotoristaTableRows(),
+      fetchAllMotoristaProfiles(),
+      fetchMotoristasComTaxaPlataformaDevida(),
+    ]).then(([stats, rows, profiles, debts]) => {
       if (!cancelled) {
         setMotoristasData(stats);
         setTableData(rows);
         setAllProfiles(profiles);
+        setPlatformFeeDebts(debts);
         setDataLoading(false);
         setProfilesLoading(false);
       }
@@ -569,6 +582,58 @@ export default function MotoristasScreen() {
     ...font,
   };
 
+  const fmtBRLDebt = (cents: number) =>
+    `R$ ${(cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  const platformFeeDebtsSection = platformFeeDebts.length === 0
+    ? null
+    : React.createElement('div', { style: { width: '100%', marginBottom: 24 } },
+        React.createElement('div', {
+          style: {
+            background: '#fff8f1',
+            borderRadius: 16,
+            padding: '20px 24px',
+            border: '1px solid #fed7aa',
+            boxSizing: 'border-box' as const,
+          },
+        },
+          React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: '0 0 8px', ...font } }, 'Saldo devido à plataforma (taxa em viagens a dinheiro)'),
+          React.createElement('p', { style: { fontSize: 13, color: '#78716c', margin: '0 0 16px', lineHeight: 1.45, ...font } },
+            'Listagem de motoristas com saldo de taxa maior que zero. Use “Ver detalhe” para o ledger e quitação manual.'),
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10 } },
+            ...platformFeeDebts.map((d) =>
+              React.createElement('div', {
+                key: d.id,
+                style: {
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  flexWrap: 'wrap' as const,
+                  padding: '10px 12px',
+                  background: '#fff',
+                  borderRadius: 10,
+                  border: '1px solid #fde68a',
+                },
+              },
+                React.createElement('span', { style: { fontWeight: 500, fontSize: 14, ...font, flex: '1 1 120px', minWidth: 0 } }, d.nome),
+                React.createElement('span', { style: { fontWeight: 700, fontSize: 14, color: '#b45309', ...font } }, fmtBRLDebt(d.platformFeeOwedCents)),
+                React.createElement('button', {
+                  type: 'button',
+                  onClick: () => navigate(`/motoristas/${d.id}/editar`),
+                  style: {
+                    padding: '8px 14px',
+                    borderRadius: 8,
+                    border: 'none',
+                    background: '#0d0d0d',
+                    color: '#fff',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    ...font,
+                  },
+                }, 'Ver detalhe'))))));
+
   const cadastroTitleRight = React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' as const, justifyContent: 'flex-end' } },
     pendingCount > 0
       ? React.createElement('span', { style: { background: '#fef3c7', color: '#92400e', borderRadius: 999, fontSize: 12, fontWeight: 700, padding: '4px 10px', ...font } }, `${pendingCount} pendente${pendingCount === 1 ? '' : 's'}`)
@@ -709,6 +774,7 @@ export default function MotoristasScreen() {
     metricCards,
     secondRow,
     chartSection,
+    platformFeeDebtsSection,
     motoristasCadastradosSection,
     trocarMotoristaPanel,
     filtroModal,

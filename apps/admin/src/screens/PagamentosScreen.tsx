@@ -918,10 +918,10 @@ export default function PagamentosScreen() {
           dryRunRow('Connect — bookings pagos no charge', dryRunPreview.stripe_connect_auto_paid),
           dryRunRow('Sem Connect — para PIX manual (processing)', dryRunPreview.manual_pix_processing),
           confirmMode === 'manual_pix_confirm'
-            ? dryRunRow('Sem Connect — serão marcados paid', dryRunPreview.manual_pix_paid, true)
+            ? dryRunRow('Sem Connect — serão marcados paid', dryRunPreview.manual_pix_paid ?? 0, true)
             : null,
           dryRunPreview.below_threshold_skipped
-            ? dryRunRow('Abaixo do limite — ignorados', dryRunPreview.below_threshold_skipped)
+            ? dryRunRow('Abaixo do limite — ignorados', dryRunPreview.below_threshold_skipped ?? 0)
             : null)
       : null;
 

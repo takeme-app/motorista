@@ -14,13 +14,34 @@ import {
   deleteWorkerRoute,
   saveProfileFields,
   saveWorkerProfileFields,
+  fetchDriverPlatformFeeLedger,
+  adminManualSettlePlatformFee,
 } from '../data/queries';
 import PlacesAddressInput from '../components/PlacesAddressInput';
 import StripeConnectCard from '../components/StripeConnectCard';
-import type { WorkerConnectStatus } from '../data/types';
+import type { WorkerConnectStatus, DriverPlatformFeeLedgerRow } from '../data/types';
 import { getGoogleMapsApiKey } from '../lib/expoExtra';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
+
+function parseBRLInputToCents(s: string): number | null {
+  const trimmed = s.trim();
+  if (!trimmed) return null;
+  const normalized = trimmed.replace(/\./g, '').replace(',', '.');
+  const n = Number.parseFloat(normalized);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n * 100);
+}
+
+function ledgerNotePt(note: string): string {
+  const map: Record<string, string> = {
+    cash_trip_completed: 'Taxa (viagem em dinheiro concluída)',
+    connect_charge_abate: 'Abate Connect',
+    manual_adjustment: 'Quitação manual',
+    refund_revert: 'Estorno (reversão)',
+  };
+  return map[note] ?? note;
+}
 
 function fmtMotoristaHistWhen(iso: string | null | undefined): string {
   if (!iso) return '—';
@@ -155,6 +176,29 @@ export default function MotoristaEditScreen() {
     vehicle: string | null;
   }>({ cnhFront: null, cnhBack: null, background: null, vehicle: null });
   const [docLinksLoading, setDocLinksLoading] = useState(false);
+  const [platformFeeLedger, setPlatformFeeLedger] = useState<DriverPlatformFeeLedgerRow[]>([]);
+  const [settleOpen, setSettleOpen] = useState(false);
+  const [settleInput, setSettleInput] = useState('');
+  const [settleBusy, setSettleBusy] = useState(false);
+  const [settleErr, setSettleErr] = useState<string | null>(null);
+  const [pfToast, setPfToast] = useState<string | null>(null);
+
+  const loadPlatformFeeLedger = useCallback(async () => {
+    if (!id) return;
+    const rows = await fetchDriverPlatformFeeLedger(id, 100);
+    setPlatformFeeLedger(rows);
+  }, [id]);
+
+  useEffect(() => {
+    if (!id || loading) return;
+    void loadPlatformFeeLedger();
+  }, [id, loading, loadPlatformFeeLedger]);
+
+  useEffect(() => {
+    if (!pfToast) return;
+    const t = setTimeout(() => setPfToast(null), 3500);
+    return () => clearTimeout(t);
+  }, [pfToast]);
 
   useEffect(() => {
     if (!id) return;
@@ -839,13 +883,16 @@ export default function MotoristaEditScreen() {
     ? React.createElement(StripeConnectCard, {
         workerId: id,
         connect: connectStatus,
-        onSynced: (next) => setWorker((prev: any) => prev ? {
-          ...prev,
-          stripe_connect_charges_enabled: next.chargesEnabled,
-          stripe_connect_payouts_enabled: next.payoutsEnabled,
-          stripe_connect_details_submitted: next.detailsSubmitted,
-          stripe_connect_account_id: next.accountId ?? prev.stripe_connect_account_id,
-        } : prev),
+        onSynced: (next) => {
+          setWorker((prev: any) => prev ? {
+            ...prev,
+            stripe_connect_charges_enabled: next.chargesEnabled,
+            stripe_connect_payouts_enabled: next.payoutsEnabled,
+            stripe_connect_details_submitted: next.detailsSubmitted,
+            stripe_connect_account_id: next.accountId ?? prev.stripe_connect_account_id,
+          } : prev);
+          void loadPlatformFeeLedger();
+        },
       })
     : null;
 
@@ -855,6 +902,147 @@ export default function MotoristaEditScreen() {
     React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, width: '100%', ...font } }, 'Dados do Motorista'),
     dadosInnerCard,
     stripeConnectSection);
+
+  const platformFeeOwed = Math.max(0, Math.round(Number((worker as any)?.platform_fee_owed_cents ?? 0)));
+  const fmtPlatformBRL = (cents: number) =>
+    `R$ ${(cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  const handleConfirmSettle = useCallback(async () => {
+    if (!id) return;
+    setSettleErr(null);
+    const cents = parseBRLInputToCents(settleInput);
+    if (cents == null) {
+      setSettleErr('Informe um valor válido em reais.');
+      return;
+    }
+    const owed = Math.max(0, Math.round(Number((worker as any)?.platform_fee_owed_cents ?? 0)));
+    if (cents > owed) {
+      setSettleErr(`Máximo: ${fmtPlatformBRL(owed)}`);
+      return;
+    }
+    setSettleBusy(true);
+    try {
+      const res = await adminManualSettlePlatformFee(id, cents);
+      if (!res.ok) {
+        setSettleErr(res.error ?? 'Falha ao quitar.');
+        return;
+      }
+      setWorker((prev: any) => (prev ? { ...prev, platform_fee_owed_cents: res.owedAfter ?? 0 } : prev));
+      setSettleOpen(false);
+      setSettleInput('');
+      setPfToast(`Quitado ${fmtPlatformBRL(res.settledCents ?? 0)}. Saldo: ${fmtPlatformBRL(res.owedAfter ?? 0)}.`);
+      await loadPlatformFeeLedger();
+    } finally {
+      setSettleBusy(false);
+    }
+  }, [id, worker, settleInput, loadPlatformFeeLedger]);
+
+  const platformFeeSection = id
+    ? React.createElement('div', {
+        style: {
+          display: 'flex', flexDirection: 'column' as const, gap: 16,
+          paddingBottom: 32, borderBottom: '1px solid #e2e2e2', width: '100%', boxSizing: 'border-box' as const,
+        },
+      },
+        React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Taxa da plataforma (dinheiro)'),
+        React.createElement('p', { style: { fontSize: 13, color: '#78716c', margin: 0, lineHeight: 1.45, ...font } },
+          'Saldo devido acumula em viagens concluídas pagas em dinheiro; é abatido em corridas com cartão ou Pix quando o Connect está ativo, ou pode ser quitado manualmente.'),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 16, flexWrap: 'wrap' as const } },
+          React.createElement('span', { style: { fontSize: 14, fontWeight: 500, ...font } }, 'Saldo atual:'),
+          React.createElement('span', { style: { fontSize: 22, fontWeight: 700, color: platformFeeOwed > 0 ? '#b45309' : '#0d8344', ...font } }, fmtPlatformBRL(platformFeeOwed)),
+          platformFeeOwed > 0
+            ? React.createElement('button', {
+                type: 'button',
+                onClick: () => { setSettleErr(null); setSettleInput(''); setSettleOpen(true); },
+                style: {
+                  marginLeft: 8,
+                  padding: '8px 16px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: '#0d0d0d',
+                  color: '#fff',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  ...font,
+                },
+              }, 'Quitar saldo')
+            : null),
+        React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: '8px 0 0', ...font } }, 'Movimentos recentes'),
+        platformFeeLedger.length === 0
+          ? React.createElement('p', { style: { fontSize: 13, color: '#767676', margin: 0, ...font } }, 'Sem lançamentos no ledger (ou sem permissão de leitura).')
+          : React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, border: '1px solid #e2e2e2', borderRadius: 12, overflow: 'hidden', background: '#fff' } },
+              ...platformFeeLedger.map((row, idx) =>
+                React.createElement('div', {
+                  key: row.id,
+                  style: {
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.2fr) auto auto',
+                    gap: 8,
+                    padding: '12px 14px',
+                    borderBottom: idx < platformFeeLedger.length - 1 ? '1px solid #f1f1f1' : undefined,
+                    fontSize: 13,
+                    ...font,
+                    alignItems: 'center',
+                  },
+                },
+                  React.createElement('span', { style: { color: '#57534e' } }, fmtMotoristaHistWhen(row.createdAt)),
+                  React.createElement('span', { style: { fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, ledgerNotePt(row.note)),
+                  React.createElement('span', { style: { fontWeight: 700, color: row.kind === 'credit' ? '#b45309' : '#0d8344' } }, `${row.kind === 'credit' ? '+' : '−'}${fmtPlatformBRL(row.amountCents)}`),
+                  row.bookingId
+                    ? React.createElement('button', {
+                        type: 'button',
+                        onClick: () => navigate(`/viagens/${row.bookingId}`),
+                        style: { border: 'none', background: 'none', color: '#016df9', cursor: 'pointer', fontSize: 12, fontWeight: 600, textDecoration: 'underline', justifySelf: 'end' },
+                      }, 'Reserva')
+                    : React.createElement('span', { style: { color: '#a3a3a3', fontSize: 12 } }, '—')))))
+    : null;
+
+  const settleModal = settleOpen && id
+    ? React.createElement('div', {
+        style: {
+          position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 10000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+        },
+        onClick: () => !settleBusy && setSettleOpen(false),
+        role: 'presentation',
+      },
+        React.createElement('div', {
+          style: { background: '#fff', borderRadius: 16, padding: 24, maxWidth: 400, width: '100%', boxShadow: '0 8px 32px rgba(0,0,0,0.2)', ...font },
+          onClick: (e: React.MouseEvent) => e.stopPropagation(),
+        },
+          React.createElement('h3', { style: { margin: '0 0 8px', fontSize: 18, fontWeight: 600 } }, 'Quitar saldo devido'),
+          React.createElement('p', { style: { margin: '0 0 16px', fontSize: 14, color: '#57534e', lineHeight: 1.45 } },
+            `Máximo: ${fmtPlatformBRL(platformFeeOwed)}. Será registada uma linha de débito (nota manual_adjustment).`),
+          React.createElement('label', { style: { display: 'block', fontSize: 13, fontWeight: 500, marginBottom: 6 } }, 'Valor (R$)'),
+          React.createElement('input', {
+            type: 'text',
+            value: settleInput,
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setSettleInput(e.target.value),
+            placeholder: '0,00',
+            style: { width: '100%', height: 44, borderRadius: 8, border: '1px solid #e2e2e2', padding: '0 12px', fontSize: 16, boxSizing: 'border-box' as const, marginBottom: 8 },
+            disabled: settleBusy,
+          }),
+          settleErr ? React.createElement('p', { style: { color: '#b53838', fontSize: 13, margin: '0 0 12px' } }, settleErr) : null,
+          React.createElement('div', { style: { display: 'flex', gap: 10, marginTop: 12 } },
+            React.createElement('button', {
+              type: 'button', onClick: () => !settleBusy && setSettleOpen(false), disabled: settleBusy,
+              style: { flex: 1, height: 44, borderRadius: 8, border: '1px solid #e2e2e2', background: '#fff', cursor: 'pointer', fontWeight: 600 },
+            }, 'Cancelar'),
+            React.createElement('button', {
+              type: 'button', onClick: () => { void handleConfirmSettle(); }, disabled: settleBusy,
+              style: { flex: 1, height: 44, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', cursor: 'pointer', fontWeight: 600 },
+            }, settleBusy ? '…' : 'Confirmar'))))
+    : null;
+
+  const pfToastEl = pfToast
+    ? React.createElement('div', {
+        style: {
+          position: 'fixed' as const, bottom: 28, left: '50%', transform: 'translateX(-50%)', zIndex: 10001,
+          background: '#0d0d0d', color: '#fff', padding: '12px 20px', borderRadius: 10, fontSize: 14, fontWeight: 600, maxWidth: '90vw', ...font,
+        },
+      }, pfToast)
+    : null;
 
   // ── Fotos do veículo: DB pode ter paths (FinalizeRegistration) ou URLs públicas (VehicleForm) ──
   const rawPhotoCount =
@@ -1737,8 +1925,10 @@ export default function MotoristaEditScreen() {
       breadcrumb, header, toast, saveErrorBanner),
     statusActions,
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 32, width: '100%' } },
-      dadosSection, photosSection, routesSection, vehiclesSection, metricsSection, historicoSection),
+      dadosSection, platformFeeSection, photosSection, routesSection, vehiclesSection, metricsSection, historicoSection),
     newRouteModal,
     deleteRouteModal,
-    newVehicleModal);
+    newVehicleModal,
+    settleModal,
+    pfToastEl);
 }

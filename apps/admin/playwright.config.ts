@@ -2,11 +2,10 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { defineConfig, devices } from '@playwright/test';
 
-// Credenciais E2E: `apps/admin/.env` ou `.env` na raiz do repo; o admin sobrepõe a raiz.
-dotenv.config({ path: path.join(__dirname, '../..', '.env') });
+// Credenciais E2E: `.env` na raiz deste repositório.
 dotenv.config({ path: path.join(__dirname, '.env') });
 
-/** Porta própria evita colisão com `expo start --web` habitual (8081). */
+/** Porta própria evita colisão com cliente (8081) / motorista (8083); admin manual usa 8090. */
 const e2ePort = process.env.PLAYWRIGHT_PORT ?? '9323';
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${e2ePort}`;
 const storageStatePath = path.join(__dirname, 'e2e/.auth/admin.json');

@@ -10,6 +10,26 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
+/** Linha de `public.fiscal_documents` (Spedy + Stripe). */
+export type FiscalDocumentRow = {
+  authorized_at: string | null
+  created_at: string
+  entity_id: string
+  entity_type: string
+  id: string
+  integration_id: string
+  last_spedy_event_id: string | null
+  processing_code: string | null
+  processing_message: string | null
+  spedy_document_kind: string
+  spedy_invoice_id: string | null
+  spedy_invoice_model: string | null
+  spedy_order_id: string | null
+  status: string
+  stripe_payment_intent_id: string
+  updated_at: string
+}
+
 export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
@@ -91,6 +111,7 @@ export type Database = {
       }
       bookings: {
         Row: {
+          admin_earning_cents: number
           amount_cents: number
           bags_count: number
           cancellation_reason: string | null
@@ -105,7 +126,9 @@ export type Database = {
           paid_at: string | null
           passenger_count: number
           passenger_data: Json
+          payment_method: string
           payment_method_id: string | null
+          platform_fee_extra_debit_cents: number
           scheduled_trip_id: string
           status: string
           stripe_payment_intent_id: string | null
@@ -113,6 +136,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          admin_earning_cents?: number
           amount_cents: number
           bags_count: number
           cancellation_reason?: string | null
@@ -127,7 +151,9 @@ export type Database = {
           paid_at?: string | null
           passenger_count: number
           passenger_data?: Json
+          payment_method?: string
           payment_method_id?: string | null
+          platform_fee_extra_debit_cents?: number
           scheduled_trip_id: string
           status?: string
           stripe_payment_intent_id?: string | null
@@ -135,6 +161,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          admin_earning_cents?: number
           amount_cents?: number
           bags_count?: number
           cancellation_reason?: string | null
@@ -149,7 +176,9 @@ export type Database = {
           paid_at?: string | null
           passenger_count?: number
           passenger_data?: Json
+          payment_method?: string
           payment_method_id?: string | null
+          platform_fee_extra_debit_cents?: number
           scheduled_trip_id?: string
           status?: string
           stripe_payment_intent_id?: string | null
@@ -211,6 +240,7 @@ export type Database = {
           scheduled_at: string | null
           scheduled_trip_id: string | null
           status: string
+          stripe_payment_intent_id: string | null
           tip_cents: number | null
           user_id: string
           when_option: string
@@ -237,6 +267,7 @@ export type Database = {
           scheduled_at?: string | null
           scheduled_trip_id?: string | null
           status?: string
+          stripe_payment_intent_id?: string | null
           tip_cents?: number | null
           user_id: string
           when_option: string
@@ -263,6 +294,7 @@ export type Database = {
           scheduled_at?: string | null
           scheduled_trip_id?: string | null
           status?: string
+          stripe_payment_intent_id?: string | null
           tip_cents?: number | null
           user_id?: string
           when_option?: string
@@ -435,6 +467,7 @@ export type Database = {
           scheduled_departure_at: string | null
           special_needs_team: boolean
           status: string
+          stripe_payment_intent_id: string | null
           sub_status: string | null
           total_amount_cents: number | null
           user_id: string
@@ -462,6 +495,7 @@ export type Database = {
           scheduled_departure_at?: string | null
           special_needs_team?: boolean
           status?: string
+          stripe_payment_intent_id?: string | null
           sub_status?: string | null
           total_amount_cents?: number | null
           user_id: string
@@ -489,6 +523,7 @@ export type Database = {
           scheduled_departure_at?: string | null
           special_needs_team?: boolean
           status?: string
+          stripe_payment_intent_id?: string | null
           sub_status?: string | null
           total_amount_cents?: number | null
           user_id?: string
@@ -503,6 +538,61 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      fiscal_documents: {
+        Row: FiscalDocumentRow
+        Insert: {
+          authorized_at?: string | null
+          created_at?: string
+          entity_id: string
+          entity_type: string
+          id?: string
+          integration_id: string
+          last_spedy_event_id?: string | null
+          processing_code?: string | null
+          processing_message?: string | null
+          spedy_document_kind?: string
+          spedy_invoice_id?: string | null
+          spedy_invoice_model?: string | null
+          spedy_order_id?: string | null
+          status?: string
+          stripe_payment_intent_id: string
+          updated_at?: string
+        }
+        Update: {
+          authorized_at?: string | null
+          created_at?: string
+          entity_id?: string
+          entity_type?: string
+          id?: string
+          integration_id?: string
+          last_spedy_event_id?: string | null
+          processing_code?: string | null
+          processing_message?: string | null
+          spedy_document_kind?: string
+          spedy_invoice_id?: string | null
+          spedy_invoice_model?: string | null
+          spedy_order_id?: string | null
+          status?: string
+          stripe_payment_intent_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      fiscal_spedy_webhook_events: {
+        Row: {
+          received_at: string
+          spedy_event_id: string
+        }
+        Insert: {
+          received_at?: string
+          spedy_event_id: string
+        }
+        Update: {
+          received_at?: string
+          spedy_event_id?: string
+        }
+        Relationships: []
       }
       notification_preferences: {
         Row: {
@@ -842,6 +932,7 @@ export type Database = {
           scheduled_at: string | null
           scheduled_trip_id: string | null
           status: string
+          stripe_payment_intent_id: string | null
           tip_cents: number | null
           user_id: string
           when_option: string
@@ -876,6 +967,7 @@ export type Database = {
           scheduled_at?: string | null
           scheduled_trip_id?: string | null
           status?: string
+          stripe_payment_intent_id?: string | null
           tip_cents?: number | null
           user_id: string
           when_option: string
@@ -910,6 +1002,7 @@ export type Database = {
           scheduled_at?: string | null
           scheduled_trip_id?: string | null
           status?: string
+          stripe_payment_intent_id?: string | null
           tip_cents?: number | null
           user_id?: string
           when_option?: string
@@ -1001,6 +1094,28 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      enqueue_fiscal_document: {
+        Args: {
+          p_entity_id: string
+          p_entity_type: string
+          p_stripe_payment_intent_id: string
+        }
+        Returns: FiscalDocumentRow
+      }
+      fiscal_document_for_entity: {
+        Args: {
+          p_entity_id: string
+          p_entity_type: string
+        }
+        Returns: FiscalDocumentRow
+      }
+      fiscal_integration_id: {
+        Args: {
+          p_entity_id: string
+          p_entity_type: string
+        }
+        Returns: string
+      }
       upsert_profile_fcm_token: {
         Args: {
           p_app_slug?: string

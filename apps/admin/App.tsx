@@ -83,8 +83,17 @@ export default function App() {
     setLoading(true);
     try {
       if (input.includes('@')) {
-        const { data, error } = await supabase.auth.signInWithPassword({ email: input, password });
-        if (error || !data?.session) { setEmailError('E-mail incorreto'); setPasswordError('Senha incorreta'); setLoading(false); return; }
+        const emailNorm = input.trim().toLowerCase();
+        const { data, error: fnErr } = await supabase.functions.invoke('login-with-email', {
+          body: { email: emailNorm, password },
+        });
+        if (fnErr || data?.error || !data?.session) {
+          setEmailError('E-mail incorreto');
+          setPasswordError('Senha incorreta');
+          setLoading(false);
+          return;
+        }
+        await supabase.auth.setSession(data.session);
       } else {
         const phone = input.replace(/\D/g, '');
         const { data, error: fnErr } = await supabase.functions.invoke('login-with-phone', { body: { phone, password } });

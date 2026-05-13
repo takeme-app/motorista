@@ -66,7 +66,7 @@ const cols = [
 
 function itemsToRows(items: ViagemListItem[]): TripRow[] {
   return items.map((v) => ({
-    id: `#${String(v.bookingId).slice(0, 8)}`,
+    id: `#${String(v.bookingId || v.tripId).slice(0, 8)}`,
     rota: `${v.origem} → ${v.destino}`,
     data: v.data,
     horarios: `${v.embarque} → ${v.chegada}`,
@@ -297,11 +297,12 @@ export default function HistoricoViagensScreen() {
       key: c.label, style: { flex: c.flex, fontSize: 12, fontWeight: 400, color: '#767676', ...font, padding: '0 6px', display: 'flex', alignItems: 'center' },
     }, c.label)));
 
-  const tableRows = trips.map((t, idx) => {
+  const tableRows = items.map((v, idx) => {
+    const t = trips[idx];
     const st = statusStyle[t.status] || statusStyle['Agendado'];
     const rowBg = idx % 2 === 0 ? '#ffffff' : '#f6f6f6';
     return React.createElement('div', {
-      key: idx,
+      key: `${String(v.bookingId || '')}:${v.tripId}:${idx}`,
       style: { display: 'flex', minHeight: 56, alignItems: 'center', padding: '6px 16px', borderBottom: '1px solid #e8e8e8', background: rowBg },
     },
       React.createElement('div', { style: { ...cellBase, flex: cols[0].flex, fontWeight: 600 } }, t.id),

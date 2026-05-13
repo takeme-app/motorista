@@ -58,9 +58,6 @@ export type TrechoData = {
   dataHoraRetorno: string;
   pctMotorista: string;
   pctAdmin: string;
-  payPix: boolean;
-  payCartao: boolean;
-  payDebito: boolean;
 };
 
 export type EditarTabelaTrechoModalProps = {
@@ -78,9 +75,6 @@ export default function EditarTabelaTrechoModal({ open, onClose, trecho, onSave 
   const [dataHoraRetorno, setDataHoraRetorno] = useState('');
   const [pctMotorista, setPctMotorista] = useState('');
   const [pctAdmin, setPctAdmin] = useState('');
-  const [payPix, setPayPix] = useState(false);
-  const [payCartao, setPayCartao] = useState(false);
-  const [payDebito, setPayDebito] = useState(false);
 
   useEffect(() => {
     if (open && trecho) {
@@ -91,9 +85,6 @@ export default function EditarTabelaTrechoModal({ open, onClose, trecho, onSave 
       setDataHoraRetorno(trecho.dataHoraRetorno);
       setPctMotorista(trecho.pctMotorista);
       setPctAdmin(trecho.pctAdmin);
-      setPayPix(trecho.payPix);
-      setPayCartao(trecho.payCartao);
-      setPayDebito(trecho.payDebito);
     }
   }, [open, trecho]);
 
@@ -102,10 +93,10 @@ export default function EditarTabelaTrechoModal({ open, onClose, trecho, onSave 
   const salvar = useCallback(() => {
     onSave?.({
       origem, destino, valor, dataHoraIda, dataHoraRetorno,
-      pctMotorista, pctAdmin, payPix, payCartao, payDebito,
+      pctMotorista, pctAdmin,
     });
     onClose();
-  }, [onClose, onSave, origem, destino, valor, dataHoraIda, dataHoraRetorno, pctMotorista, pctAdmin, payPix, payCartao, payDebito]);
+  }, [onClose, onSave, origem, destino, valor, dataHoraIda, dataHoraRetorno, pctMotorista, pctAdmin]);
 
   useEffect(() => {
     if (!open) return;
@@ -142,18 +133,6 @@ export default function EditarTabelaTrechoModal({ open, onClose, trecho, onSave 
             onChange: (e: React.ChangeEvent<HTMLInputElement>) => setValue(e.target.value),
             style: { ...inputStyle, color: value ? '#0d0d0d' : '#767676' },
           }));
-
-  const checkboxRow = (label: string, checked: boolean, setChecked: (v: boolean) => void) =>
-    React.createElement('label', {
-      style: { display: 'flex', alignItems: 'center', cursor: 'pointer', width: '100%', paddingRight: 12, boxSizing: 'border-box' as const },
-    },
-      React.createElement('input', {
-        type: 'checkbox',
-        checked,
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => setChecked(e.target.checked),
-        style: { width: 20, height: 20, margin: '10px 8px 10px 0', accentColor: '#0d0d0d', flexShrink: 0 },
-      }),
-      React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', lineHeight: 1, padding: '11px 0', ...font } }, label));
 
   if (!open) return null;
 
@@ -219,14 +198,7 @@ export default function EditarTabelaTrechoModal({ open, onClose, trecho, onSave 
             // % ganho motorista + admin
             React.createElement('div', { style: { display: 'flex', gap: 12, width: '100%' } },
               field('% de ganho do motorista', pctMotorista, setPctMotorista, '15 %'),
-              field('% de ganho do admin', pctAdmin, setPctAdmin, '5 %'))),
-
-          // Formas de pagamento
-          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
-            React.createElement('span', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', lineHeight: 1.5, ...font } }, 'Formas de pagamento aceitas'),
-            checkboxRow('Pix', payPix, setPayPix),
-            checkboxRow('Cartão de crédito', payCartao, setPayCartao),
-            checkboxRow('Débito', payDebito, setPayDebito))),
+              field('% de ganho do admin', pctAdmin, setPctAdmin, '5 %')))),
 
         // CTA buttons
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 23px', width: '100%', boxSizing: 'border-box' as const } },

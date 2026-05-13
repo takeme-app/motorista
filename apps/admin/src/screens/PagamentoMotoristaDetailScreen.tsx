@@ -15,7 +15,6 @@ import type { PricingRouteRow } from '../data/types';
 import { webStyles } from '../styles/webStyles';
 import { PAGAMENTOS_GESTAO_PREPARADORES_HREF } from '../constants/pagamentosGestaoNav';
 import EditarTabelaTrechoModal, { TrechoData } from '../components/EditarTabelaTrechoModal';
-import EditarFormaPagamentoTrechoModal from '../components/EditarFormaPagamentoTrechoModal';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -31,7 +30,6 @@ type TrechoMotRow = {
   retLinha2: string;
   pctMotorista: string;
   pctAdmin: string;
-  pagamento: string;
 };
 
 type MotDetail = {
@@ -49,10 +47,6 @@ type MotDetail = {
 
 function pricingToTrechoMotRow(r: PricingRouteRow): TrechoMotRow {
   const fmtMoney = (c: number) => `R$ ${(c / 100).toFixed(2).replace('.', ',')}`;
-  const pay = (r.accepted_payment_methods || []).map((m) =>
-    m === 'pix' ? 'Pix' : m === 'credit_card' ? 'Crédito' : m === 'debit_card' ? 'Débito' : String(m),
-  );
-  const pagamento = pay.join(',\n') || '—';
   const created = r.created_at ? new Date(r.created_at) : null;
   const idaLinha1 = created ? `${created.toLocaleDateString('pt-BR')}, ` : '—, ';
   const idaLinha2 = created ? created.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—';
@@ -68,7 +62,6 @@ function pricingToTrechoMotRow(r: PricingRouteRow): TrechoMotRow {
     retLinha2: '—',
     pctMotorista: `${r.driver_pct ?? 0}%`,
     pctAdmin: `${r.admin_pct ?? 0}%`,
-    pagamento,
   };
 }
 
@@ -77,9 +70,6 @@ const avatarColors: Record<string, string> = { C: '#50C878', J: '#7B61FF', E: '#
 // SVGs
 const arrowLeftSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M19 12H5M12 19l-7-7 7-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
-const editPencilSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-  React.createElement('path', { d: 'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
-  React.createElement('path', { d: 'M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 const plusSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M12 5v14M5 12h14', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 const starSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: '#cba04b', style: { display: 'block' } },
@@ -113,7 +103,6 @@ const colTrecho = [
   { label: 'Data/\nHora Retorno', w: 82, key: 'r' as const, multiline: true },
   { label: '%\nMotorista', w: 56, key: 'm' as const, bold: true, multiline: true },
   { label: '%\nAdmin', w: 56, key: 'p' as const, bold: true, multiline: true },
-  { label: 'Pagamento', w: 72, key: 'g' as const, medium: true },
   { label: 'Editar/Excluir', w: 96, key: 'a' as const, actions: true },
 ];
 
@@ -123,7 +112,6 @@ export default function PagamentoMotoristaDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [header, setHeader] = useState<MotoristaPaymentHeader | null>(null);
-  const [pricingRoutes, setPricingRoutes] = useState<PricingRouteRow[]>([]);
   const [trechos, setTrechos] = useState<TrechoMotRow[]>([]);
 
   useEffect(() => {
@@ -137,7 +125,6 @@ export default function PagamentoMotoristaDetailScreen() {
       if (!id) {
         setNotFound(true);
         setHeader(null);
-        setPricingRoutes([]);
         setTrechos([]);
         setLoading(false);
         return;
@@ -148,7 +135,6 @@ export default function PagamentoMotoristaDetailScreen() {
       ]);
       if (cancel) return;
       setHeader(h);
-      setPricingRoutes(routes);
       setTrechos(routes.map(pricingToTrechoMotRow));
       setLoading(false);
     })();
@@ -171,21 +157,15 @@ export default function PagamentoMotoristaDetailScreen() {
   const initial = detail.nome.charAt(0);
   const avatarBg = avatarColors[initial] || '#999';
 
-  const [editPagamentoOpen, setEditPagamentoOpen] = useState(false);
-  const fecharEditPagamento = useCallback(() => setEditPagamentoOpen(false), []);
   const [editTrechoOpen, setEditTrechoOpen] = useState(false);
   const [editTrechoData, setEditTrechoData] = useState<TrechoData | null>(null);
   const fecharEditTrecho = useCallback(() => setEditTrechoOpen(false), []);
   const abrirEditTrecho = useCallback((row: TrechoMotRow) => {
-    const pagLines = row.pagamento.split('\n').map(s => s.trim().toLowerCase());
     setEditTrechoData({
       origem: row.origem, destino: row.destino, valor: row.valor,
       dataHoraIda: `${row.idaLinha1}${row.idaLinha2}`.replace(/, $/, ' - ').replace(', ', ' - '),
       dataHoraRetorno: `${row.retLinha1}${row.retLinha2}`.replace(/, $/, ' - ').replace(', ', ' - '),
       pctMotorista: row.pctMotorista, pctAdmin: row.pctAdmin,
-      payPix: pagLines.some(l => l.includes('pix')),
-      payCartao: pagLines.some(l => l.includes('créd') || l.includes('cred')),
-      payDebito: pagLines.some(l => l.includes('deb')),
     });
     setEditTrechoOpen(true);
   }, []);
@@ -245,11 +225,6 @@ export default function PagamentoMotoristaDetailScreen() {
       style: { display: 'flex', alignItems: 'center', gap: 8, minHeight: 44, minWidth: 104, padding: '8px 24px', background: 'none', border: 'none', borderRadius: 999, fontSize: 14, fontWeight: 600, color: '#0d0d0d', cursor: 'pointer', ...font },
     }, arrowLeftSvg, 'Voltar'),
     React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 16 } },
-      React.createElement('button', {
-        type: 'button',
-        onClick: () => setEditPagamentoOpen(true),
-        style: { display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 24px', background: '#f1f1f1', border: 'none', borderRadius: 999, fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font },
-      }, editPencilSvg, 'Editar forma de pagamento'),
       React.createElement('button', {
         type: 'button',
         onClick: () => navigate('/pagamentos/gestao/criar-trecho'),
@@ -344,7 +319,6 @@ export default function PagamentoMotoristaDetailScreen() {
       cellEl(React.createElement(React.Fragment, null, row.retLinha1, React.createElement('br'), row.retLinha2), 82, { multiline: true }),
       cellEl(row.pctMotorista, 56, { bold: true }),
       cellEl(row.pctAdmin, 56, { bold: true }),
-      cellEl(row.pagamento, 72, { medium: true, multiline: true }),
       React.createElement('div', {
         style: { width: 96, minWidth: 96, flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, padding: 0, boxSizing: 'border-box' as const },
       },
@@ -370,8 +344,7 @@ export default function PagamentoMotoristaDetailScreen() {
         compactField('Data/Hora Ida', React.createElement(React.Fragment, null, row.idaLinha1, React.createElement('br'), row.idaLinha2)),
         compactField('Data/Hora Retorno', React.createElement(React.Fragment, null, row.retLinha1, React.createElement('br'), row.retLinha2)),
         compactField('% Motorista', row.pctMotorista),
-        compactField('% Admin', row.pctAdmin),
-        compactField('Pagamento', row.pagamento)),
+        compactField('% Admin', row.pctAdmin)),
       React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, paddingTop: 4, borderTop: '1px solid #d9d9d9' } },
         React.createElement('button', { type: 'button', onClick: () => abrirEditTrecho(row), style: webStyles.viagensActionBtn, 'aria-label': 'Editar' }, pencilRowSvg),
         React.createElement('button', { type: 'button', onClick: () => abrirConfirmRemove(), style: webStyles.viagensActionBtn, 'aria-label': 'Excluir' }, trashRowSvg)));
@@ -424,18 +397,5 @@ export default function PagamentoMotoristaDetailScreen() {
       totalBar,
       tableSection),
     React.createElement(EditarTabelaTrechoModal, { open: editTrechoOpen, onClose: fecharEditTrecho, trecho: editTrechoData }),
-    React.createElement(EditarFormaPagamentoTrechoModal, {
-      open: editPagamentoOpen,
-      onClose: fecharEditPagamento,
-      pricingRouteId: pricingRoutes[0]?.id ?? null,
-      initialAcceptedPaymentMethods: pricingRoutes[0]?.accepted_payment_methods,
-      onSaved: () => {
-        if (!slug) return;
-        void fetchPricingRoutes('driver').then((routes) => {
-          setPricingRoutes(routes);
-          setTrechos(routes.map(pricingToTrechoMotRow));
-        });
-      },
-    }),
     confirmRemoveModal);
 }

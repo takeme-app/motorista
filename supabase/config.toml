@@ -83,3 +83,10 @@ verify_jwt = false
 # Cron: proximidade motorista / ETA (service role). Ver comentário na função.
 [functions.notify-passenger-driver-proximity]
 verify_jwt = false
+
+# Admin fiscal (Spedy): JWT validado na função.
+[functions.get-fiscal-document-pdf]
+verify_jwt = true
+
+[functions.lookup-spedy-invoice]
+verify_jwt = true

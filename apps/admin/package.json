@@ -3,16 +3,19 @@
   "version": "1.0.0",
   "private": true,
   "main": "index.ts",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "postinstall": "node ./scripts/copy-mapbox-worker.cjs",
     "prestart": "node ./scripts/copy-mapbox-worker.cjs",
-    "start": "expo start --web",
+    "start": "expo start --web --port 8090",
     "prebuild": "node ./scripts/copy-mapbox-worker.cjs",
     "build": "expo export --platform web",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo start --android --port 8090",
+    "ios": "expo start --ios --port 8090",
     "preweb": "node ./scripts/copy-mapbox-worker.cjs",
-    "web": "expo start --web",
+    "web": "expo start --web --port 8090",
     "lint": "expo lint",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui"
@@ -28,6 +31,7 @@
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
+    "react-native-web": "^0.21.0",
     "react-router-dom": "^6.30.3",
     "recharts": "^3.8.1"
   },

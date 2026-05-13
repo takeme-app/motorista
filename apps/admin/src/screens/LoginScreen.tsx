@@ -60,16 +60,30 @@ export function LoginScreen({ onForgotPassword, onLoginSuccess }: Props) {
       const isEmail = input.includes('@');
 
       if (isEmail) {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: input,
-          password,
+        const emailNorm = input.trim().toLowerCase();
+        const { data, error: fnError } = await supabase.functions.invoke('login-with-email', {
+          body: { email: emailNorm, password },
         });
-        if (error || !data?.session) {
+        if (fnError) {
           setEmailError('E-mail incorreto');
           setPasswordError('Senha incorreta');
           setLoading(false);
           return;
         }
+        const errMsg = data?.error;
+        if (errMsg) {
+          setEmailError('E-mail incorreto');
+          setPasswordError('Senha incorreta');
+          setLoading(false);
+          return;
+        }
+        if (!data?.session) {
+          setEmailError('E-mail incorreto');
+          setPasswordError('Senha incorreta');
+          setLoading(false);
+          return;
+        }
+        await supabase.auth.setSession(data.session);
       } else {
         const phoneDigits = input.replace(/\D/g, '');
         const { data, error: fnError } = await supabase.functions.invoke('login-with-phone', {

@@ -6,7 +6,7 @@ export type AdminPermissions = Record<string, boolean>;
 
 const ALL_GRANTED: AdminPermissions = {
   inicio: true, viagens: true, passageiros: true, motoristas: true,
-  destinos: true, encomendas: true, retirada_motorista: true, preparadores: true, promocoes: true,
+  destinos: true, encomendas: true, preparadores: true, promocoes: true,
   pagamentos: true, atendimento: true, notificacoes: true, avaliacoes: true,
   analytics: true, configuracoes: true,
 };
@@ -19,7 +19,6 @@ export const PATH_TO_PERMISSION: Record<string, string> = {
   '/motoristas': 'motoristas',
   '/destinos': 'destinos',
   '/encomendas': 'encomendas',
-  '/retirada-motorista': 'retirada_motorista',
   '/preparadores': 'preparadores',
   '/promocoes': 'promocoes',
   '/pagamentos': 'pagamentos',

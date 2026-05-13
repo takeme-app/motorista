@@ -1,10 +1,24 @@
 import Constants from 'expo-constants';
 import { createSupabaseClient } from '@take-me/shared';
 
-// Lê de extra (app.config.js carrega .env em Node) — funciona local e na Vercel
+// Lê de extra (app.config.js carrega .env em Node) — funciona local e na Vercel.
+// Usar `||` para fallback: no web o `extra` pode vir com string vazia (manifest/cache);
+// `??` não cairia para process.env e o Metro deixaria isSupabaseConfigured falso.
 const extra = Constants.expoConfig?.extra as { supabaseUrl?: string; supabaseAnonKey?: string } | undefined;
-const supabaseUrl = extra?.supabaseUrl ?? process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
-const supabaseAnonKey = extra?.supabaseAnonKey ?? process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
+const supabaseUrl = (
+  (extra?.supabaseUrl && String(extra.supabaseUrl).trim()) ||
+  (typeof process !== 'undefined' && process.env.EXPO_PUBLIC_SUPABASE_URL
+    ? String(process.env.EXPO_PUBLIC_SUPABASE_URL).trim()
+    : '') ||
+  ''
+);
+const supabaseAnonKey = (
+  (extra?.supabaseAnonKey && String(extra.supabaseAnonKey).trim()) ||
+  (typeof process !== 'undefined' && process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY
+    ? String(process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY).trim()
+    : '') ||
+  ''
+);
 
 const configured =
   Boolean(supabaseUrl && supabaseAnonKey && supabaseUrl.startsWith('https://'));

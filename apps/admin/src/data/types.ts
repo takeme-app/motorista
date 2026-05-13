@@ -82,6 +82,9 @@ export interface ExcursionRequestRow {
   created_at: string;
 }
 
+/** Método de pagamento da reserva (`bookings.payment_method`: cartão / Pix / dinheiro). */
+export type BookingPaymentMethod = 'card' | 'pix' | 'cash';
+
 export interface ViagemListItem {
   bookingId: string;
   passageiro: string;
@@ -105,7 +108,20 @@ export interface ViagemListItem {
   amountCents: number;
   /** De `scheduled_trips.trunk_occupancy_pct`; 0 se ausente */
   trunkOccupancyPct: number;
+  /** `bookings.payment_method` quando a coluna existir; senão `card`. */
+  paymentMethod: BookingPaymentMethod;
+  /** Abate extra na corrida Connect (`bookings.platform_fee_extra_debit_cents`). */
+  platformFeeExtraDebitCents: number;
+  /** Preenchido em algumas listagens quando o perfil do cliente expõe foto. */
+  passageiroAvatarUrl?: string | null;
 }
+
+/** Item retornado pela Edge `lookup-spedy-invoice` (NF-e ou NFS-e na Spedy). */
+export type SpedyInvoiceLookupItem = {
+  id: string;
+  status: string;
+  model: 'productInvoice' | 'serviceInvoice';
+};
 
 /** Detalhe admin de uma reserva (viagem) — origem/destino completos e metadados. */
 export interface BookingDetailForAdmin {
@@ -138,7 +154,46 @@ export interface BookingDetailForAdmin {
   bagsAvailable: number | null;
   /** `bookings.created_at` em ISO (histórico mínimo no painel). */
   bookingCreatedAtIso: string | null;
+  /** Conversa de atendimento ativa (`support_backoffice`) ligada a esta reserva, se existir. */
+  supportConversationId: string | null;
+  /** `bookings.pickup_code` — PIN de embarque passageiro → motorista (viagem comum). */
+  pickupCode: string | null;
+  /** `bookings.stripe_payment_intent_id` — usado para localizar NF na Spedy (integração Stripe). */
+  stripePaymentIntentId: string | null;
+  /** `bookings.payment_method`. */
+  paymentMethod: BookingPaymentMethod;
+  /** Abate de dívida de taxa nesta corrida Connect. */
+  platformFeeExtraDebitCents: number;
+  /** Taxa admin da viagem (snapshot em `bookings.admin_earning_cents`). */
+  adminEarningCents: number;
 }
+
+/** Linha de `driver_platform_fee_ledger` (taxa plataforma em dinheiro / abates). */
+export interface DriverPlatformFeeLedgerRow {
+  id: string;
+  workerId: string;
+  bookingId: string | null;
+  kind: 'credit' | 'debit';
+  amountCents: number;
+  note: string;
+  createdAt: string;
+}
+
+/** Motorista com saldo devido à plataforma (`worker_profiles.platform_fee_owed_cents > 0`). */
+export interface MotoristaPlatformFeeDebtItem {
+  id: string;
+  nome: string;
+  platformFeeOwedCents: number;
+}
+
+/** Estado Stripe Connect exibido no painel do motorista. */
+export type WorkerConnectStatus = {
+  accountId: string | null;
+  chargesEnabled: boolean;
+  payoutsEnabled: boolean;
+  detailsSubmitted: boolean;
+  notifiedApprovedAt: string | null;
+};
 
 /** Shipment ligado à viagem (`scheduled_trip_id`) — lista no detalhe da viagem. */
 export interface TripShipmentListItem {
@@ -159,6 +214,20 @@ export interface TripShipmentListItem {
   instructions: string | null;
   photoUrl: string | null;
   status: string;
+  /** Conversa de atendimento ativa ligada a este envio, se existir. */
+  supportConversationId: string | null;
+  /** `shipments.base_id` — se preenchido, fluxo com base (PINs A–D). */
+  baseId: string | null;
+  pickupCode: string | null;
+  passengerToPreparerCode: string | null;
+  preparerToBaseCode: string | null;
+  baseToDriverCode: string | null;
+  deliveryCode: string | null;
+  pickedUpByPreparerAt: string | null;
+  deliveredToBaseAt: string | null;
+  pickedUpByDriverFromBaseAt: string | null;
+  pickedUpAt: string | null;
+  deliveredAt: string | null;
 }
 
 /** Encomenda para ecrã de edição admin (shipment ou envio de dependente). */
@@ -246,6 +315,8 @@ export interface EncomendaListItem {
   scheduledTripId: string | null;
   /** Conversa de atendimento ativa vinculada (para encomendas pending_review) */
   supportConversationId: string | null;
+  /** Estado de payout / cobrança na UI (lista admin). */
+  paymentStatus?: 'paid' | 'pending' | 'held' | null;
 }
 
 export interface MotoristaListItem {
@@ -272,6 +343,12 @@ export interface WorkerApprovalRow {
   rejectionReason: string | null;
   createdAt: string;
   reviewedAt: string | null;
+  connect?: {
+    accountId: string | null;
+    chargesEnabled: boolean;
+    payoutsEnabled: boolean;
+    detailsSubmitted: boolean;
+  } | null;
 }
 
 /** Contagens por bucket de UI (derivadas de `scheduled_trips.status` por viagem da rota). */
@@ -377,6 +454,45 @@ export interface PreparadorEditDetail {
     plate: string | null;
     passengerCapacity: number | null;
   }>;
+  driverId?: string | null;
+  stripePaymentIntentId?: string | null;
+  preparerPayoutCents?: number | null;
+  driverPayoutCents?: number | null;
+  workerPayoutCents?: number | null;
+  platformFeeCents?: number | null;
+}
+
+/** Estado local na aba encomendas/excursoes do PreparadorEditScreen (hidratação manual). */
+export interface PreparadorEncomendaDetail {
+  id: string;
+  kind: string;
+  originAddress: string;
+  destinationAddress: string;
+  status: string;
+  statusLabel: string;
+  amountCents: number;
+  packageSize: string | null;
+  photoUrl: string | null;
+  recipientName: string | null;
+  recipientPhone: string | null;
+  recipientEmail: string | null;
+  senderName: string | null;
+  instructions: string | null;
+  createdAt: string;
+  preparerProfile: {
+    id: string;
+    fullName: string | null;
+    phone: string | null;
+    avatarUrl: string | null;
+    status: string | null;
+    subtype: string | null;
+  };
+  _workerData?: Record<string, unknown>;
+  _profileData?: Record<string, unknown>;
+  _vehicles?: unknown[];
+  _shipments?: unknown[];
+  _ratings?: unknown[];
+  _excursions?: unknown[];
 }
 
 export interface PreparadorCandidate {
@@ -458,8 +574,19 @@ export interface PayoutRow {
 
 export interface PagamentoListItem {
   id: string;
+  workerId: string;
+  /** Mesma ideia que MotoristasScreen «Connect OK»: conta + charges + payouts. */
+  workerHasConnect: boolean;
   workerName: string;
   entityType: string;
+  /** Valor bruto de `payouts.entity_type` (ex.: booking, shipment). */
+  entityTypeRaw: string;
+  /** Valor bruto de `payouts.status` (ex.: pending, paid). */
+  statusRaw: string;
+  /** Transfer Stripe explícita (shipment/excursion); booking costuma ficar null. */
+  stripeTransferId: string | null;
+  stripeTransferAt: string | null;
+  stripeTransferError: string | null;
   dataFinalizacao: string;
   /** ISO (paid_at ou created_at) para filtros de período no admin */
   dateAtIso: string;

@@ -27,6 +27,13 @@ const pencilActionSvg = React.createElement('svg', { width: 20, height: 20, view
   React.createElement('path', { d: 'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
   React.createElement('path', { d: 'M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 
+const mapTripActionSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
+  React.createElement('path', {
+    d: 'M12 21s7-4.35 7-10a7 7 0 10-14 0c0 5.65 7 10 7 10z',
+    stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round',
+  }),
+  React.createElement('circle', { cx: 12, cy: 11, r: 2.5, stroke: '#0d0d0d', strokeWidth: 2 }));
+
 const chevronDownSvg = React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 
@@ -68,7 +75,7 @@ const tableCols: TableCol[] = [
   { label: 'Embarque', flex: '0 0 80px', minWidth: 80, headAlign: 'flex-start', cellAlign: 'flex-start' },
   { label: 'Chegada', flex: '0 0 80px', minWidth: 80, headAlign: 'flex-start', cellAlign: 'flex-start' },
   { label: 'Status', flex: '0 0 128px', minWidth: 128, headAlign: 'center', cellAlign: 'center' },
-  { label: 'Visualizar/Editar', flex: '0 0 140px', minWidth: 140, headAlign: 'center', cellAlign: 'center' },
+  { label: 'Visualizar/Editar', flex: '0 0 188px', minWidth: 188, headAlign: 'center', cellAlign: 'center' },
 ];
 
 const statusStyles: Record<string, { bg: string; color: string }> = {
@@ -119,7 +126,7 @@ function toEncomendaRow(e: EncomendaListItem): EncomendaRow {
     chegada: e.chegada,
     status: e.status,
     rawStatus: e.rawStatus,
-    paymentStatus: e.paymentStatus,
+    paymentStatus: e.paymentStatus ?? null,
   };
 }
 
@@ -601,23 +608,23 @@ export default function EncomendasScreen() {
       },
         React.createElement('button', {
           type: 'button',
-          style: {
-            ...webStyles.viagensActionBtn,
-            opacity: item?.scheduledTripId ? 1 : 0.45,
-            cursor: 'pointer',
-          },
-          'aria-label': item?.scheduledTripId ? 'Visualizar viagem' : 'Visualizar viagem (sem viagem vinculada)',
-          'aria-disabled': !item?.scheduledTripId,
-          title: item?.scheduledTripId ? 'Abrir detalhe da viagem (mesma tela do menu Viagens)' : 'Esta encomenda não está vinculada a uma viagem agendada — clique para ver a mensagem',
-          onClick: () => {
-            if (!item) return;
-            if (!item.scheduledTripId) {
-              showToast('Sem viagem vinculada: associe esta encomenda a uma viagem na edição da viagem (menu Viagens) ou confirme a encomenda quando houver rota.');
-              return;
-            }
-            navigate(`/encomendas/${item.id}/viagem/${item.scheduledTripId}`);
-          },
+          style: { ...webStyles.viagensActionBtn, cursor: 'pointer' },
+          'aria-label': 'Ver detalhe da encomenda',
+          title: 'Valores, remetente e dados do envio',
+          onClick: () => { if (item) navigate(`/encomendas/${item.id}`); },
         }, eyeActionSvg),
+        item?.scheduledTripId && item.tipo === 'shipment'
+          ? React.createElement('button', {
+            type: 'button',
+            style: { ...webStyles.viagensActionBtn, cursor: 'pointer' },
+            'aria-label': 'Ver viagem no mapa',
+            title: 'Roteiro e painel da viagem agendada',
+            onClick: () => {
+              if (!item?.scheduledTripId) return;
+              navigate(`/encomendas/${item.id}/viagem/${item.scheduledTripId}`);
+            },
+          }, mapTripActionSvg)
+          : null,
         React.createElement('button', {
           type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
           onClick: () => { if (item) navigate(`/encomendas/${item.id}/editar`, { state: { from: 'encomendas' } }); },

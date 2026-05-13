@@ -4,7 +4,7 @@
  */
 
 export { createSupabaseClient } from './supabase';
-export type { Database } from './types';
+export type { Database, FiscalDocumentRow } from './types';
 export { mapboxForwardGeocode, mapboxGeocodeSuggest } from './mapboxForwardGeocode';
 export type { MapboxGeocodeResult } from './mapboxForwardGeocode';
 export {

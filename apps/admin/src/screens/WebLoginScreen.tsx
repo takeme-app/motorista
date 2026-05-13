@@ -4,12 +4,10 @@
  */
 import { useState } from 'react';
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { webStyles, eyeSvg, getLogoSrc, logoArrowSvg } from '../styles/webStyles';
 
 export default function WebLoginScreen() {
-  const navigate = useNavigate();
   const [phoneOrEmail, setPhoneOrEmail] = useState('');
   const [password, setPassword] = useState('');
   const [hidePassword, setHidePassword] = useState(true);
@@ -27,8 +25,17 @@ export default function WebLoginScreen() {
     setLoading(true);
     try {
       if (input.includes('@')) {
-        const { data, error } = await supabase.auth.signInWithPassword({ email: input, password });
-        if (error || !data?.session) { setEmailError('E-mail incorreto'); setPasswordError('Senha incorreta'); setLoading(false); return; }
+        const emailNorm = input.trim().toLowerCase();
+        const { data, error: fnErr } = await supabase.functions.invoke('login-with-email', {
+          body: { email: emailNorm, password },
+        });
+        if (fnErr || data?.error || !data?.session) {
+          setEmailError('E-mail incorreto');
+          setPasswordError('Senha incorreta');
+          setLoading(false);
+          return;
+        }
+        await supabase.auth.setSession(data.session);
       } else {
         const phone = input.replace(/\D/g, '');
         const { data, error: fnErr } = await supabase.functions.invoke('login-with-phone', { body: { phone, password } });
@@ -40,32 +47,6 @@ export default function WebLoginScreen() {
       setEmailError('E-mail incorreto');
       setPasswordError('Senha incorreta');
     } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGoogleSignIn = async () => {
-    setEmailError('');
-    setPasswordError('');
-    if (typeof window === 'undefined') return;
-    if (!isSupabaseConfigured) {
-      setEmailError('Configure EXPO_PUBLIC_SUPABASE_URL e EXPO_PUBLIC_SUPABASE_ANON_KEY.');
-      return;
-    }
-    setLoading(true);
-    try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/`,
-        },
-      });
-      if (error) {
-        setEmailError(error.message || 'Não foi possível iniciar o login com Google.');
-        setLoading(false);
-      }
-    } catch {
-      setEmailError('Não foi possível iniciar o login com Google.');
       setLoading(false);
     }
   };
@@ -115,24 +96,11 @@ export default function WebLoginScreen() {
                       React.createElement('div', { style: webStyles.actionContainer },
                         React.createElement('button', { type: 'button', style: webStyles.iconButton, onClick: () => setHidePassword((v) => !v), 'aria-label': hidePassword ? 'Mostrar senha' : 'Ocultar senha' }, eyeSvg(hidePassword))))),
                   passwordError ? React.createElement('p', { style: webStyles.errorText }, '▲ ', passwordError) : null,
-                  React.createElement('button', { type: 'button', style: webStyles.link, onClick: () => navigate('/forgot-password'), disabled: loading }, 'Esqueceu sua senha?'),
               React.createElement('div', { style: webStyles.cta, className: 'admin-cta' },
                 React.createElement('button', {
                   type: 'button',
                   style: { ...webStyles.primaryBtn, opacity: loading ? 0.7 : 1 },
                   disabled: loading,
                   onClick: handleLogin,
-                }, loading ? 'Entrando...' : 'Continuar'),
-                React.createElement('button', {
-                  type: 'button',
-                  style: { ...webStyles.secondaryBtn, marginTop: 10, background: 'var(--brand-light-neutral-300, #f1f1f1)', border: 'none' },
-                  disabled: loading,
-                  onClick: handleGoogleSignIn,
-                }, 'Continuar com Google'),
-                React.createElement('button', {
-                  type: 'button',
-                  style: webStyles.secondaryBtn,
-                  disabled: loading,
-                  onClick: () => navigate('/signup'),
-                }, 'Criar conta'))))))))));
+                }, loading ? 'Entrando...' : 'Continuar'))))))))));
 }

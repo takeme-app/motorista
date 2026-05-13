@@ -15,7 +15,6 @@ import {
 import type { PricingRouteRow } from '../data/types';
 import { webStyles } from '../styles/webStyles';
 import { PAGAMENTOS_GESTAO_PREPARADORES_HREF, PAGAMENTOS_CRIAR_TRECHO_PREP_ENCOMENDAS_HREF } from '../constants/pagamentosGestaoNav';
-import EditarFormaPagamentoTrechoModal from '../components/EditarFormaPagamentoTrechoModal';
 import EditarTabelaTrechoModal, { TrechoData } from '../components/EditarTabelaTrechoModal';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -31,7 +30,6 @@ type TrechoPrepRow = {
   retLinha2: string;
   valorKm: string;
   pctAdmin: string;
-  pagamento: string;
 };
 
 type PrepDetail = {
@@ -43,10 +41,6 @@ type PrepDetail = {
 
 function pricingToTrechoPrepRow(r: PricingRouteRow): TrechoPrepRow {
   const fmtMoney = (c: number) => `R$ ${(c / 100).toFixed(2).replace('.', ',')}`;
-  const pay = (r.accepted_payment_methods || []).map((m) =>
-    m === 'pix' ? 'Pix' : m === 'credit_card' ? 'Crédito' : m === 'debit_card' ? 'Débito' : String(m),
-  );
-  const pagamento = pay.join(',\n') || '—';
   const created = r.created_at ? new Date(r.created_at) : null;
   const idaLinha1 = created ? `${created.toLocaleDateString('pt-BR')}, ` : '—, ';
   const idaLinha2 = created ? created.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—';
@@ -61,15 +55,11 @@ function pricingToTrechoPrepRow(r: PricingRouteRow): TrechoPrepRow {
     retLinha2: '—',
     valorKm: r.pricing_mode === 'per_km' ? fmtMoney(r.price_cents) : '—',
     pctAdmin: `${r.admin_pct ?? 0}%`,
-    pagamento,
   };
 }
 
 const arrowLeftSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M19 12H5M12 19l-7-7 7-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
-const editPencilSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-  React.createElement('path', { d: 'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
-  React.createElement('path', { d: 'M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 const plusSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M12 5v14M5 12h14', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
 const starSvg = React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: '#cba04b', style: { display: 'block' } },
@@ -112,7 +102,6 @@ const colTrecho = [
   { label: 'Data/\nHora Retorno', w: 90, key: 'r' as const, multiline: true },
   { label: 'Valor (R$)\ndo KM', w: 64, key: 'k' as const, bold: true, multiline: true },
   { label: '% \nAdmin', w: 64, key: 'p' as const, bold: true, multiline: true },
-  { label: 'Pagamento', w: 80, key: 'g' as const, medium: true },
   { label: 'Editar/Excluir', w: 96, key: 'a' as const, actions: true },
 ];
 
@@ -138,7 +127,6 @@ export default function PagamentoPreparadorEncomendaDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [header, setHeader] = useState<PreparerEncPaymentHeader | null>(null);
-  const [pricingRoutes, setPricingRoutes] = useState<PricingRouteRow[]>([]);
   const [trechos, setTrechos] = useState<TrechoPrepRow[]>([]);
 
   useEffect(() => {
@@ -152,7 +140,6 @@ export default function PagamentoPreparadorEncomendaDetailScreen() {
       if (!id) {
         setNotFound(true);
         setHeader(null);
-        setPricingRoutes([]);
         setTrechos([]);
         setLoading(false);
         return;
@@ -163,7 +150,6 @@ export default function PagamentoPreparadorEncomendaDetailScreen() {
       ]);
       if (cancel) return;
       setHeader(h);
-      setPricingRoutes(routes);
       setTrechos(routes.map(pricingToTrechoPrepRow));
       setLoading(false);
     })();
@@ -180,12 +166,10 @@ export default function PagamentoPreparadorEncomendaDetailScreen() {
   const initial = detail.nome.charAt(0);
   const avatarBg = avatarColors[initial] || '#999';
 
-  const [editPagamentoOpen, setEditPagamentoOpen] = useState(false);
   const [editTrechoOpen, setEditTrechoOpen] = useState(false);
   const [editTrechoData, setEditTrechoData] = useState<TrechoData | null>(null);
   const fecharEditTrecho = useCallback(() => setEditTrechoOpen(false), []);
   const abrirEditTrecho = useCallback((row: TrechoPrepRow) => {
-    const pagLines = row.pagamento.split('\n').map(s => s.trim().toLowerCase());
     setEditTrechoData({
       origem: row.origem,
       destino: row.destino,
@@ -194,9 +178,6 @@ export default function PagamentoPreparadorEncomendaDetailScreen() {
       dataHoraRetorno: `${row.retLinha1}${row.retLinha2}`.replace(/, $/, ' - ').replace(', ', ' - '),
       pctMotorista: '15 %',
       pctAdmin: row.pctAdmin,
-      payPix: pagLines.some(l => l.includes('pix')),
-      payCartao: pagLines.some(l => l.includes('créd') || l.includes('cred')),
-      payDebito: pagLines.some(l => l.includes('deb')),
     });
     setEditTrechoOpen(true);
   }, []);
@@ -212,7 +193,6 @@ export default function PagamentoPreparadorEncomendaDetailScreen() {
   }, []);
   const [isCompactTable, setIsCompactTable] = useState(() =>
     typeof window !== 'undefined' && window.matchMedia(`(max-width: ${TABLE_COMPACT_MAX_PX}px)`).matches);
-  const fecharEditPagamento = useCallback(() => setEditPagamentoOpen(false), []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -318,7 +298,6 @@ export default function PagamentoPreparadorEncomendaDetailScreen() {
       cell(React.createElement(React.Fragment, null, row.retLinha1, React.createElement('br'), row.retLinha2), 90, { multiline: true }),
       cell(row.valorKm, 64, { bold: true }),
       cell(row.pctAdmin, 64, { bold: true }),
-      cell(row.pagamento, 80, { medium: true, multiline: true }),
       React.createElement('div', {
         style: {
           width: 96,
@@ -362,8 +341,7 @@ export default function PagamentoPreparadorEncomendaDetailScreen() {
         compactField('Data/Hora Ida', React.createElement(React.Fragment, null, row.idaLinha1, React.createElement('br'), row.idaLinha2)),
         compactField('Data/Hora Retorno', React.createElement(React.Fragment, null, row.retLinha1, React.createElement('br'), row.retLinha2)),
         compactField('Valor (R$) do KM', row.valorKm),
-        compactField('% Admin', row.pctAdmin),
-        compactField('Pagamento', row.pagamento, { fontWeight: 500 })),
+        compactField('% Admin', row.pctAdmin)),
       React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, paddingTop: 4, borderTop: '1px solid #d9d9d9' } },
         React.createElement('button', { type: 'button', onClick: () => abrirEditTrecho(row), style: webStyles.viagensActionBtn, 'aria-label': 'Editar' }, pencilRowSvg),
         React.createElement('button', { type: 'button', onClick: () => abrirConfirmRemove(row, idx), style: webStyles.viagensActionBtn, 'aria-label': 'Excluir' }, trashRowSvg)));
@@ -418,14 +396,6 @@ export default function PagamentoPreparadorEncomendaDetailScreen() {
       },
     }, arrowLeftSvg, 'Voltar'),
     React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 16 } },
-      React.createElement('button', {
-        type: 'button',
-        onClick: () => setEditPagamentoOpen(true),
-        style: {
-          display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 24px',
-          background: '#f1f1f1', border: 'none', borderRadius: 999, fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
-        },
-      }, editPencilSvg, 'Editar forma de pagamento'),
       React.createElement('button', {
         type: 'button',
         onClick: () => navigate(PAGAMENTOS_CRIAR_TRECHO_PREP_ENCOMENDAS_HREF),
@@ -645,19 +615,6 @@ export default function PagamentoPreparadorEncomendaDetailScreen() {
       pageTop,
       profileCard,
       tableSection),
-    React.createElement(EditarFormaPagamentoTrechoModal, {
-      open: editPagamentoOpen,
-      onClose: fecharEditPagamento,
-      pricingRouteId: pricingRoutes[0]?.id ?? null,
-      initialAcceptedPaymentMethods: pricingRoutes[0]?.accepted_payment_methods,
-      onSaved: () => {
-        if (!slug) return;
-        void fetchPricingRoutes('preparer_shipments').then((routes) => {
-          setPricingRoutes(routes);
-          setTrechos(routes.map(pricingToTrechoPrepRow));
-        });
-      },
-    }),
     React.createElement(EditarTabelaTrechoModal, { open: editTrechoOpen, onClose: fecharEditTrecho, trecho: editTrechoData }),
     confirmRemoveOpen
       ? React.createElement('div', {

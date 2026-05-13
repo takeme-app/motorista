@@ -432,7 +432,7 @@ export default function AtendimentoDetalheScreen() {
             setEncomendaSender(s.full_name || nome || '—');
             setEncomendaInstructions(s.instructions || '');
             if (s.photo_url) {
-              const resolved = await resolveStorageDisplayUrl(s.photo_url);
+              const resolved = await resolveStorageDisplayUrl(supabase, s.photo_url);
               if (!cancelled) setEncomendaPhotoUrl(resolved);
             }
           }

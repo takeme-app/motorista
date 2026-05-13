@@ -9,7 +9,6 @@ import {
   fetchPreparadorEditDetail,
   fetchPreparadorCandidates,
   fetchExcursionStatusHistory,
-  fetchPreparadorEncomendaDetail,
   savePreparadorExcursionFields,
   saveProfileFields,
   saveWorkerProfileFields,

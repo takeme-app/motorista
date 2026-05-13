@@ -281,7 +281,7 @@ export default function PromocaoCreateScreen() {
       const res = await invokeEdgeFunction('manage-promotions', 'PUT', { id: editId }, payload);
       err = res.error;
     } else {
-      const res = await createPromotion(payload);
+      const res = await createPromotion(payload as Parameters<typeof createPromotion>[0]);
       err = res.error;
     }
     setSaving(false);

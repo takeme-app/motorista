@@ -29,9 +29,15 @@ import {
   viagemCountsFromItems,
   type ViagemListFilter,
 } from '../data/queries';
-import type { ViagemListItem } from '../data/types';
+import type { ViagemListItem, BookingPaymentMethod } from '../data/types';
 import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+
+/** Reserva real ou, em viagem só-encomenda, `scheduled_trips.id` para `/viagens/:id` e detalhe admin. */
+function viagemListRouteId(item: ViagemListItem): string {
+  const bid = String(item.bookingId ?? '').trim();
+  return bid || String(item.tripId ?? '').trim();
+}
 
 // SVG icons for view/edit actions (stroke-based, matching project icons)
 const eyeActionSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
@@ -102,6 +108,7 @@ export default function ViagensScreen() {
   const [filterDatasIncluidas, setFilterDatasIncluidas] = useState<'somente_passadas' | 'passadas_e_futuras' | 'somente_futuras'>('passadas_e_futuras');
   const [filterStatus, setFilterStatus] = useState<'todos' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('todos');
   const [filterCategoria, setFilterCategoria] = useState<'todos' | 'take_me' | 'motorista'>('todos');
+  const [filterPaymentMethod, setFilterPaymentMethod] = useState<'todos' | BookingPaymentMethod>('todos');
   // Table filter modal (Figma 1132-26548) — status/categoria partilhados com o modal da barra (estado único)
   const [tableFilterOpen, setTableFilterOpen] = useState(false);
   const [tableFilterNome, setTableFilterNome] = useState('');
@@ -112,6 +119,7 @@ export default function ViagensScreen() {
     () => ({
       status: filterStatus,
       categoria: filterCategoria,
+      paymentMethod: filterPaymentMethod,
       nomeNeedle: tableFilterNome,
       origemNeedle: tableFilterOrigem,
       tableDateYmd: tableFilterDate,
@@ -119,7 +127,7 @@ export default function ViagensScreen() {
       periodoFimYmd: filterDateFim,
       datasIncluidas: filterDatasIncluidas,
     }),
-    [filterStatus, filterCategoria, tableFilterNome, tableFilterOrigem, tableFilterDate, filterDateInicio, filterDateFim, filterDatasIncluidas],
+    [filterStatus, filterCategoria, filterPaymentMethod, tableFilterNome, tableFilterOrigem, tableFilterDate, filterDateInicio, filterDateFim, filterDatasIncluidas],
   );
 
   const viagensFiltradas = useMemo(
@@ -241,15 +249,18 @@ export default function ViagensScreen() {
 
   // Table columns — use flex proportions to fit container width
   const tableCols = [
-    { label: 'Passageiros', flex: '1 1 16%', minWidth: 150 },
-    { label: 'Origem', flex: '1 1 14%', minWidth: 110 },
-    { label: 'Destino', flex: '1 1 14%', minWidth: 110 },
-    { label: 'Data', flex: '0 0 100px', minWidth: 100 },
-    { label: 'Embarque', flex: '0 0 76px', minWidth: 76 },
-    { label: 'Chegada', flex: '0 0 72px', minWidth: 72 },
-    { label: 'Status', flex: '0 0 125px', minWidth: 125 },
+    { label: 'Passageiros', flex: '1 1 15%', minWidth: 140 },
+    { label: 'Origem', flex: '1 1 13%', minWidth: 100 },
+    { label: 'Destino', flex: '1 1 13%', minWidth: 100 },
+    { label: 'Data', flex: '0 0 96px', minWidth: 96 },
+    { label: 'Embarque', flex: '0 0 72px', minWidth: 72 },
+    { label: 'Chegada', flex: '0 0 68px', minWidth: 68 },
+    { label: 'Pag.', flex: '0 0 48px', minWidth: 48 },
+    { label: 'Status', flex: '0 0 118px', minWidth: 118 },
     { label: 'Visualizar/Editar', flex: '0 0 96px', minWidth: 96 },
   ];
+  const viagemPagamentoShort = (m: ViagemListItem['paymentMethod']) =>
+    (m === 'cash' ? 'Din.' : m === 'pix' ? 'Pix' : 'Cart.');
 
   type RowWithItem = { row: ViagemRow; item: ViagemListItem };
   const viagensTableRows: RowWithItem[] = viagensFiltradas.map((v) => ({
@@ -279,7 +290,7 @@ export default function ViagensScreen() {
     }, c.label)));
 
   const openTripDetail = (row: ViagemRow, item: ViagemListItem) => {
-    navigate(`/viagens/${item.bookingId}`, { state: { trip: row } });
+    navigate(`/viagens/${viagemListRouteId(item)}`, { state: { trip: row } });
   };
 
   // Resolve avatar URLs from storage paths
@@ -322,10 +333,10 @@ export default function ViagensScreen() {
   const viagensTableRowEl = (entry: RowWithItem, idx: number) => {
     const { row, item } = entry;
     const st = statusStyles[row.status];
-    const canConfirmPay = item.bookingDbStatus === 'pending' || item.bookingDbStatus === 'confirmed';
-    const canCancelBooking = item.bookingDbStatus !== 'cancelled' && item.bookingDbStatus !== 'paid';
+    const hasBooking = Boolean(String(item.bookingId ?? '').trim());
+    const rowKey = hasBooking ? item.bookingId : `trip:${item.tripId}`;
     return React.createElement('div', {
-      key: item.bookingId,
+      key: rowKey,
       'data-testid': 'viagem-table-row',
       style: { ...webStyles.viagensTableRow, display: 'flex', cursor: 'pointer' },
       onClick: () => openTripDetail(row, item),
@@ -336,9 +347,10 @@ export default function ViagensScreen() {
       // Passageiros
       React.createElement('div', { style: { ...webStyles.viagensPassengerCell, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth } },
         React.createElement('div', {
-          style: { cursor: 'pointer' },
+          style: { cursor: hasBooking ? 'pointer' : 'default', opacity: hasBooking ? 1 : 0.85 },
           onClick: (e: React.MouseEvent) => {
             e.stopPropagation();
+            if (!hasBooking) return;
             setAlterarPassageiroData({ id: item.bookingId, nome: row.passageiro, contato: '(21) 98888-7777', mala: 'Pequena', valor: 'R$ 25,00' });
             setAlterarPassageiroOpen(true);
           },
@@ -354,12 +366,19 @@ export default function ViagensScreen() {
       React.createElement('div', { style: { ...cellBase, flex: tableCols[4].flex, minWidth: tableCols[4].minWidth, fontWeight: 400 } }, row.embarque),
       // Chegada
       React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth, fontWeight: 400 } }, row.chegada),
+      // Pagamento
+      React.createElement('div', {
+        style: {
+          ...cellBase, flex: tableCols[6].flex, minWidth: tableCols[6].minWidth, fontWeight: 500, fontSize: 12,
+          color: item.paymentMethod === 'cash' ? '#b45309' : '#3a3a3a',
+        },
+      }, viagemPagamentoShort(item.paymentMethod)),
       // Status
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[6].flex, minWidth: tableCols[6].minWidth } },
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[7].flex, minWidth: tableCols[7].minWidth } },
         statusPill(statusLabels[row.status], st.bg, st.color)),
       // Visualizar/Editar
       React.createElement('div', {
-        style: { flex: tableCols[7].flex, minWidth: tableCols[7].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' },
+        style: { flex: tableCols[8].flex, minWidth: tableCols[8].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' },
         onClick: (e: React.MouseEvent) => e.stopPropagation(),
       },
         React.createElement('div', { style: webStyles.viagensActionIcons },
@@ -368,8 +387,16 @@ export default function ViagensScreen() {
             onClick: (e: React.MouseEvent) => { e.stopPropagation(); openTripDetail(row, item); },
           }, eyeActionSvg),
           React.createElement('button', {
-            type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar',
-            onClick: (e: React.MouseEvent) => { e.stopPropagation(); navigate(`/viagens/${item.bookingId}/editar`, { state: { trip: row } }); },
+            type: 'button',
+            style: { ...webStyles.viagensActionBtn, opacity: hasBooking ? 1 : 0.4, cursor: hasBooking ? 'pointer' : 'not-allowed' },
+            'aria-label': 'Editar',
+            'aria-disabled': !hasBooking,
+            title: hasBooking ? 'Editar reserva' : 'Sem reserva de passageiro — use o módulo Encomendas para o envio',
+            onClick: (e: React.MouseEvent) => {
+              e.stopPropagation();
+              if (!hasBooking) return;
+              navigate(`/viagens/${item.bookingId}/editar`, { state: { trip: row } });
+            },
           }, pencilActionSvg))));
   };
 
@@ -409,6 +436,12 @@ export default function ViagensScreen() {
     { id: 'todos', label: 'Todos' },
     { id: 'take_me', label: 'Take Me' },
     { id: 'motorista', label: 'Motorista parceiro' },
+  ];
+  const paymentMethodFilterOptions: { id: 'todos' | BookingPaymentMethod; label: string }[] = [
+    { id: 'todos', label: 'Todos' },
+    { id: 'card', label: 'Cartão' },
+    { id: 'pix', label: 'Pix' },
+    { id: 'cash', label: 'Dinheiro' },
   ];
 
   // Shared styles for the modal
@@ -527,10 +560,19 @@ export default function ViagensScreen() {
             style: filterCategoria === opt.id ? chipActive : chipInactive,
             onClick: () => setFilterCategoria(opt.id),
           }, opt.label)))),
+    React.createElement('div', { style: { ...modalFieldWrap, gap: 0 } },
+      React.createElement('span', { style: modalSectionLabel }, 'Pagamento'),
+      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' } },
+        ...paymentMethodFilterOptions.map((opt) =>
+          React.createElement('button', {
+            key: opt.id, type: 'button',
+            style: filterPaymentMethod === opt.id ? chipActive : chipInactive,
+            onClick: () => setFilterPaymentMethod(opt.id),
+          }, opt.label)))),
     // Buttons
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, padding: '0 23px' } },
       React.createElement('button', { type: 'button', style: modalPrimaryBtn, onClick: () => setFilterModalOpen(false) }, 'Aplicar filtro'),
-      React.createElement('button', { type: 'button', style: { ...modalSecBtn, color: '#b53838' }, onClick: () => { setFilterStatus('todos'); setFilterCategoria('todos'); setFilterDateInicio(''); setFilterDateFim(''); setFilterDatasIncluidas('passadas_e_futuras'); setFilterModalOpen(false); } }, 'Resetar filtros')));
+      React.createElement('button', { type: 'button', style: { ...modalSecBtn, color: '#b53838' }, onClick: () => { setFilterStatus('todos'); setFilterCategoria('todos'); setFilterPaymentMethod('todos'); setFilterDateInicio(''); setFilterDateFim(''); setFilterDatasIncluidas('passadas_e_futuras'); setFilterModalOpen(false); } }, 'Resetar filtros')));
 
   // ── Table filter modal (Figma 1132-26548) ──
   const tableFilterContent = React.createElement('div', { style: modalBox, onClick: (e: React.MouseEvent) => e.stopPropagation() },
@@ -575,9 +617,18 @@ export default function ViagensScreen() {
             style: filterCategoria === opt.id ? chipActive : chipInactive,
             onClick: () => setFilterCategoria(opt.id),
           }, opt.label)))),
+    React.createElement('div', { style: { ...modalFieldWrap, gap: 0 } },
+      React.createElement('span', { style: modalSectionLabel }, 'Pagamento'),
+      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' } },
+        ...paymentMethodFilterOptions.map((opt) =>
+          React.createElement('button', {
+            key: opt.id, type: 'button',
+            style: filterPaymentMethod === opt.id ? chipActive : chipInactive,
+            onClick: () => setFilterPaymentMethod(opt.id),
+          }, opt.label)))),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, padding: '0 23px' } },
       React.createElement('button', { type: 'button', style: modalPrimaryBtn, onClick: () => setTableFilterOpen(false) }, 'Aplicar filtro'),
-      React.createElement('button', { type: 'button', style: { ...modalSecBtn, color: '#b53838' }, onClick: () => { setTableFilterNome(''); setTableFilterOrigem(''); setTableFilterDate(''); setFilterStatus('todos'); setFilterCategoria('todos'); setTableFilterOpen(false); } }, 'Resetar filtros')));
+      React.createElement('button', { type: 'button', style: { ...modalSecBtn, color: '#b53838' }, onClick: () => { setTableFilterNome(''); setTableFilterOrigem(''); setTableFilterDate(''); setFilterStatus('todos'); setFilterCategoria('todos'); setFilterPaymentMethod('todos'); setTableFilterOpen(false); } }, 'Resetar filtros')));
 
   const searchFilterEl = filterModalOpen
     ? React.createElement('div', { style: webStyles.modalOverlay, onClick: () => setFilterModalOpen(false), role: 'dialog', 'aria-modal': true, 'aria-label': 'Filtro' }, searchFilterContent)

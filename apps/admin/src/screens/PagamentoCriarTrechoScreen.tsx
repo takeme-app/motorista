@@ -29,9 +29,6 @@ type TrechoFormSlice = {
   retorno: string;
   pctWorker: string;
   pctAdmin: string;
-  payPix: boolean;
-  payCredito: boolean;
-  payDebito: boolean;
   manualExtra: boolean;
   adicionalId: string;
 };
@@ -74,9 +71,6 @@ function initialForms(): Record<TabTrecho, TrechoFormSlice> {
       retorno: '2025-09-15T16:30',
       pctWorker: '',
       pctAdmin: '',
-      payPix: false,
-      payCredito: false,
-      payDebito: false,
       manualExtra: true,
       adicionalId: '',
     },
@@ -91,9 +85,6 @@ function initialForms(): Record<TabTrecho, TrechoFormSlice> {
       retorno: '2025-10-12T14:30',
       pctWorker: '',
       pctAdmin: '',
-      payPix: false,
-      payCredito: false,
-      payDebito: false,
       manualExtra: false,
       adicionalId: '',
     },
@@ -108,9 +99,6 @@ function initialForms(): Record<TabTrecho, TrechoFormSlice> {
       retorno: '2025-10-19T15:40',
       pctWorker: '',
       pctAdmin: '',
-      payPix: false,
-      payCredito: false,
-      payDebito: false,
       manualExtra: true,
       adicionalId: '',
     },
@@ -235,11 +223,6 @@ export default function PagamentoCriarTrechoScreen() {
       setSaveErr('Indique o destino do trecho.');
       return;
     }
-    const methods: string[] = [];
-    if (f.payPix) methods.push('pix');
-    if (f.payCredito) methods.push('credit_card');
-    if (f.payDebito) methods.push('debit_card');
-
     let role_type: string;
     let pricing_mode: string;
     let price_cents: number;
@@ -277,7 +260,6 @@ export default function PagamentoCriarTrechoScreen() {
       price_cents,
       ...(Number.isFinite(dw) ? { driver_pct: dw } : {}),
       ...(Number.isFinite(da) ? { admin_pct: da } : {}),
-      accepted_payment_methods: methods.length ? methods : undefined,
       surcharges,
       ...(originCoord ? { origin_lat: originCoord.lat, origin_lng: originCoord.lng } : {}),
       ...(destCoord ? { destination_lat: destCoord.lat, destination_lng: destCoord.lng } : {}),
@@ -424,19 +406,6 @@ export default function PagamentoCriarTrechoScreen() {
           },
         })));
 
-  const payRow = (id: string, label: string, checked: boolean, setV: (v: boolean) => void) =>
-    React.createElement('label', {
-      key: id,
-      style: { display: 'flex', alignItems: 'center', cursor: 'pointer', width: '100%' },
-    },
-      React.createElement('input', {
-        type: 'checkbox',
-        checked,
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => setV(e.target.checked),
-        style: { width: 20, height: 20, margin: '10px 8px 10px 0', accentColor: '#0d0d0d', flexShrink: 0 },
-      }),
-      React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, label));
-
   const salvarBtnStyle: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
@@ -568,13 +537,6 @@ export default function PagamentoCriarTrechoScreen() {
       fieldText(pctWorkerLabel, f.pctWorker, (v) => patch({ pctWorker: v }), 'Ex: 15%'),
       fieldText('% ganho do admin', f.pctAdmin, (v) => patch({ pctAdmin: v }), 'Ex: 5%')));
 
-  const cardPagamento = React.createElement('div', { style: card },
-    React.createElement('h2', { style: tituloCard }, 'Forma de pagamento aceita'),
-    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
-      payRow('pix', 'Pix', f.payPix, (v) => patch({ payPix: v })),
-      payRow('cred', 'Cartão de crédito', f.payCredito, (v) => patch({ payCredito: v })),
-      payRow('deb', 'Cartão de débito', f.payDebito, (v) => patch({ payDebito: v }))));
-
   const bannerInfo = React.createElement('div', {
     style: {
       display: 'flex',
@@ -665,7 +627,6 @@ export default function PagamentoCriarTrechoScreen() {
     cardDados,
     cardHorarios,
     ...(showPercentuais ? [cardPct] : []),
-    cardPagamento,
     cardCustos,
   ];
 

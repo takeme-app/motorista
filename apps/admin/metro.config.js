@@ -1,6 +1,5 @@
 /**
- * Metro config do admin — usado quando você roda "npm run start" a partir de apps/admin.
- * Assim o admin não depende do metro.config.js da raiz (que aponta para cliente/motorista).
+ * Metro do admin dentro do monorepo: depende da raiz do repo para `packages/*` e hoisting.
  */
 const path = require('path');
 const { getDefaultConfig } = require('expo/metro-config');
@@ -11,6 +10,9 @@ const monorepoRoot = path.resolve(projectRoot, '../..');
 const config = getDefaultConfig(projectRoot);
 
 config.projectRoot = projectRoot;
+const serverRoot =
+  process.env.EXPO_NO_METRO_WORKSPACE_ROOT === '1' ? projectRoot : monorepoRoot;
+config.server = { ...(config.server ?? {}), unstable_serverRoot: serverRoot };
 config.watchFolders = [monorepoRoot];
 config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, 'node_modules'),
@@ -29,7 +31,6 @@ function firstExistingDir(...candidates) {
   return candidates[candidates.length - 1];
 }
 
-// Prefer react/react-dom no pacote admin; com hoisting do npm, cair para a raiz do monorepo.
 const reactRoot = firstExistingDir(
   path.resolve(projectRoot, 'node_modules/react'),
   path.resolve(monorepoRoot, 'node_modules/react'),

@@ -2,10 +2,10 @@
 
 > **Versao:** 2.4 | **Data:** 14/04/2026 | **Status:** Implementado
 > **Stack:** React 19 + React Router DOM 6 + Expo Web + Supabase + Mapbox GL + Google Maps (Places/Geocoding) + Recharts
-> **Repositorio:** monorepo `take_me/apps/admin`
+> **Repositorio:** `github.com/takeme-app/admin` (raiz = app admin + `packages/shared`)
 > **Rendering:** `React.createElement()` (sem JSX)
 > **Estilizacao:** React.CSSProperties inline (webStyles.ts)
-> **Monorepo:** `@take-me/shared` (Supabase client compartilhado)
+> **Workspace:** `@take-me/shared` em `packages/shared`
 
 ---
 

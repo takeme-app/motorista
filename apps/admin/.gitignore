@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Expo
+.expo/
+dist/
+web-build/
+
+# Playwright
+**/test-results/
+**/playwright-report/
+**/blob-report/
+**/playwright/.cache/
+e2e/.auth/admin.json
+
+# Mapbox GL — gerado por postinstall
+public/mapbox-gl-csp-worker.js
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.tsbuildinfo
+npm-debug.log*
