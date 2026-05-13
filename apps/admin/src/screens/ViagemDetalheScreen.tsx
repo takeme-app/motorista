@@ -1284,9 +1284,11 @@ export default function ViagemDetalheScreen() {
           : React.createElement('div', { style: { flex: '1 1 0', minWidth: 0 } })),
       handoffPinsBlock,
       (() => {
+        // Mostrar sempre que faz sentido confirmar PIN C (encomenda com base, ainda sem confirmação nem retirada pelo motorista).
+        // Não exigir `deliveredToBaseAt` aqui: sem esse timestamp o RPC devolve `not_at_base`, mas o operador vê o formulário
+        // e o aviso abaixo evita confusão quando o PIN B ainda não foi registado.
         const showBasePickupConfirm = Boolean(
           s.baseId?.trim()
-          && s.deliveredToBaseAt
           && !s.baseToDriverConfirmedAt
           && !s.pickedUpByDriverFromBaseAt,
         );
@@ -1294,6 +1296,7 @@ export default function ViagemDetalheScreen() {
         const busy = basePickupBusyId === s.id;
         const err = basePickupErrByShipmentId[s.id];
         const codeVal = basePickupCodeByShipmentId[s.id] ?? '';
+        const waitingPinB = !s.deliveredToBaseAt;
         return React.createElement(
           'div',
           {
@@ -1316,6 +1319,25 @@ export default function ViagemDetalheScreen() {
             { style: { fontSize: 13, color: '#525252', fontFamily: 'Inter, sans-serif', lineHeight: 1.45, margin: 0 } },
             'Peça ao motorista o código de 4 dígitos que ele mostra no telefone e confirme aqui. Depois disso o motorista consegue concluir a parada de retirada na app.',
           ),
+          waitingPinB
+            ? React.createElement(
+              'p',
+              {
+                style: {
+                  fontSize: 12,
+                  color: '#a16207',
+                  background: '#fefce8',
+                  border: '1px solid #fde047',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  margin: 0,
+                  fontFamily: 'Inter, sans-serif',
+                  lineHeight: 1.45,
+                },
+              },
+              'A entrega na base (PIN B) ainda não está registada neste envio. Confirme o PIN B no fluxo preparador/base antes; até lá o servidor rejeita a confirmação do PIN C.',
+            )
+            : null,
           React.createElement(
             'div',
             { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 10, alignItems: 'center' } },
@@ -1327,7 +1349,7 @@ export default function ViagemDetalheScreen() {
               placeholder: '0000',
               'aria-label': 'Código de 4 dígitos mostrado pelo motorista',
               value: codeVal,
-              disabled: busy,
+              disabled: busy || waitingPinB,
               onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
                 const v = e.target.value.replace(/\D/g, '').slice(0, 4);
                 setBasePickupCodeByShipmentId((prev) => ({ ...prev, [s.id]: v }));
@@ -1342,19 +1364,21 @@ export default function ViagemDetalheScreen() {
                 fontFamily: 'ui-monospace, Menlo, monospace',
                 textAlign: 'center' as const,
                 letterSpacing: 4,
+                ...(waitingPinB ? { opacity: 0.65, cursor: 'not-allowed' as const } : {}),
               },
             }),
             React.createElement(
               'button',
               {
                 type: 'button',
-                disabled: busy,
+                disabled: busy || waitingPinB,
                 'aria-busy': busy ? true : undefined,
+                title: waitingPinB ? 'Confirme primeiro o PIN B (entrega na base).' : undefined,
                 onClick: () => { void confirmBaseDriverPickupForShipment(s.id); },
                 style: {
                   ...webStyles.viagensActionBtn,
                   minHeight: 44,
-                  ...(busy ? { opacity: 0.55, cursor: 'wait' as const } : { cursor: 'pointer' as const }),
+                  ...((busy || waitingPinB) ? { opacity: 0.55, cursor: 'not-allowed' as const } : { cursor: 'pointer' as const }),
                 },
               },
               busy ? 'A confirmar…' : 'Confirmar retirada',
