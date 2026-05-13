@@ -18,7 +18,7 @@
 | `20260603110000_complete_trip_stop_dependent_pin_validation.sql` | Restaura validação de PIN no servidor para `dependent_pickup` e `dependent_dropoff` (cenário 2 do PDF). |
 | `20260603120000_shipments_handoff_codes.sql` | Adiciona colunas em `shipments`: `passenger_to_preparer_code` (PIN A), `preparer_to_base_code` (PIN B), `base_to_driver_code` (PIN C) e timestamps de handoff. Atualiza `generate_shipment_codes()` para gerar os 4 PINs quando há `base_id`. |
 | `20260603130000_ensure_shipment_trip_stops_with_base.sql` | `ensure_shipment_trip_stops` agora popula `trip_stops.code` da retirada com `base_to_driver_code` quando há base (cenário 3). |
-| `20260603140000_complete_trip_stop_with_base_handoff.sql` | `complete_trip_stop` valida `base_to_driver_code` (PIN C) quando o motorista retira na base. Atualiza `picked_up_by_driver_from_base_at`. |
+| `20260608153000_base_confirm_driver_pickup.sql` | Coluna `shipments.base_to_driver_confirmed_at`; RPC `base_confirm_driver_pickup` (admin ou preparador da base); `complete_trip_stop` exige confirmação da base na retirada com `base_id`; `complete_shipment_base_to_driver_by_admin` delega para a mesma RPC. |
 | `20260603150000_shipment_preparer_handoff_rpcs.sql` | Cria duas RPCs novas para os handoffs do preparador: `complete_shipment_passenger_to_preparer` (PIN A) e `complete_shipment_preparer_to_base` (PIN B). |
 
 ### 1.2 App Cliente (passageiro)
@@ -57,9 +57,9 @@
 - ✅ Banco com 4 PINs em `shipments` quando há `base_id`.
 - ✅ PIN A: passageiro valida (RPC `complete_shipment_passenger_to_preparer`).
 - ✅ PIN B: preparador valida (RPC `complete_shipment_preparer_to_base`).
-- ✅ PIN C: motorista digita ao retirar na base (`complete_trip_stop` com fallback para `base_to_driver_code`).
+- ✅ PIN C: o motorista **mostra** o código no app; a base confirma no Admin (`base_confirm_driver_pickup`); o motorista conclui a parada com `complete_trip_stop` (gate `base_to_driver_confirmed_at`).
 - ✅ PIN D: motorista digita ao entregar (`complete_trip_stop` com `delivery_code`).
-- ⚠️ **Modo interim**: a base ainda não tem UI dedicada. O preparador, fisicamente presente na base, atua como "interface interina" da base. Ver seção 4.
+- ⚠️ Dashboards agregados da secção 3.1 (listas por base, auditoria global) permanecem como melhoria futura.
 
 ### Cenário 4 — Encomenda sem base (2 PINs)
 - ✅ Sem mudanças no fluxo (mantém `pickup_code` + `delivery_code`).
@@ -67,15 +67,16 @@
 
 ---
 
-## 3. O que falta no front do **Admin**
+## 3. Admin — visualização e operação
 
-> Decisão: **não foi feita** nenhuma alteração no app/front admin nesta entrega.
-> A modelagem do banco já contempla todas as informações para visualização.
+### 3.0 Confirmação PIN C (detalhe da viagem)
+
+- **`apps/admin/src/screens/ViagemDetalheScreen.tsx`**: bloco «Confirmar retirada do motorista» quando a encomenda tem `base_id`, já chegou à base (`delivered_to_base_at`) e ainda não tem `base_to_driver_confirmed_at`, chamando a RPC `base_confirm_driver_pickup` (admin ou preparador da mesma base).
 
 ### 3.1 Telas/dashboards recomendados
 
 1. **Auditoria de validações de PIN**
-   - Listar, por encomenda/viagem/dependente: cada handoff (com timestamps `picked_up_by_preparer_at`, `delivered_to_base_at`, `picked_up_by_driver_from_base_at`, `picked_up_at`, `delivered_at`).
+   - Listar, por encomenda/viagem/dependente: cada handoff (com timestamps `picked_up_by_preparer_at`, `delivered_to_base_at`, `base_to_driver_confirmed_at`, `picked_up_by_driver_from_base_at`, `picked_up_at`, `delivered_at`).
    - Mostrar status: "PIN A validado em [data]", "PIN B validado em [data]", etc.
    - Filtros: por shipment, por base, por motorista, por preparador, por janela temporal.
    - **Nota**: ainda não há tabela de log dedicada. A recomendação **futura** é criar `code_validation_logs(entity_type, entity_id, step, validated_by, validated_at, success)`. Por enquanto a auditoria é indireta via timestamps + `status_history` (migration `20260522210000_log_status_change_security_definer.sql`).
@@ -85,7 +86,8 @@
    - **Cuidado de segurança**: estes PINs são sensíveis. Se o admin tem acesso de leitura aos shipments, o admin já consegue vê-los via SELECT. Considerar mascará-los na UI (`••••`) com botão "revelar" + log de quem revelou.
 
 3. **Encomendas em base** (operacional para suporte)
-   - Lista de shipments com `delivered_to_base_at` populado e `picked_up_by_driver_from_base_at` ainda nulo. Estas estão "esperando o motorista retirar".
+   - Lista de shipments com `delivered_to_base_at` populado e `base_to_driver_confirmed_at` ainda nulo: **aguardando confirmação do PIN C pela base** (motorista já pode estar na base com o código no ecrã).
+   - Lista de shipments com `base_to_driver_confirmed_at` populado e `picked_up_by_driver_from_base_at` ainda nulo: **aguardando o motorista concluir a parada** na app.
    - Lista de shipments com `picked_up_by_preparer_at` populado e `delivered_to_base_at` ainda nulo. Estas estão "em trânsito do cliente para a base".
    - Suporte usar isso para resolver casos onde o motorista demora a retirar.
 
@@ -111,7 +113,8 @@ SELECT
   -- Timestamps de handoff
   picked_up_by_preparer_at,        -- PIN A validado
   delivered_to_base_at,            -- PIN B validado
-  picked_up_by_driver_from_base_at,-- PIN C validado
+  base_to_driver_confirmed_at,      -- PIN C confirmado pela base (motorista mostrou o código)
+  picked_up_by_driver_from_base_at, -- motorista concluiu retirada na app
   picked_up_at,                    -- coleta confirmada (qualquer cenário)
   delivered_at                     -- entrega final concluída
 FROM public.shipments;
@@ -123,24 +126,22 @@ A política RLS existente para o admin já dá leitura completa sobre `shipments
 
 ---
 
-## 4. O que falta na **UI da Base**
+## 4. O que falta na **UI da Base** (dedicada)
 
-> Decisão: **base não tem UI nesta entrega**. O preparador atua como interface
-> interina (vê PIN B no app dele e digita ao chegar na base).
+> O **Admin** já permite confirmar o PIN C no detalhe da viagem (secção 3.0).
+> Falta, se desejado, uma **UI exclusiva da base** (tablet, app próprio ou perfil «só base») para listas operacionais sem passar pelo ecrã de viagem completo.
 
-### 4.1 Por que isso é interim
+### 4.1 Por que isso pode ser útil
 
 Pelo PDF cenário 3:
 - **Etapa 7**: "Base informa o código" (PIN B) ao preparador.
 - **Etapa 11**: "Base valida o código" que o motorista informa (PIN C).
 
-Sem UI, a base não consegue:
-- Saber qual PIN B mostrar para qual encomenda chegando.
-- Validar PIN C verificando a identidade do motorista.
+Sem UI dedicada só para a base, o operador usa o **Admin** (detalhe da viagem) ou continua a depender do preparador no fluxo verbal.
 
 Hoje o sistema funciona porque:
 - O preparador, fisicamente na base, vê o PIN B no app dele e digita (chamando `complete_shipment_preparer_to_base`).
-- O motorista digita o PIN C que recebe verbalmente da base; o backend valida via `complete_trip_stop`. Não há login da base — o motorista é a única superfície de digitação.
+- O motorista **mostra** o PIN C no app; o operador da base (admin ou preparador com login no Admin) confirma com `base_confirm_driver_pickup`; o motorista conclui a parada com `complete_trip_stop`.
 
 ### 4.2 Opções de UI da Base (a decidir)
 
@@ -154,9 +155,9 @@ Hoje o sistema funciona porque:
 
 Quando a UI da Base existir, ela vai consumir os mesmos dados/RPCs:
 - **Listar encomendas a depositar**: `shipments` com `base_id = X`, `picked_up_by_preparer_at != null` e `delivered_to_base_at = null`.
-- **Listar encomendas a entregar ao motorista**: `shipments` com `base_id = X`, `delivered_to_base_at != null` e `picked_up_by_driver_from_base_at = null`.
+- **Listar encomendas a entregar ao motorista**: `shipments` com `base_id = X`, `delivered_to_base_at != null` e `picked_up_by_driver_from_base_at = null` (inclui após `base_to_driver_confirmed_at` até o motorista concluir a parada).
 - **Validar PIN B**: chamar `complete_shipment_preparer_to_base` (hoje só preparador chama; ajustar policy ou criar `complete_shipment_base_intake` se quiser separar atores).
-- **Validar PIN C**: hoje o motorista digita. Quando a base tiver UI, pode-se mover a validação para uma RPC chamada pela base com o PIN que o motorista informa verbalmente.
+- **Validar PIN C**: RPC `base_confirm_driver_pickup` (admin ou preparador da base); o motorista conclui com `complete_trip_stop`.
 
 ### 4.4 Modelagem mínima sugerida (quando construir)
 
@@ -231,8 +232,8 @@ quando os testes forem feitos:
   - Insert em `dependent_shipments` continua gerando 2 PINs.
   - `complete_trip_stop` com `dependent_pickup` rejeita PIN errado e aceita correto.
   - `complete_trip_stop` com `dependent_dropoff` idem.
-  - `complete_trip_stop` com `package_pickup` em shipment com base valida `base_to_driver_code`.
-  - `complete_trip_stop` com `package_pickup` em shipment sem base valida `pickup_code`.
+  - `complete_trip_stop` com `package_pickup` em shipment com base exige `base_to_driver_confirmed_at` (PIN C confirmado pela base via `base_confirm_driver_pickup`).
+  - `complete_trip_stop` com `package_pickup` em shipment sem base exige `picked_up_at` (cliente).
   - `complete_shipment_passenger_to_preparer` exige `auth.uid() = shipments.user_id`.
   - `complete_shipment_preparer_to_base` exige `auth.uid() = shipments.preparer_id` e `picked_up_by_preparer_at != null`.
 
@@ -240,5 +241,5 @@ quando os testes forem feitos:
   - Cliente confirma PIN A → backend marca `picked_up_by_preparer_at`.
   - Preparador detecta `picked_up_by_preparer_at` e avança para "to_base".
   - Preparador valida PIN B → backend marca `delivered_to_base_at`.
-  - Motorista digita PIN C na base → backend marca `picked_up_by_driver_from_base_at`.
+  - Base confirma PIN C (`base_confirm_driver_pickup`) → `base_to_driver_confirmed_at`; motorista conclui parada → `picked_up_by_driver_from_base_at`.
   - Motorista digita PIN D no destinatário → shipment vira `delivered`.

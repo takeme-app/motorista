@@ -94,10 +94,10 @@ Migration **`20260603120000_shipments_handoff_codes.sql`** (e comentários nas c
 |-----|-------------|---------------------|
 | **A** | Passageiro → Preparador | `passenger_to_preparer_code` — passageiro confirma no app cliente o código que o preparador obteve na coleta. |
 | **B** | Preparador → Base | `preparer_to_base_code` — o **preparador vê o PIN no app** e informa verbalmente ao **Admin**; o Admin digita no painel (`complete_shipment_preparer_to_base_by_admin`). **Fallback:** `complete_shipment_preparer_to_base` (preparador digita) se a base/admin estiver indisponível. |
-| **C** | Base → Motorista | `base_to_driver_code` — o **motorista vê o PIN no app** e informa verbalmente ao **Admin**; o Admin digita no painel (`complete_shipment_base_to_driver_by_admin`), que também conclui a parada de retirada na base quando há `scheduled_trip_id`. **Fallback:** `complete_trip_stop` na parada `package_pickup` (ex.: «Base fora do ar»). |
+| **C** | Base → Motorista | `base_to_driver_code` — o **motorista mostra o PIN no app**; o **operador da base** (admin ou preparador com `worker_profiles.base_id` da mesma base) digita no painel Admin (`base_confirm_driver_pickup`), que grava `base_to_driver_confirmed_at`. O motorista conclui a parada com `complete_trip_stop` (sem enviar PIN). **`complete_shipment_base_to_driver_by_admin`** delega para a mesma RPC (só utilizadores `is_admin()`). |
 | **D** | Motorista → Destinatário | `delivery_code` (já existente) — entrega final. |
 
-Timestamps associados: `picked_up_by_preparer_at`, `delivered_to_base_at`, `picked_up_by_driver_from_base_at`.
+Timestamps associados: `picked_up_by_preparer_at`, `delivered_to_base_at`, `base_to_driver_confirmed_at`, `picked_up_by_driver_from_base_at`.
 
 Geração: trigger **`generate_shipment_codes`** estendido — para `base_id` preenchido, gera A/B/C **únicos** entre si e em relação a `pickup_code`/`delivery_code`.
 
@@ -108,8 +108,9 @@ Geração: trigger **`generate_shipment_codes`** estendido — para `base_id` pr
 - **`complete_shipment_passenger_to_preparer`** — valida **PIN A** (passageiro digita o código informado pelo preparador).
 - **`complete_shipment_preparer_to_base_by_admin`** (migration `20260604100000_shipment_admin_handoff_rpcs.sql`) — valida **PIN B** com utilizador **admin** (`is_admin()`); caminho principal quando a base opera pelo painel Admin.
 - **`complete_shipment_preparer_to_base`** — valida **PIN B** pelo **preparador** (RPC legada; **fallback** operacional).
-- **`complete_shipment_base_to_driver_by_admin`** — valida **PIN C** com utilizador **admin**; caminho principal.
-- **`complete_trip_stop`** (ramo `package_pickup` / encomenda com base) — continua a poder validar **PIN C** pelo motorista quando se usa o fluxo manual de emergência.
+- **`complete_shipment_base_to_driver_by_admin`** — utilizador **admin** (`is_admin()`); delega para **`base_confirm_driver_pickup`** (valida PIN C e grava `base_to_driver_confirmed_at`). O motorista conclui a retirada com **`complete_trip_stop`**.
+- **`base_confirm_driver_pickup`** (migration `20260608153000_base_confirm_driver_pickup.sql`) — valida **PIN C** por **admin** ou **preparador de encomendas** da mesma base (`worker_profiles.subtype = 'shipments'`, `base_id` = `shipments.base_id`). Não conclui `trip_stops`.
+- **`complete_trip_stop`** (ramo `package_pickup` / encomenda com base) — exige **`base_to_driver_confirmed_at`** preenchido; o motorista não envia PIN C.
 
 Documentação inline nas migrations aponta para o PDF cenário 3 (etapas 1–3 e 6–8); o modelo Admin + verbal foi consolidado em `codigos-pin-referencia.md`.
 
@@ -136,7 +137,7 @@ Documentação inline nas migrations aponta para o PDF cenário 3 (etapas 1–3 
 | PIN dependente no RPC | `supabase/migrations/20260603110000_complete_trip_stop_dependent_pin_validation.sql` |
 | Colunas handoff A/B/C + geração | `supabase/migrations/20260603120000_shipments_handoff_codes.sql` |
 | `trip_stops` + base / PIN C | `supabase/migrations/20260603130000_ensure_shipment_trip_stops_with_base.sql` |
-| `complete_trip_stop` + base handoff | `supabase/migrations/20260603140000_complete_trip_stop_with_base_handoff.sql` |
+| `complete_trip_stop` + confirmação PIN C pela base | `supabase/migrations/20260608153000_base_confirm_driver_pickup.sql` |
 | RPCs PIN A e B | `supabase/migrations/20260603150000_shipment_preparer_handoff_rpcs.sql` |
 | Foreground cliente | `apps/cliente/src/lib/foregroundNotificationHandler.ts` |
 | Foreground motorista | `apps/motorista/src/lib/foregroundNotificationHandler.ts` |

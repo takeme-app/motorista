@@ -532,6 +532,80 @@ export default function ViagemDetalheScreen() {
     return () => { cancel = true; };
   }, [resolvedScheduledTripId]);
 
+  const refetchLinkedShipments = useCallback(() => {
+    if (!resolvedScheduledTripId) return Promise.resolve();
+    return fetchShipmentsForScheduledTrip(resolvedScheduledTripId).then(setLinkedShipments);
+  }, [resolvedScheduledTripId]);
+
+  const [basePickupCodeByShipmentId, setBasePickupCodeByShipmentId] = useState<Record<string, string>>({});
+  const [basePickupBusyId, setBasePickupBusyId] = useState<string | null>(null);
+  const [basePickupErrByShipmentId, setBasePickupErrByShipmentId] = useState<Record<string, string>>({});
+
+  const confirmBaseDriverPickupForShipment = useCallback(
+    async (shipmentId: string) => {
+      const raw = (basePickupCodeByShipmentId[shipmentId] ?? '').replace(/\D/g, '');
+      setBasePickupErrByShipmentId((prev) => {
+        const next = { ...prev };
+        delete next[shipmentId];
+        return next;
+      });
+      if (raw.length !== 4) {
+        setBasePickupErrByShipmentId((prev) => ({
+          ...prev,
+          [shipmentId]: 'Digite os 4 dígitos do código mostrado pelo motorista.',
+        }));
+        return;
+      }
+      setBasePickupBusyId(shipmentId);
+      try {
+        const { data, error } = await supabase.rpc('base_confirm_driver_pickup', {
+          p_shipment_id: shipmentId,
+          p_code: raw,
+        });
+        if (error) {
+          setBasePickupErrByShipmentId((prev) => ({
+            ...prev,
+            [shipmentId]: error.message || 'Não foi possível confirmar.',
+          }));
+          return;
+        }
+        const payload = data as { ok?: boolean; error?: string } | null;
+        if (!payload?.ok) {
+          const key = String(payload?.error ?? '');
+          const msg =
+            key === 'invalid_code'
+              ? 'Código incorreto. Confira com o motorista.'
+              : key === 'no_base_handoff'
+                ? 'Essa encomenda não passa por base.'
+                : key === 'shipment_not_found'
+                  ? 'Encomenda não encontrada.'
+                  : key === 'not_authenticated'
+                    ? 'Faça login para continuar.'
+                    : key === 'forbidden'
+                      ? 'Sem permissão para confirmar nesta base.'
+                      : key === 'not_at_base'
+                        ? 'A encomenda ainda não chegou à base.'
+                        : key === 'code_length'
+                          ? 'Digite os 4 dígitos do código mostrado pelo motorista.'
+                          : key === 'missing_code'
+                            ? 'Código esperado indisponível. Contacte suporte.'
+                            : 'Não foi possível confirmar.';
+          setBasePickupErrByShipmentId((prev) => ({ ...prev, [shipmentId]: msg }));
+          return;
+        }
+        await refetchLinkedShipments();
+        setBasePickupCodeByShipmentId((prev) => {
+          const next = { ...prev };
+          delete next[shipmentId];
+          return next;
+        });
+      } finally {
+        setBasePickupBusyId(null);
+      }
+    },
+    [basePickupCodeByShipmentId, refetchLinkedShipments],
+  );
+
   /** Sem `bookings.id` real mas com envios no trip (detalhe sintético): não listar remetente como passageiro. */
   const isShipmentOnlyTrip = useMemo(
     () => Boolean(detail && !String(detail.listItem?.bookingId ?? '').trim() && linkedShipments.length > 0),
@@ -1166,7 +1240,11 @@ export default function ViagemDetalheScreen() {
             null,
             adminPinChipRow('PIN A — Passageiro → preparador', s.passengerToPreparerCode, s.pickedUpByPreparerAt),
             adminPinChipRow('PIN B — Preparador → base', s.preparerToBaseCode, s.deliveredToBaseAt),
-            adminPinChipRow('PIN C — Base → motorista', s.baseToDriverCode, s.pickedUpByDriverFromBaseAt),
+            adminPinChipRow(
+              'PIN C — Base → motorista',
+              s.baseToDriverCode,
+              s.baseToDriverConfirmedAt ?? s.pickedUpByDriverFromBaseAt,
+            ),
             adminPinChipRow('PIN D — Motorista → destinatário', s.deliveryCode, s.deliveredAt),
             s.pickupCode?.trim()
               ? adminPinChipRow(
@@ -1205,6 +1283,92 @@ export default function ViagemDetalheScreen() {
           ? encField('Observações:', s.instructions, true)
           : React.createElement('div', { style: { flex: '1 1 0', minWidth: 0 } })),
       handoffPinsBlock,
+      (() => {
+        const showBasePickupConfirm = Boolean(
+          s.baseId?.trim()
+          && s.deliveredToBaseAt
+          && !s.baseToDriverConfirmedAt
+          && !s.pickedUpByDriverFromBaseAt,
+        );
+        if (!showBasePickupConfirm) return null;
+        const busy = basePickupBusyId === s.id;
+        const err = basePickupErrByShipmentId[s.id];
+        const codeVal = basePickupCodeByShipmentId[s.id] ?? '';
+        return React.createElement(
+          'div',
+          {
+            style: {
+              borderTop: '1px solid #e2e2e2',
+              paddingTop: 16,
+              marginTop: 4,
+              display: 'flex',
+              flexDirection: 'column' as const,
+              gap: 10,
+            },
+          },
+          React.createElement(
+            'div',
+            { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' } },
+            'Confirmar retirada do motorista',
+          ),
+          React.createElement(
+            'p',
+            { style: { fontSize: 13, color: '#525252', fontFamily: 'Inter, sans-serif', lineHeight: 1.45, margin: 0 } },
+            'Peça ao motorista o código de 4 dígitos que ele mostra no telefone e confirme aqui. Depois disso o motorista consegue concluir a parada de retirada na app.',
+          ),
+          React.createElement(
+            'div',
+            { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 10, alignItems: 'center' } },
+            React.createElement('input', {
+              type: 'text',
+              inputMode: 'numeric' as const,
+              autoComplete: 'one-time-code',
+              maxLength: 4,
+              placeholder: '0000',
+              'aria-label': 'Código de 4 dígitos mostrado pelo motorista',
+              value: codeVal,
+              disabled: busy,
+              onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+                const v = e.target.value.replace(/\D/g, '').slice(0, 4);
+                setBasePickupCodeByShipmentId((prev) => ({ ...prev, [s.id]: v }));
+              },
+              style: {
+                width: 112,
+                height: 44,
+                borderRadius: 8,
+                border: '1px solid #d4d4d4',
+                fontSize: 18,
+                fontWeight: 700,
+                fontFamily: 'ui-monospace, Menlo, monospace',
+                textAlign: 'center' as const,
+                letterSpacing: 4,
+              },
+            }),
+            React.createElement(
+              'button',
+              {
+                type: 'button',
+                disabled: busy,
+                'aria-busy': busy ? true : undefined,
+                onClick: () => { void confirmBaseDriverPickupForShipment(s.id); },
+                style: {
+                  ...webStyles.viagensActionBtn,
+                  minHeight: 44,
+                  ...(busy ? { opacity: 0.55, cursor: 'wait' as const } : { cursor: 'pointer' as const }),
+                },
+              },
+              busy ? 'A confirmar…' : 'Confirmar retirada',
+            ),
+          ),
+          err
+            ? React.createElement(
+              'p',
+              { style: { fontSize: 13, color: '#b91c1c', fontFamily: 'Inter, sans-serif', margin: 0 } },
+              err,
+            )
+            : null,
+        );
+      })(),
       React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 8, alignItems: 'center' } },
         (() => {
           const busyShip = supportCreateBusyKey === `ship:${s.id}`;

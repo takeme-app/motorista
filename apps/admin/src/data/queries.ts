@@ -784,7 +784,7 @@ export async function fetchShipmentsForScheduledTrip(tripId: string): Promise<Tr
         'origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng',
         'instructions, photo_url, status, base_id',
         'pickup_code, passenger_to_preparer_code, preparer_to_base_code, base_to_driver_code, delivery_code',
-        'picked_up_by_preparer_at, delivered_to_base_at, picked_up_by_driver_from_base_at, picked_up_at, delivered_at',
+        'picked_up_by_preparer_at, delivered_to_base_at, picked_up_by_driver_from_base_at, base_to_driver_confirmed_at, picked_up_at, delivered_at',
       ].join(', '),
     )
     .eq('scheduled_trip_id', tripId)
@@ -815,6 +815,7 @@ export async function fetchShipmentsForScheduledTrip(tripId: string): Promise<Tr
     picked_up_by_preparer_at?: string | null;
     delivered_to_base_at?: string | null;
     picked_up_by_driver_from_base_at?: string | null;
+    base_to_driver_confirmed_at?: string | null;
     picked_up_at?: string | null;
     delivered_at?: string | null;
   };
@@ -884,6 +885,7 @@ export async function fetchShipmentsForScheduledTrip(tripId: string): Promise<Tr
     pickedUpByPreparerAt: isoOrNull(s.picked_up_by_preparer_at),
     deliveredToBaseAt: isoOrNull(s.delivered_to_base_at),
     pickedUpByDriverFromBaseAt: isoOrNull(s.picked_up_by_driver_from_base_at),
+    baseToDriverConfirmedAt: isoOrNull(s.base_to_driver_confirmed_at),
     pickedUpAt: isoOrNull(s.picked_up_at),
     deliveredAt: isoOrNull(s.delivered_at),
   }));

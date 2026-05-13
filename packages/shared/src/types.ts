@@ -1,6 +1,6 @@
 /**
- * Tipos gerados a partir do schema Supabase (MCP user-supabase-take-me: generate_typescript_types).
- * Atualizado em: 2025-03-16
+ * Tipos gerados a partir do schema Supabase (MCP user-supabase-takeme: generate_typescript_types).
+ * Atualizado em: 2026-05-13 — RPC `base_confirm_driver_pickup` + coluna `shipments.base_to_driver_confirmed_at`.
  */
 export type Json =
   | string
@@ -926,6 +926,7 @@ export type Database = {
           pickup_code: string | null
           pickup_notes: string | null
           picked_up_at: string | null
+          base_to_driver_confirmed_at: string | null
           recipient_email: string
           recipient_name: string
           recipient_phone: string
@@ -961,6 +962,7 @@ export type Database = {
           pickup_code?: string | null
           pickup_notes?: string | null
           picked_up_at?: string | null
+          base_to_driver_confirmed_at?: string | null
           recipient_email: string
           recipient_name: string
           recipient_phone: string
@@ -996,6 +998,7 @@ export type Database = {
           pickup_code?: string | null
           pickup_notes?: string | null
           picked_up_at?: string | null
+          base_to_driver_confirmed_at?: string | null
           recipient_email?: string
           recipient_name?: string
           recipient_phone?: string
@@ -1123,6 +1126,13 @@ export type Database = {
           p_platform?: string
         }
         Returns: undefined
+      }
+      base_confirm_driver_pickup: {
+        Args: {
+          p_shipment_id: string
+          p_code: string
+        }
+        Returns: Json
       }
     }
     Enums: {

@@ -226,6 +226,8 @@ export interface TripShipmentListItem {
   pickedUpByPreparerAt: string | null;
   deliveredToBaseAt: string | null;
   pickedUpByDriverFromBaseAt: string | null;
+  /** Base validou o PIN C (`shipments.base_to_driver_confirmed_at`). */
+  baseToDriverConfirmedAt: string | null;
   pickedUpAt: string | null;
   deliveredAt: string | null;
 }

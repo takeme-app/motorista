@@ -102,7 +102,8 @@ inspecionar esses campos para reconstruir a linha do tempo da operação.
 |---|---|
 | `picked_up_by_preparer_at` | **PIN A** validado pelo passageiro |
 | `delivered_to_base_at` | **PIN B** validado pelo preparador |
-| `picked_up_by_driver_from_base_at` | **PIN C** validado pelo motorista |
+| `base_to_driver_confirmed_at` | **PIN C** confirmado pela base (operador Admin ou preparador da mesma base via `base_confirm_driver_pickup`) |
+| `picked_up_by_driver_from_base_at` | Motorista concluiu a retirada na base na app (`complete_trip_stop`, após PIN C confirmado) |
 | `picked_up_at` | Coleta confirmada (cenário 4 ou cenário 3 retirada na base) |
 | `delivered_at` | **PIN D** validado pelo motorista (entrega ao destinatário) |
 
@@ -286,8 +287,9 @@ Padrão `{ ok: false, error: '<código>' }`. Códigos comuns:
 | 2 | `20260603110000_complete_trip_stop_dependent_pin_validation.sql` | 2 | Restaura validação de `dependent_pickup` e `dependent_dropoff` no servidor. |
 | 3 | `20260603120000_shipments_handoff_codes.sql` | 3 | Adiciona PINs A, B, C + timestamps em `shipments`. Atualiza geração. |
 | 4 | `20260603130000_ensure_shipment_trip_stops_with_base.sql` | 3 | `trip_stops.code` da retirada vira PIN C quando há base. |
-| 5 | `20260603140000_complete_trip_stop_with_base_handoff.sql` | 3 | RPC valida PIN C; marca `picked_up_by_driver_from_base_at`. |
+| 5 | `20260603140000_complete_trip_stop_with_base_handoff.sql` | 3 | Histórico: passou a validar PIN C no motorista; ver #7. |
 | 6 | `20260603150000_shipment_preparer_handoff_rpcs.sql` | 3 | RPCs novas para PIN A e PIN B. |
+| 7 | `20260608153000_base_confirm_driver_pickup.sql` | 3 | `base_to_driver_confirmed_at`; `base_confirm_driver_pickup`; `complete_trip_stop` com base exige confirmação da base (motorista mostra PIN C). |
 
 ### 7.2 Apps modificados
 
@@ -299,6 +301,7 @@ Padrão `{ ok: false, error: '<código>' }`. Códigos comuns:
 | Motorista | `screens/ActiveTripScreen.tsx` | `dependent_dropoff` exige PIN; instruções atualizadas para cenários 2 e 3. |
 | Motorista | `hooks/useTripStops.ts` | `package_pickup` em base usa PIN C como `code`. |
 | Motorista | `screens/encomendas/ActiveShipmentScreen.tsx` (preparador) | Coleta exibe PIN A; entrega na base valida PIN B via RPC. |
+| Admin | `screens/ViagemDetalheScreen.tsx` | Confirmação PIN C (`base_confirm_driver_pickup`) no detalhe da viagem. |
 
 ### 7.3 App Admin
 
@@ -434,7 +437,7 @@ PINs são **dados sensíveis**. Recomendações para o frontend Admin:
 ## 11. Pontos de atenção / dívidas conhecidas
 
 ### 11.1 Modo interim da Base
-A "Base" como ator não tem UI dedicada. Hoje o **preparador** atua como interface interina (vê e digita PIN B; motorista digita PIN C que recebe verbalmente do preparador presente na base). Isso é um handoff "cosmético" para PIN B no modo interim. Resolução completa requer construir a UI da Base — ver `admin-pin-recomendacoes.md` §4.
+A "Base" como ator **não tem UI dedicada** além do fluxo no **Admin** (detalhe da viagem: `base_confirm_driver_pickup`). O preparador continua a atuar na cadeia (PIN B no app dele). O motorista **mostra** o PIN C; a base confirma no Admin; o motorista conclui a parada com `complete_trip_stop`. Para listas/tablets só da base, ver `admin-pin-recomendacoes.md` §4.
 
 ### 11.2 PINs visíveis nos apps "do mesmo lado do handoff"
 - Passageiro vê seu próprio `delivery_code` no app cliente (PIN D, cenário 3 e 4) — **correto**, pois ele precisa repassar.
