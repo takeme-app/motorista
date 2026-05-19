@@ -105,6 +105,7 @@ type BookingDetail = {
   driver_id: string | null;
   /** `scheduled_trips.status` — active | completed | cancelled */
   trip_status: string | null;
+  driver_journey_started_at: string | null;
   cancellation_reason: string | null;
   scheduled_trip_id: string | null;
   /** ISO da partida, para cálculo da janela de reembolso. */
@@ -288,11 +289,18 @@ export function TripDetailScreen({ navigation, route }: Props) {
         setLoading(false);
         return;
       }
-      const { data: trip } = await supabase
+      const { data: tripRaw } = await supabase
         .from('scheduled_trips')
-        .select('departure_at, arrival_at, driver_id, status')
+        .select('departure_at, arrival_at, driver_id, status, driver_journey_started_at')
         .eq('id', booking.scheduled_trip_id)
         .single();
+      const trip = tripRaw as {
+        departure_at: string | null;
+        arrival_at: string | null;
+        driver_id: string | null;
+        status: string | null;
+        driver_journey_started_at: string | null;
+      } | null;
       let driverName = 'Motorista';
       let driverAvatarUrl: string | null = null;
       let driverRating = 0;
@@ -346,7 +354,8 @@ export function TripDetailScreen({ navigation, route }: Props) {
         driver_name: driverName,
         driver_avatar_url: driverAvatarUrl,
         driver_id: trip?.driver_id ?? null,
-        trip_status: (trip as { status?: string } | null)?.status ?? null,
+        trip_status: trip?.status ?? null,
+        driver_journey_started_at: trip?.driver_journey_started_at ?? null,
         cancellation_reason: (booking as { cancellation_reason?: string | null }).cancellation_reason ?? null,
         scheduled_trip_id: b.scheduled_trip_id ?? null,
         departure_at: (trip as { departure_at?: string | null } | null)?.departure_at ?? null,
@@ -745,9 +754,12 @@ export function TripDetailScreen({ navigation, route }: Props) {
 
         <View style={styles.card}>
           <View style={styles.cardStatusRow}>
-            <StatusBadge variant={clientViagemStatusBadge(detail.status, detail.trip_status, detail.cancellation_reason)} />
+            <StatusBadge variant={clientViagemStatusBadge(detail.status, detail.trip_status, detail.cancellation_reason, detail.driver_journey_started_at)} />
           </View>
-          <Text style={styles.tripId}>{formatTripCode(detail.id)}</Text>
+          <Text style={styles.tripId}>Minha reserva: {formatTripCode(detail.id)}</Text>
+          {detail.scheduled_trip_id ? (
+            <Text style={styles.tripIdMeta}>ID da Viagem: {formatTripCode(detail.scheduled_trip_id)}</Text>
+          ) : null}
           <Text style={styles.cardDate}>{formatDetailDate(detail.created_at)}</Text>
           <Text style={styles.cardSummary}>
             {detail.passenger_count} {detail.passenger_count === 1 ? 'passageiro' : 'passageiros'} ·{' '}
@@ -1249,6 +1261,7 @@ const styles = StyleSheet.create({
   },
   receiptButtonText: { fontSize: 14, fontWeight: '500', color: COLORS.neutral700 },
   tripId: { fontSize: 22, fontWeight: '700', color: COLORS.black, marginTop: 8 },
+  tripIdMeta: { fontSize: 12, color: COLORS.neutral700, marginTop: 2 },
   cardSummary: { fontSize: 14, color: COLORS.neutral700, marginTop: 4 },
   sectionHeading: { fontSize: 16, fontWeight: '700', color: COLORS.black, marginHorizontal: 24, marginTop: 20, marginBottom: 8 },
   dependentSectionHeading: { marginTop: 28 },

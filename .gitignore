@@ -64,3 +64,14 @@ apps/admin/e2e/.auth/admin.json
 
 # Mapbox GL — gerado por `postinstall` / `scripts/copy-mapbox-worker.cjs` (não versionar ~450KB)
 apps/admin/public/mapbox-gl-csp-worker.js
+
+# Build/release outputs locais
+apps/cliente/release/
+apps/motorista/android/build/
+apps/motorista/ios/build/
+packages/expo-mapbox-navigation/android/build/
+packages/expo-mapbox-navigation/ios/build/
+
+# Logs de build/release locais
+**/.last-release-build.log
+docs/xcode-build-*.log

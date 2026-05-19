@@ -1427,6 +1427,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                   <MaterialIcons name="close" size={18} color="#374151" />
                 </TouchableOpacity>
               </View>
+              <Text style={styles.reservaCodeLine}>ID da Reserva: {shipmentDisplayId(shipment.id)}</Text>
               <View style={styles.divider} />
               <ScrollView keyboardShouldPersistTaps="handled">
                 {shipment.hasPreparerBase ? (
@@ -1547,6 +1548,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                   <MaterialIcons name="close" size={18} color="#374151" />
                 </TouchableOpacity>
               </View>
+              <Text style={styles.reservaCodeLine}>ID da Reserva: {shipmentDisplayId(shipment.id)}</Text>
               <View style={styles.divider} />
               <ScrollView keyboardShouldPersistTaps="handled">
                 <Text style={styles.fieldLabel}>
@@ -1638,6 +1640,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                   <MaterialIcons name="close" size={18} color="#374151" />
                 </TouchableOpacity>
               </View>
+              <Text style={styles.reservaCodeLine}>ID da Reserva: {shipmentDisplayId(shipment.id)}</Text>
               <View style={styles.divider} />
               <ScrollView keyboardShouldPersistTaps="handled">
                 <View style={styles.statRow}>
@@ -1969,6 +1972,7 @@ const styles = StyleSheet.create({
   sheetHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 16 },
   sheetTitle: { fontSize: 20, fontWeight: '700', color: DARK, marginBottom: 4 },
   sheetSub: { fontSize: 14, color: '#6B7280', lineHeight: 20 },
+  reservaCodeLine: { fontSize: 14, fontWeight: '700', color: DARK, marginTop: 4, marginBottom: 8 },
   closeBtn: {
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',

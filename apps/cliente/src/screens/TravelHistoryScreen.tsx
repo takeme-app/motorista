@@ -56,7 +56,7 @@ export function TravelHistoryScreen({ navigation }: Props) {
     }
     const { data: bookings } = await supabase
       .from('bookings')
-      .select('id, origin_address, destination_address, status, created_at, cancellation_reason, scheduled_trips(status)')
+      .select('id, origin_address, destination_address, status, created_at, cancellation_reason, scheduled_trips(status, driver_journey_started_at)')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
       .limit(100);
@@ -70,11 +70,22 @@ export function TravelHistoryScreen({ navigation }: Props) {
         status?: string;
         created_at: string;
         cancellation_reason?: string | null;
-        scheduled_trips?: { status?: string } | { status?: string }[] | null;
+        scheduled_trips?:
+          | { status?: string; driver_journey_started_at?: string | null }
+          | { status?: string; driver_journey_started_at?: string | null }[]
+          | null;
       };
       const st = b.scheduled_trips;
       const tripStatus = Array.isArray(st) ? st[0]?.status : st?.status;
-      const badgeVariant = clientViagemStatusBadge(b.status, tripStatus ?? null, b.cancellation_reason);
+      const tripJourneyStartedAt = Array.isArray(st)
+        ? st[0]?.driver_journey_started_at
+        : st?.driver_journey_started_at;
+      const badgeVariant = clientViagemStatusBadge(
+        b.status,
+        tripStatus ?? null,
+        b.cancellation_reason,
+        tripJourneyStartedAt ?? null,
+      );
       const item: HistoryItem = {
         id: b.id,
         type: 'viagem',

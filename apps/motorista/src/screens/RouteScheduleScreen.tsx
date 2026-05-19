@@ -13,6 +13,7 @@ import {
   Animated,
   Pressable,
   InteractionManager,
+  Alert,
 } from 'react-native';
 import { useBottomSheetDrag } from '../hooks/useBottomSheetDrag';
 import { Text } from '../components/Text';
@@ -119,6 +120,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
   const [transferTargetDay, setTransferTargetDay] = useState(0);
   const [transferSaving, setTransferSaving] = useState(false);
   const transferSlideAnim = useRef(new Animated.Value(400)).current;
+  const [deletingTripId, setDeletingTripId] = useState<string | null>(null);
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent === true;
@@ -346,6 +348,59 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
     }
   };
 
+  /** Soft delete: marca a scheduled_trip como cancelled+is_active=false.
+   *  Trigger `sync_*_when_trip_cancelled` propaga cancelamento para
+   *  bookings/shipments/dependent_shipments vinculados. Bloqueia se já há
+   *  passageiros confirmados — nesse caso o motorista deve cancelar a viagem
+   *  pelo fluxo normal (com reembolso/política aplicada). */
+  const runDeleteTrip = async (tripId: string) => {
+    setDeletingTripId(tripId);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id) {
+        showAlert('Erro', 'Não autenticado.');
+        return;
+      }
+      const { error } = await supabase
+        .from('scheduled_trips')
+        .update({
+          status: 'cancelled',
+          is_active: false,
+          updated_at: new Date().toISOString(),
+        } as never)
+        .eq('id', tripId)
+        .eq('driver_id', user.id);
+      if (error) throw error;
+      await load({ silent: true });
+    } catch (e: unknown) {
+      const msg = (e as { message?: string })?.message ?? 'Não foi possível excluir o horário.';
+      showAlert('Erro', msg);
+    } finally {
+      setDeletingTripId(null);
+    }
+  };
+
+  const confirmDeleteTrip = (t: TripRow) => {
+    if ((t.confirmed_count ?? 0) > 0) {
+      showAlert(
+        'Não é possível excluir',
+        'Este horário já tem passageiros confirmados. Cancele a viagem por inteiro (com reembolso) no detalhe da viagem antes de excluir o horário.',
+      );
+      return;
+    }
+    const dayIdx = t.day_of_week === 0 ? 6 : t.day_of_week - 1;
+    const dayLabel = DAYS[dayIdx] ?? '';
+    const time = t.departure_time?.slice(0, 5) ?? '—';
+    Alert.alert(
+      'Excluir horário',
+      `Remover a viagem de ${dayLabel} às ${time}? Esta ação não pode ser desfeita pela tela — o horário some do cronograma.`,
+      [
+        { text: 'Voltar', style: 'cancel' },
+        { text: 'Excluir', style: 'destructive', onPress: () => { void runDeleteTrip(t.id); } },
+      ],
+    );
+  };
+
   const handleAddTrip = async () => {
     if (!newDepart.match(/^\d{1,2}:\d{2}$/)) { showAlert('Atenção', 'Informe horário de saída (ex: 06:00).'); return; }
     if (!newArrive.match(/^\d{1,2}:\d{2}$/)) { showAlert('Atenção', 'Informe horário de chegada (ex: 08:30).'); return; }
@@ -514,17 +569,33 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
                         <Text style={styles.tripPriceLabel}>Valor total da viagem</Text>
                         <Text style={[styles.tripPriceValue, { color: GOLD }]}>{formatCents(total)}</Text>
                       </View>
-                      <TouchableOpacity style={styles.actionRow} onPress={() => {
-                        setTransferTripId(t.id);
-                        setTransferTargetDay(idx);
-                        resetTransferDrag();
-                        transferSlideAnim.setValue(400);
-                        setTransferModalVisible(true);
-                        Animated.spring(transferSlideAnim, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
-                      }} activeOpacity={0.7}>
-                        <MaterialIcons name="swap-horiz" size={18} color="#111827" />
-                        <Text style={styles.actionLabel}>Transferir viagem</Text>
-                      </TouchableOpacity>
+                      <View style={styles.tripActionsRow}>
+                        <TouchableOpacity style={styles.actionRow} onPress={() => {
+                          setTransferTripId(t.id);
+                          setTransferTargetDay(idx);
+                          resetTransferDrag();
+                          transferSlideAnim.setValue(400);
+                          setTransferModalVisible(true);
+                          Animated.spring(transferSlideAnim, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
+                        }} activeOpacity={0.7}>
+                          <MaterialIcons name="swap-horiz" size={18} color="#111827" />
+                          <Text style={styles.actionLabel}>Transferir viagem</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.actionRow}
+                          onPress={() => confirmDeleteTrip(t)}
+                          disabled={deletingTripId === t.id}
+                          activeOpacity={0.7}
+                          accessibilityLabel="Excluir horário"
+                        >
+                          {deletingTripId === t.id ? (
+                            <ActivityIndicator size="small" color="#EF4444" />
+                          ) : (
+                            <MaterialIcons name="delete-outline" size={18} color="#EF4444" />
+                          )}
+                          <Text style={[styles.actionLabel, styles.actionLabelDanger]}>Excluir horário</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   );
                 })}
@@ -757,11 +828,19 @@ const styles = StyleSheet.create({
   tripPriceRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 },
   tripPriceLabel: { fontSize: 13, color: '#6B7280' },
   tripPriceValue: { fontSize: 13, fontWeight: '600', color: '#111827' },
+  tripActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
   actionRow: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#F3F4F6',
+    flex: 1,
   },
   actionLabel: { fontSize: 14, color: '#111827', fontWeight: '500' },
+  actionLabelDanger: { color: '#EF4444' },
   adjustTitle: { fontSize: 18, fontWeight: '700', color: '#111827', marginTop: 24, marginBottom: 16 },
   adjustGroup: { marginBottom: 16 },
   adjustLabel: { fontSize: 14, color: '#6B7280', marginBottom: 6 },

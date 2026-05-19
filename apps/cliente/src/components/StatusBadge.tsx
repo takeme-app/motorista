@@ -10,6 +10,7 @@ export type TripStatusBadge =
   | 'cancelada'
   | 'reembolsada'
   | 'em_andamento'
+  | 'aguardando_inicio'
   | 'em_analise'
   | 'aguardando_motorista';
 
@@ -32,6 +33,7 @@ const VARIANT_STYLES: Record<
   cancelada: { backgroundColor: '#e11d48', color: '#FFFFFF' },
   reembolsada: { backgroundColor: '#dbeafe', color: '#1e3a8a' },
   em_andamento: { backgroundColor: '#fef3c7', color: '#0d0d0d' },
+  aguardando_inicio: { backgroundColor: '#dcfce7', color: '#166534' },
   em_analise: { backgroundColor: '#e5e5e5', color: '#0d0d0d' },
   aguardando_motorista: { backgroundColor: '#e5e5e5', color: '#0d0d0d' },
 };
@@ -43,6 +45,7 @@ const VARIANT_LABELS: Record<StatusBadgeVariant, string> = {
   cancelada: 'Cancelada',
   reembolsada: 'Reembolsada',
   em_andamento: 'Em andamento',
+  aguardando_inicio: 'Aguardando início',
   em_analise: 'Em análise',
   aguardando_motorista: 'Aguardando aceite do motorista',
 };
@@ -84,9 +87,11 @@ export function clientViagemStatusBadge(
   bookingStatus: string | undefined,
   tripStatus: string | undefined | null,
   cancellationReason?: string | null,
+  driverJourneyStartedAt?: string | null,
 ): TripStatusBadge {
   const b = String(bookingStatus ?? '').trim().toLowerCase();
   const t = String(tripStatus ?? '').trim().toLowerCase();
+  const journeyStarted = Boolean(driverJourneyStartedAt);
 
   if (b === 'cancelled' || b === 'canceled') {
     if (isDriverJourneyStartedNotAcceptedReason(cancellationReason)) return 'reembolsada';
@@ -101,7 +106,9 @@ export function clientViagemStatusBadge(
     return 'em_analise';
   }
   if (t === 'active') {
-    if (b === 'confirmed' || b === 'in_progress') return 'em_andamento';
+    if (b === 'confirmed' || b === 'in_progress') {
+      return journeyStarted ? 'em_andamento' : 'aguardando_inicio';
+    }
     if (b === 'paid' || b === 'pending') return 'aguardando_motorista';
     return 'em_analise';
   }
@@ -117,9 +124,11 @@ export function clientShipmentActivityStatusBadge(
   driverId: string | null | undefined,
   tripStatus: string | undefined | null,
   options?: { skipDriverIdConfirmedCheck?: boolean },
+  driverJourneyStartedAt?: string | null,
 ): TripStatusBadge {
   const s = String(status ?? '').trim().toLowerCase();
   const t = String(tripStatus ?? '').trim().toLowerCase();
+  const journeyStarted = Boolean(driverJourneyStartedAt);
 
   if (s === 'cancelled' && isDriverJourneyStartedNotAcceptedReason(cancellationReason)) {
     return 'reembolsada';
@@ -133,6 +142,15 @@ export function clientShipmentActivityStatusBadge(
     ) {
       return 'aguardando_motorista';
     }
+    if ((s === 'confirmed' || s === 'in_progress') && !journeyStarted) {
+      return 'aguardando_inicio';
+    }
+  }
+  // Defesa: viagem concluída/cancelada, mas a encomenda ficou presa em `confirmed`/`in_progress`
+  // (estado órfão, sem PIN final). Mostra "Em análise" em vez de "Em andamento" para não enganar.
+  if ((t === 'completed' || t === 'cancelled' || t === 'canceled') &&
+      (s === 'confirmed' || s === 'in_progress')) {
+    return 'em_analise';
   }
   return shipmentStatusToBadge(status);
 }
@@ -145,10 +163,16 @@ export function clientDependentActivityStatusBadge(
   status: string | undefined,
   cancellationReason: string | null | undefined,
   tripStatus: string | undefined | null,
+  driverJourneyStartedAt?: string | null,
 ): TripStatusBadge {
-  return clientShipmentActivityStatusBadge(status, cancellationReason, null, tripStatus, {
-    skipDriverIdConfirmedCheck: true,
-  });
+  return clientShipmentActivityStatusBadge(
+    status,
+    cancellationReason,
+    null,
+    tripStatus,
+    { skipDriverIdConfirmedCheck: true },
+    driverJourneyStartedAt,
+  );
 }
 
 /** Mapeia status do backend para variante do badge (shipments.status). Inclui awaiting_driver para quando o app motorista existir. */

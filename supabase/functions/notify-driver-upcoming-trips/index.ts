@@ -79,10 +79,20 @@ Deno.serve(async (req) => {
   const lower = new Date(nowMs + 55 * 60_000).toISOString();
   const upper = new Date(nowMs + 65 * 60_000).toISOString();
 
+  // Filtros de elegibilidade da notificação "Falta 1 hora":
+  // - status='active'  → viagem cadastrada e ativa.
+  // - is_active=true   → viagem não foi soft-deleted/cancelada por outro fluxo.
+  // - driver_journey_started_at IS NULL → motorista ainda NÃO iniciou. Sem
+  //   isso, a notificação continuava saindo durante a viagem em andamento
+  //   (status='active' não muda ao iniciar — só ao concluir).
+  // - upcoming_1h_notified_at IS NULL → idempotência.
+  // - departure_at ∈ [now+55min, now+65min] → janela de 1h antes.
   const { data, error } = await admin
     .from("scheduled_trips")
     .select("id, driver_id, origin_address, destination_address, departure_at")
     .eq("status", "active")
+    .eq("is_active", true)
+    .is("driver_journey_started_at", null)
     .is("upcoming_1h_notified_at", null)
     .gte("departure_at", lower)
     .lte("departure_at", upper)

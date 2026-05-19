@@ -922,6 +922,18 @@ export function SearchTripScreen({ navigation, route }: Props) {
               if (!destination || !selectedTripId) return;
               const trip = scheduledTrips.find((t) => t.id === selectedTripId);
               if (!trip) return;
+              // Motorista tem janela de 30min antes da partida pra aceitar (PendingRequestsScreen).
+              // Reservar abaixo desse limite cai expirada imediatamente. Bloqueia aqui pra evitar cobrança "morta".
+              if (trip.departure_at) {
+                const minutesUntilDeparture = (new Date(trip.departure_at).getTime() - Date.now()) / 60000;
+                if (minutesUntilDeparture < 30) {
+                  showAlert(
+                    'Viagem muito próxima',
+                    'Esta viagem sai em menos de 30 minutos. Para dar tempo do motorista aceitar, escolha uma viagem com pelo menos 30 minutos de antecedência.',
+                  );
+                  return;
+                }
+              }
               navigation.navigate('ConfirmDetails', {
                 driver: {
                   id: trip.id,

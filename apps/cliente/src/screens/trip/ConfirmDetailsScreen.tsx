@@ -115,10 +115,6 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
         }
       }
       const totalPax = bookingTotalPassengers(extraPassengers);
-      if (bags > totalPax) {
-        showAlert('Malas', 'O número de malas não pode ser maior que o de passageiros (1 mala por pessoa).');
-        return;
-      }
       if (driver?.bags != null) {
         const tripBags = Math.max(0, Math.floor(Number(driver.bags)));
         if (tripBags > 0 && bags > tripBags) {
@@ -259,10 +255,9 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         </View>
         <Text style={styles.hint}>
-          Até 1 mala por passageiro ({totalPassengers} {totalPassengers === 1 ? 'pessoa no total' : 'pessoas no total'}).
           {driver?.bags != null && Number(driver.bags) > 0
-            ? ` Limite desta viagem: ${driver.bags} mala(s); no máximo ${maxBags} para este grupo.`
-            : ` No máximo ${maxBags} mala(s).`}
+            ? `Capacidade disponível no bagageiro desta viagem: ${maxBags} mala${maxBags === 1 ? '' : 's'}.`
+            : `Combine a quantidade de malas com o motorista no embarque (o limite final é o espaço do bagageiro).`}
         </Text>
 
         {Array.from({ length: extraPassengers }, (_, i) => (

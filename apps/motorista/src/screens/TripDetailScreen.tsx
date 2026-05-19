@@ -10,6 +10,7 @@ import {
   Animated,
   Platform,
   Alert,
+  Linking,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
@@ -40,6 +41,7 @@ import { getMapboxAccessToken, getGoogleMapsApiKey } from '../lib/googleMapsConf
 import { getCachedRoute, setCachedRoute, hashWaypoints } from '../lib/routeCache';
 import * as DocumentPicker from 'expo-document-picker';
 import { formatTripCode as formatSharedTripCode } from '@take-me/shared';
+import { AppConfirmModal } from '../components/AppConfirmModal';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'TripDetail'>;
 
@@ -71,6 +73,7 @@ type Profile = {
   full_name: string | null;
   avatar_url: string | null;
   rating: number | null;
+  phone: string | null;
 };
 
 type Booking = {
@@ -80,6 +83,10 @@ type Booking = {
   status: string;
   amount_cents: number | null;
   worker_earning_cents?: number | null;
+  pickup_code: string | null;
+  delivery_code: string | null;
+  origin_address: string | null;
+  destination_address: string | null;
   profiles: Profile | null;
 };
 
@@ -90,6 +97,9 @@ type Shipment = {
   origin_address: string | null;
   destination_address: string | null;
   recipient_name: string | null;
+  recipient_phone: string | null;
+  pickup_code: string | null;
+  delivery_code: string | null;
   status: string | null;
   amount_cents: number | null;
   worker_earning_cents?: number | null;
@@ -97,6 +107,14 @@ type Shipment = {
 
 type DependentShipment = {
   id: string;
+  full_name: string | null;
+  contact_phone: string | null;
+  origin_address: string | null;
+  destination_address: string | null;
+  bags_count: number | null;
+  instructions: string | null;
+  pickup_code: string | null;
+  delivery_code: string | null;
   status: string | null;
   amount_cents: number | null;
   worker_earning_cents?: number | null;
@@ -147,6 +165,24 @@ function getInitials(name: string | null | undefined): string {
   const parts = name.trim().split(/\s+/);
   if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
   return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+}
+
+function dialPhone(phone: string | null | undefined): void {
+  const digits = String(phone ?? '').replace(/\D/g, '');
+  if (digits.length < 8) return;
+  void Linking.openURL(`tel:${digits}`);
+}
+
+function formatPhone(phone: string | null | undefined): string | null {
+  const digits = String(phone ?? '').replace(/\D/g, '');
+  if (digits.length < 10) return null;
+  // Formato brasileiro: (DDD) 9XXXX-XXXX ou (DDD) XXXX-XXXX
+  const dd = digits.slice(-11, -9);
+  const rest = digits.slice(-9);
+  if (rest.length === 9) return `(${dd}) ${rest.slice(0, 5)}-${rest.slice(5)}`;
+  const rest8 = digits.slice(-8);
+  const dd2 = digits.slice(-10, -8);
+  return `(${dd2}) ${rest8.slice(0, 4)}-${rest8.slice(4)}`;
 }
 
 function formatCurrency(cents: number): string {
@@ -437,6 +473,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const [cancelLoading, setCancelLoading] = useState(false);
   const [rescheduleLoading, setRescheduleLoading] = useState(false);
   const [startLoading, setStartLoading] = useState(false);
+  const [startConfirmVisible, setStartConfirmVisible] = useState(false);
   /** Política de multa vinda de `platform_settings` + reservas pagas do trip. */
   const [cancelPolicy, setCancelPolicy] = useState<{
     penaltyPct: number;
@@ -456,7 +493,11 @@ export function TripDetailScreen({ route, navigation }: Props) {
     } = await supabase.auth.getUser();
     const uid = user?.id ?? null;
 
-    const [{ data: tripData }, { data: bookingsData }, { data: shipmentsData }, { data: dependentsData }] =
+    // Carregamos bookings SEM o embed `profiles(...)` — não há FK direta de
+    // `bookings → profiles` (a relação é via auth.users), e o PostgREST falha
+    // silenciosamente nessa inferência, deixando a tela sem passageiros.
+    // Os profiles vêm depois numa query separada por user_id.
+    const [{ data: tripData }, { data: bookingsData, error: bookingsErr }, { data: shipmentsData }, { data: dependentsData }] =
       await Promise.all([
         supabase
           .from('scheduled_trips')
@@ -468,7 +509,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
         supabase
           .from('bookings')
           .select(
-            'id, passenger_count, bags_count, status, amount_cents, worker_earning_cents, profiles(full_name, avatar_url, rating)'
+            'id, user_id, passenger_count, bags_count, status, amount_cents, worker_earning_cents, pickup_code, delivery_code, origin_address, destination_address'
           )
           .eq('scheduled_trip_id', tripId)
           .in('status', ['pending', 'paid', 'confirmed', 'in_progress']),
@@ -476,20 +517,72 @@ export function TripDetailScreen({ route, navigation }: Props) {
           ? supabase
               .from('shipments')
               .select(
-                'id, instructions, package_size, origin_address, destination_address, recipient_name, status, amount_cents, worker_earning_cents',
+                'id, instructions, package_size, origin_address, destination_address, recipient_name, recipient_phone, pickup_code, delivery_code, status, amount_cents, worker_earning_cents',
               )
               .eq('scheduled_trip_id', tripId)
               .eq('driver_id', uid)
           : Promise.resolve({ data: [] as Shipment[], error: null }),
         supabase
           .from('dependent_shipments')
-          .select('id, status, amount_cents, worker_earning_cents')
+          .select(
+            'id, full_name, contact_phone, origin_address, destination_address, bags_count, instructions, pickup_code, delivery_code, status, amount_cents, worker_earning_cents',
+          )
           .eq('scheduled_trip_id', tripId)
           .in('status', ['confirmed', 'in_progress', 'delivered']),
       ]);
 
+    if (bookingsErr) {
+      console.warn('[TripDetailScreen] bookings query falhou', bookingsErr.message);
+    }
+
     if (tripData) setTrip(tripData as Trip);
-    if (bookingsData) setBookings(bookingsData as Booking[]);
+
+    const rawBookings = (bookingsData ?? []) as Array<{
+      id: string;
+      user_id: string | null;
+      passenger_count: number | null;
+      bags_count: number | null;
+      status: string;
+      amount_cents: number | null;
+      worker_earning_cents: number | null;
+      pickup_code: string | null;
+      delivery_code: string | null;
+      origin_address: string | null;
+      destination_address: string | null;
+    }>;
+    const userIds = Array.from(
+      new Set(rawBookings.map((b) => b.user_id).filter((u): u is string => Boolean(u))),
+    );
+    const profilesById = new Map<string, Profile>();
+    if (userIds.length > 0) {
+      const { data: profilesData } = await supabase
+        .from('profiles')
+        .select('id, full_name, avatar_url, rating, phone')
+        .in('id', userIds);
+      for (const p of (profilesData ?? []) as Array<{ id: string } & Profile>) {
+        profilesById.set(p.id, {
+          full_name: p.full_name,
+          avatar_url: p.avatar_url,
+          rating: p.rating,
+          phone: p.phone,
+        });
+      }
+    }
+    const mergedBookings: Booking[] = rawBookings.map((b) => ({
+      id: b.id,
+      passenger_count: b.passenger_count,
+      bags_count: b.bags_count,
+      status: b.status,
+      amount_cents: b.amount_cents,
+      worker_earning_cents: b.worker_earning_cents,
+      pickup_code: b.pickup_code,
+      delivery_code: b.delivery_code,
+      origin_address: b.origin_address,
+      destination_address: b.destination_address,
+      profiles: b.user_id ? (profilesById.get(b.user_id) ?? null) : null,
+    }));
+    setBookings(mergedBookings);
+
     if (shipmentsData) setShipments(shipmentsData as Shipment[]);
     setDependentShipments((dependentsData ?? []) as DependentShipment[]);
     setHasAcceptedDependent(Boolean(dependentsData && dependentsData.length > 0));
@@ -501,6 +594,33 @@ export function TripDetailScreen({ route, navigation }: Props) {
     useCallback(() => {
       load();
     }, [load])
+  );
+
+  // Realtime: novo passageiro entra na viagem (INSERT em bookings) ou status
+  // muda (UPDATE) → recarrega para a tela refletir totais e lista de passageiros
+  // sem precisar de pull-to-refresh.
+  useFocusEffect(
+    useCallback(() => {
+      const channel = supabase
+        .channel(`trip-detail-bookings-${tripId}`)
+        .on(
+          'postgres_changes' as never,
+          { event: '*', schema: 'public', table: 'bookings', filter: `scheduled_trip_id=eq.${tripId}` } as never,
+          () => { void load(); },
+        )
+        .on(
+          'postgres_changes' as never,
+          { event: '*', schema: 'public', table: 'shipments', filter: `scheduled_trip_id=eq.${tripId}` } as never,
+          () => { void load(); },
+        )
+        .on(
+          'postgres_changes' as never,
+          { event: '*', schema: 'public', table: 'dependent_shipments', filter: `scheduled_trip_id=eq.${tripId}` } as never,
+          () => { void load(); },
+        )
+        .subscribe();
+      return () => { void supabase.removeChannel(channel); };
+    }, [tripId, load]),
   );
 
   // ── Actions ───────────────────────────────────────────────────────────────────
@@ -547,6 +667,33 @@ export function TripDetailScreen({ route, navigation }: Props) {
         );
         return;
       }
+
+      // Bloqueia o "Iniciar viagem" enquanto houver encomenda com base que ainda
+      // não foi entregue à base E o handoff do preparador não expirou (faltam mais
+      // de 1h para a partida — a base ainda pode receber a encomenda).
+      // Após 1h sem chegar à base, o cron marca `preparer_handoff_expired_at` e
+      // a rota é redirecionada para a casa do cliente — aí o motorista pode iniciar.
+      const { data: pendingBaseShipments } = await supabase
+        .from('shipments')
+        .select('id, recipient_name')
+        .eq('scheduled_trip_id', trip.id)
+        .eq('driver_id', user.id)
+        .not('base_id', 'is', null)
+        .is('preparer_handoff_expired_at', null)
+        .is('delivered_to_base_at', null)
+        .in('status', ['confirmed', 'in_progress'])
+        .limit(3);
+      if (pendingBaseShipments && pendingBaseShipments.length > 0) {
+        const count = pendingBaseShipments.length;
+        Alert.alert(
+          'Aguarde a encomenda chegar à base',
+          count === 1
+            ? 'Há 1 encomenda que ainda não foi entregue à base. Aguarde o preparador levar — ou, se passar de 1h antes da partida sem entrega, a rota muda automaticamente para você buscar com o cliente.'
+            : `Há ${count} encomendas que ainda não foram entregues à base. Aguarde o preparador levar — ou, se passar de 1h antes da partida sem entrega, a rota muda automaticamente para você buscar com o cliente.`,
+        );
+        return;
+      }
+
       const now = new Date().toISOString();
       const { error } = await supabase
         .from('scheduled_trips')
@@ -559,7 +706,20 @@ export function TripDetailScreen({ route, navigation }: Props) {
         )
         .eq('id', trip.id);
       if (error) {
-        Alert.alert('Erro', 'Não foi possível iniciar a viagem. Tente novamente.');
+        // Trigger backend `block_start_trip_when_shipment_with_base_pending`
+        // lança RAISE EXCEPTION com message='shipment_with_base_not_delivered_yet'
+        // quando há encomenda com base ainda não entregue e dentro da janela de 1h.
+        const msg = String((error as { message?: string }).message ?? '');
+        const hint = String((error as { hint?: string }).hint ?? '');
+        if (msg.includes('shipment_with_base_not_delivered_yet')) {
+          Alert.alert(
+            'Aguarde a encomenda chegar à base',
+            hint ||
+              'Há encomenda com base que ainda não foi entregue. Aguarde o preparador levar — ou, se passar de 1h antes da partida sem entrega, a rota muda automaticamente para você buscar com o cliente.',
+          );
+          return;
+        }
+        Alert.alert('Erro', msg || 'Não foi possível iniciar a viagem. Tente novamente.');
         return;
       }
       void invokeRefundJourneyStartNotAccepted(trip.id);
@@ -730,6 +890,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const bookingsInTrip = [...awaitingBookings, ...confirmedTripBookings];
   const totalPax = bookingsInTrip.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
   const totalBags = bookingsInTrip.reduce((s, b) => s + (b.bags_count ?? 0), 0);
+  const totalEncomendas = shipments.length;
   const totalRevenueCents =
     confirmedTripBookings.reduce(
       (s, b) => s + amountForDriverTotal(b.amount_cents, b.worker_earning_cents ?? null),
@@ -832,15 +993,17 @@ export function TripDetailScreen({ route, navigation }: Props) {
 
   // ── Status badge ──────────────────────────────────────────────────────────────
 
-  function StatusBadge({ status }: { status: string }) {
+  function StatusBadge({ status, journeyStarted }: { status: string; journeyStarted: boolean }) {
     type BadgeCfg = { bg: string; text: string; label: string };
     const cfg: BadgeCfg =
       status === 'completed'
         ? { bg: '#D1FAE5', text: '#065F46', label: 'Concluída' }
-        : status === 'active'
-        ? { bg: '#FEF3C7', text: '#92400E', label: 'Em andamento' }
         : status === 'cancelled'
         ? { bg: '#FEE2E2', text: '#B91C1C', label: 'Cancelada' }
+        : status === 'active' && journeyStarted
+        ? { bg: '#FEF3C7', text: '#92400E', label: 'Em andamento' }
+        : status === 'active' || status === 'scheduled'
+        ? { bg: '#D1FAE5', text: '#065F46', label: 'Aguardando início' }
         : { bg: '#FEF3C7', text: '#92400E', label: 'Em análise' };
 
     return (
@@ -964,21 +1127,24 @@ export function TripDetailScreen({ route, navigation }: Props) {
         <View style={styles.body}>
 
           {/* Status + code + date */}
-          <StatusBadge status={trip.status} />
+          <StatusBadge status={trip.status} journeyStarted={journeyStarted} />
 
-          <Text style={styles.tripCode}>{tripCode(trip.id)}</Text>
+          <Text style={styles.tripCode}>ID da Viagem: {tripCode(trip.id)}</Text>
           <Text style={styles.dateLabel}>{formatDateTime(trip.departure_at)}</Text>
 
           {/* Subtitle */}
           <Text style={styles.subtitle}>
             {totalPax > 0 ? `${totalPax} passageiro${totalPax !== 1 ? 's' : ''}` : ''}
-            {totalPax > 0 && totalBags > 0 ? ' • ' : ''}
-            {totalBags > 0 ? `${totalBags} encomenda${totalBags !== 1 ? 's' : ''}` : ''}
+            {totalPax > 0 && totalEncomendas > 0 ? ' • ' : ''}
+            {totalEncomendas > 0 ? `${totalEncomendas} encomenda${totalEncomendas !== 1 ? 's' : ''}` : ''}
           </Text>
 
-          {bagsCapacity > 0 && (
+          {(totalBags > 0 || bagsCapacity > 0) && (
             <Text style={styles.bagCapacity}>
-              Ocupação do bagageiro: {bagsOccupancyPct}%
+              Ocupação do bagageiro:{' '}
+              {totalBags > 0
+                ? `${totalBags} ${totalBags === 1 ? 'mala' : 'malas'}${bagsCapacity > 0 ? ` (${bagsOccupancyPct}%)` : ''}`
+                : '—'}
             </Text>
           )}
 
@@ -1027,8 +1193,8 @@ export function TripDetailScreen({ route, navigation }: Props) {
                 const pax = booking.passenger_count ?? 0;
                 const bags = booking.bags_count ?? 0;
                 const labelParts: string[] = [];
-                if (pax > 0) labelParts.push(`${pax} pax`);
-                if (bags > 0) labelParts.push(`${bags} bag`);
+                if (pax > 0) labelParts.push(`${pax} ${pax === 1 ? 'passageiro' : 'passageiros'}`);
+                if (bags > 0) labelParts.push(`${bags} ${bags === 1 ? 'mala' : 'malas'}`);
                 return (
                   <View key={booking.id} style={styles.passengerRow}>
                     <View style={styles.avatar}>
@@ -1044,9 +1210,10 @@ export function TripDetailScreen({ route, navigation }: Props) {
                           {profile?.rating != null ? profile.rating.toFixed(1) : '—'}
                         </Text>
                         {labelParts.length > 0 && (
-                          <Text style={styles.bagLabel}> • {labelParts.join(' ')}</Text>
+                          <Text style={styles.bagLabel}> • {labelParts.join(' · ')}</Text>
                         )}
                       </View>
+                      <Text style={styles.bookingCodeLine}>Reserva: {tripCode(booking.id)}</Text>
                       <View style={styles.bookingAwaitingPill}>
                         <Text style={styles.bookingAwaitingPillText}>Solicitação pendente</Text>
                       </View>
@@ -1066,8 +1233,9 @@ export function TripDetailScreen({ route, navigation }: Props) {
                 const pax = booking.passenger_count ?? 0;
                 const bags = booking.bags_count ?? 0;
                 const labelParts: string[] = [];
-                if (pax > 0) labelParts.push(`${pax} pax`);
-                if (bags > 0) labelParts.push(`${bags} bag`);
+                if (pax > 0) labelParts.push(`${pax} ${pax === 1 ? 'passageiro' : 'passageiros'}`);
+                if (bags > 0) labelParts.push(`${bags} ${bags === 1 ? 'mala' : 'malas'}`);
+                const phonePretty = formatPhone(profile?.phone);
                 return (
                   <View key={booking.id} style={styles.passengerRow}>
                     <View style={styles.avatar}>
@@ -1083,12 +1251,21 @@ export function TripDetailScreen({ route, navigation }: Props) {
                           {profile?.rating != null ? profile.rating.toFixed(1) : '—'}
                         </Text>
                         {labelParts.length > 0 && (
-                          <Text style={styles.bagLabel}> • {labelParts.join(' ')}</Text>
+                          <Text style={styles.bagLabel}> • {labelParts.join(' · ')}</Text>
                         )}
                       </View>
+                      <Text style={styles.bookingCodeLine}>Reserva: {tripCode(booking.id)}</Text>
+                      {phonePretty ? (
+                        <Text style={styles.detailMetaLine}>{phonePretty}</Text>
+                      ) : null}
                     </View>
-                    <TouchableOpacity style={styles.phoneBtn} activeOpacity={0.75}>
-                      <MaterialIcons name="phone" size={20} color="#111827" />
+                    <TouchableOpacity
+                      style={[styles.phoneBtn, !profile?.phone && styles.phoneBtnDisabled]}
+                      activeOpacity={0.75}
+                      disabled={!profile?.phone}
+                      onPress={() => dialPhone(profile?.phone)}
+                    >
+                      <MaterialIcons name="phone" size={20} color={profile?.phone ? '#111827' : '#9CA3AF'} />
                     </TouchableOpacity>
                   </View>
                 );
@@ -1111,6 +1288,8 @@ export function TripDetailScreen({ route, navigation }: Props) {
                     </Text>
                   </View>
 
+                  <Text style={styles.bookingCodeLine}>ID da Reserva: {tripCode(s.id)}</Text>
+
                   {/* Route */}
                   <View style={styles.shipmentRouteRow}>
                     <View style={styles.shipmentDot} />
@@ -1126,11 +1305,85 @@ export function TripDetailScreen({ route, navigation }: Props) {
                   </View>
 
                   <Text style={styles.shipmentMeta}>Tamanho: {sizeLabel(s.package_size)}</Text>
+                  {s.recipient_phone ? (
+                    <View style={styles.shipmentMetaRow}>
+                      <Text style={styles.shipmentMeta}>
+                        Telefone: {formatPhone(s.recipient_phone) ?? s.recipient_phone}
+                      </Text>
+                      <TouchableOpacity
+                        onPress={() => dialPhone(s.recipient_phone)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <MaterialIcons name="phone" size={18} color="#111827" />
+                      </TouchableOpacity>
+                    </View>
+                  ) : null}
                   {s.instructions ? (
                     <Text style={styles.shipmentNotes}>Observações: {s.instructions}</Text>
                   ) : null}
                 </View>
               ))}
+            </>
+          )}
+
+          {/* ── Dependentes ────────────────────────────────────────────────── */}
+          {dependentShipments.length > 0 && (
+            <>
+              <Text style={styles.sectionTitle}>Dependentes</Text>
+              {dependentShipments.map((d) => {
+                const depPhone = formatPhone(d.contact_phone);
+                return (
+                  <View key={d.id} style={styles.shipmentCard}>
+                    <View style={styles.shipmentTitleRow}>
+                      <MaterialIcons name="person" size={20} color="#6B7280" />
+                      <Text style={styles.shipmentTitle} numberOfLines={1}>
+                        {d.full_name ?? 'Dependente'}
+                      </Text>
+                    </View>
+
+                    <Text style={styles.bookingCodeLine}>ID da Reserva: {tripCode(d.id)}</Text>
+
+                    {d.origin_address ? (
+                      <View style={styles.shipmentRouteRow}>
+                        <View style={styles.shipmentDot} />
+                        <Text style={styles.shipmentAddr} numberOfLines={1}>
+                          {d.origin_address}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {d.destination_address ? (
+                      <View style={[styles.shipmentRouteRow, { marginBottom: 10 }]}>
+                        <View style={styles.shipmentDotDest} />
+                        <Text style={styles.shipmentAddr} numberOfLines={1}>
+                          {d.destination_address}
+                        </Text>
+                      </View>
+                    ) : null}
+
+                    {d.contact_phone ? (
+                      <View style={styles.shipmentMetaRow}>
+                        <Text style={styles.shipmentMeta}>
+                          Responsável: {depPhone ?? d.contact_phone}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => dialPhone(d.contact_phone)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <MaterialIcons name="phone" size={18} color="#111827" />
+                        </TouchableOpacity>
+                      </View>
+                    ) : null}
+
+                    {d.bags_count != null && d.bags_count > 0 ? (
+                      <Text style={styles.shipmentMeta}>Malas: {d.bags_count}</Text>
+                    ) : null}
+
+                    {d.instructions ? (
+                      <Text style={styles.shipmentNotes}>Observações: {d.instructions}</Text>
+                    ) : null}
+                  </View>
+                );
+              })}
             </>
           )}
 
@@ -1236,7 +1489,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
                   );
                   return;
                 }
-                void handleStartTrip();
+                setStartConfirmVisible(true);
               }}
               activeOpacity={0.85}
               disabled={startLoading}
@@ -1290,6 +1543,23 @@ export function TripDetailScreen({ route, navigation }: Props) {
         currentDeparture={trip.departure_at}
       />
       <SupportModal visible={supportVisible} onClose={() => setSupportVisible(false)} />
+      <AppConfirmModal
+        visible={startConfirmVisible}
+        title="Iniciar viagem?"
+        message="Após iniciar, os passageiros e a base de operações serão notificados, e o cronômetro da viagem começa a contar. Confirme se está pronto para sair."
+        confirmLabel="Sim, iniciar"
+        cancelLabel="Voltar"
+        loading={startLoading}
+        onConfirm={() => {
+          void (async () => {
+            await handleStartTrip();
+            setStartConfirmVisible(false);
+          })();
+        }}
+        onCancel={() => {
+          if (!startLoading) setStartConfirmVisible(false);
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -1351,7 +1621,8 @@ const styles = StyleSheet.create({
   statusBadgeText: { fontSize: 13, fontWeight: '600' },
 
   // Trip code + date
-  tripCode: { fontSize: 22, fontWeight: '800', color: '#111827', marginBottom: 4 },
+  tripCode: { fontSize: 22, fontWeight: '800', color: '#111827', marginBottom: 2 },
+  tripIdFull: { fontSize: 11, color: '#9CA3AF', marginBottom: 4, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
   dateLabel: { fontSize: 14, color: '#6B7280', marginBottom: 6 },
   subtitle: { fontSize: 14, color: '#374151', marginBottom: 2 },
   bagCapacity: { fontSize: 13, color: '#9CA3AF', marginBottom: 4 },
@@ -1439,6 +1710,14 @@ const styles = StyleSheet.create({
   ratingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   ratingText: { fontSize: 13, color: '#6B7280', marginLeft: 2 },
   bagLabel: { fontSize: 13, color: '#9CA3AF' },
+  detailMetaLine: { fontSize: 12, color: '#6B7280', marginTop: 3 },
+  bookingCodeLine: { fontSize: 14, fontWeight: '700', color: '#111827', marginTop: 4 },
+  detailCodesLine: {
+    fontSize: 12,
+    color: '#374151',
+    marginTop: 2,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
   phoneBtn: {
     width: 36,
     height: 36,
@@ -1447,6 +1726,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  phoneBtnDisabled: { opacity: 0.5 },
 
   // Shipments
   shipmentCard: {
@@ -1473,6 +1753,13 @@ const styles = StyleSheet.create({
   },
   shipmentAddr: { flex: 1, fontSize: 13, color: '#374151' },
   shipmentMeta: { fontSize: 13, color: '#6B7280', marginTop: 4 },
+  shipmentMetaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
+  shipmentIdLine: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    marginTop: 6,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
   shipmentNotes: { fontSize: 13, color: '#6B7280', marginTop: 2 },
 
   // Expense upload

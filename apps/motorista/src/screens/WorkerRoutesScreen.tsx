@@ -50,13 +50,15 @@ function shortAddress(full: string): string {
   return parts[0]?.trim() ?? full;
 }
 
-/** Viagens desta rota com passageiro, dependente ou encomenda já aceitos — não pode excluir a rota. */
+/** Viagens **ainda ativas** desta rota com passageiro, dependente ou encomenda já aceitos —
+ *  só nesse caso barramos a exclusão. Viagens concluídas/canceladas não impedem (ficam no histórico). */
 async function routeHasAcceptedServices(workerRouteId: string, workerId: string): Promise<boolean> {
   const { data: trips } = await supabase
     .from('scheduled_trips')
     .select('id')
     .eq('route_id', workerRouteId)
-    .eq('driver_id', workerId);
+    .eq('driver_id', workerId)
+    .in('status', ['active', 'scheduled']);
   const tripIds = (trips ?? []).map((t: { id: string }) => t.id);
   if (tripIds.length === 0) return false;
 
@@ -183,7 +185,14 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
         .in('status', ['active', 'scheduled']);
       if (u1) throw u1;
 
-      const { error: delErr } = await supabase.from('worker_routes').delete().eq('id', routeId).eq('worker_id', user.id);
+      // Soft delete: marcamos `is_active=false` em vez de DELETE.
+      // `load()` filtra por `is_active=true`, então a rota some da lista do motorista,
+      // mas mantemos histórico (viagens passadas referenciam route_id via FK) sem risco de constraint.
+      const { error: delErr } = await supabase
+        .from('worker_routes')
+        .update({ is_active: false, updated_at: new Date().toISOString() } as never)
+        .eq('id', routeId)
+        .eq('worker_id', user.id);
       if (delErr) throw delErr;
       await load();
     } catch (e: unknown) {

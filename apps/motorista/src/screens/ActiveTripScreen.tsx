@@ -53,6 +53,7 @@ import {
   ensureAllTripStopsRemote,
 } from '../hooks/useTripStops';
 import { Text } from '../components/Text';
+import { AppConfirmModal } from '../components/AppConfirmModal';
 import { DriverLocationFocusButton } from '../components/DriverLocationFocusButton';
 import { MapNetworkBadge } from '../components/MapNetworkBadge';
 import { SmoothDriverMapMarker } from '../components/SmoothDriverMapMarker';
@@ -397,8 +398,15 @@ function countsAsTripTotal(status: string | null | undefined): boolean {
  *   - dependente: embarque E desembarque (cenário 2 do PDF, etapas 1-3 e 5-7).
  */
 function requiresDriverEnteredPin(s: Stop): boolean {
-  if (s.stopType === 'package_pickup') return false;
-  if (isPackage(s)) return true;
+  // Encomenda com base: na retirada o motorista digita o PIN C (base_to_driver_code)
+  // que a base passa verbalmente. Sem essa validação, ao retirar 2+ encomendas
+  // na mesma base, o motorista pode "concluir" a encomenda errada — o backend
+  // permite porque só checa `base_to_driver_confirmed_at` (não compara o PIN).
+  // Encomenda sem base (cliente entrega direto): o cliente confirma o pickup_code
+  // no app dele; motorista não digita PIN aqui (RPC complete_shipment_client_pickup
+  // já marca `picked_up_at`).
+  if (s.stopType === 'package_pickup') return isPackagePickupAtBase(s);
+  if (isPackage(s)) return true; // package_dropoff: motorista digita delivery_code
   return (
     s.stopType === 'passenger_pickup' ||
     s.stopType === 'dependent_pickup' ||
@@ -422,14 +430,19 @@ function isRouteWaypointStop(s: Stop) {
 function StopKindMarkerIcon({
   stop,
   completed,
+  skipped = false,
   color,
   size = 18,
 }: {
   stop: Stop;
   completed: boolean;
+  skipped?: boolean;
   color: string;
   size?: number;
 }) {
+  if (skipped) {
+    return <MaterialIcons name="close" size={size} color={color} />;
+  }
   if (completed) {
     return <MaterialIcons name="check" size={size} color={color} />;
   }
@@ -472,6 +485,7 @@ type ActiveStopMarkerProps = {
   latitude: number;
   longitude: number;
   completed: boolean;
+  skipped: boolean;
   isActiveSequentialStop: boolean;
   markerBg: string;
 };
@@ -482,6 +496,7 @@ const ActiveStopMarker = memo(function ActiveStopMarker({
   latitude,
   longitude,
   completed,
+  skipped,
   isActiveSequentialStop,
   markerBg,
 }: ActiveStopMarkerProps) {
@@ -494,7 +509,7 @@ const ActiveStopMarker = memo(function ActiveStopMarker({
         ]}
       >
         <View style={[styles.mapMarker, { backgroundColor: markerBg }]}>
-          <StopKindMarkerIcon stop={stop} completed={completed} color="#fff" />
+          <StopKindMarkerIcon stop={stop} completed={completed} skipped={skipped} color="#fff" />
         </View>
       </View>
     </MapMarker>
@@ -785,6 +800,37 @@ function resolveNavigationDestination(
     if (coord) return coord;
   }
   return finalDest;
+}
+
+/**
+ * Destino final do mapa/SDK durante a corrida = último desembarque/entrega do roteiro.
+ * Substitui o "destino" da rota cadastrada (trip.destination_*) para que a navegação encerre
+ * onde o último cliente é deixado, não num endereço genérico da rota.
+ * Fallback (em ordem): coordenadas do trip cadastrado → null.
+ */
+function findLastClientDropoffCoord(
+  stopsList: TripStop[],
+  fallbackLat: number | null | undefined,
+  fallbackLng: number | null | undefined,
+): LatLng | null {
+  const DROPOFF_TYPES: ReadonlySet<TripStop['stopType']> = new Set([
+    'passenger_dropoff',
+    'dependent_dropoff',
+    'package_dropoff',
+  ]);
+  const sorted = [...stopsList].sort(
+    (a, b) => (a.sequenceOrder ?? 0) - (b.sequenceOrder ?? 0),
+  );
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const s = sorted[i];
+    if (!DROPOFF_TYPES.has(s.stopType)) continue;
+    const coord = pickStopCoord(s.lat, s.lng);
+    if (coord) return coord;
+  }
+  if (fallbackLat != null && fallbackLng != null) {
+    return pickStopCoord(fallbackLat, fallbackLng) ?? null;
+  }
+  return null;
 }
 
 /** Pontos da viagem restante para polyline (GPS cobre o “início”; sem parada sintética de partida). */
@@ -1217,6 +1263,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const [confirmError, setConfirmError] = useState('');
   /** Snapshot da parada ao abrir o sheet — o modal NÃO deve usar `currentStop` (realtime pode alterar a lista/índice). */
   const [confirmUiStop, setConfirmUiStop] = useState<Stop | null>(null);
+  const [cancelPickupStop, setCancelPickupStop] = useState<Stop | null>(null);
+  const [cancelPickupLoading, setCancelPickupLoading] = useState(false);
 
   // Finalize — comprovantes (fotos): `base64` vem do picker para upload sem depender de fetch(uri).
   const [tripExpenseFiles, setTripExpenseFiles] = useState<
@@ -1984,21 +2032,15 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     return `${km.toFixed(km < 10 ? 1 : 0).replace('.', ',')} km`;
   }, [nativeDistanceRemainingMeters]);
 
-  /** Último ponto válido do roteiro (entrega final / última parada) ou destino da viagem. */
+  /**
+   * Destino final navegado pelo SDK = último desembarque/entrega do roteiro.
+   * Ignora o "destino" cadastrado da rota: a corrida encerra onde o último cliente
+   * é deixado, não num endereço genérico da rota.
+   * Fallback (em ordem): destino do trip (caso o roteiro não tenha dropoffs ainda materializados).
+   */
   const finalDestination = useMemo((): LatLng | null => {
-    for (let i = stops.length - 1; i >= 0; i--) {
-      const s = stops[i];
-      if (
-        s.lat != null &&
-        s.lng != null &&
-        isValidGlobeCoordinate(s.lat, s.lng)
-      ) {
-        return { latitude: s.lat, longitude: s.lng };
-      }
-    }
-    if (!trip) return null;
-    return pickStopCoord(trip.destination_lat, trip.destination_lng) ?? null;
-  }, [stops, trip]);
+    return findLastClientDropoffCoord(stops, trip?.destination_lat ?? null, trip?.destination_lng ?? null);
+  }, [stops, trip?.destination_lat, trip?.destination_lng, trip?.id]);
 
   const fallbackNavDest = useMemo(() => {
     if (
@@ -2034,9 +2076,15 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     [driverPosition],
   );
 
+  /**
+   * Ponto final da viagem no mapa (marker de destino, bandeira lateral, alvo "mais próximo").
+   * Idêntico ao `finalDestination` para manter mapa e navegação SDK coerentes:
+   * o destino exibido é o último desembarque/entrega — não o destino cadastrado da rota.
+   */
   const tripDestLL = useMemo(
-    () => (trip ? pickStopCoord(trip.destination_lat, trip.destination_lng) : undefined),
-    [trip?.destination_lat, trip?.destination_lng, trip?.id],
+    () =>
+      findLastClientDropoffCoord(stops, trip?.destination_lat ?? null, trip?.destination_lng ?? null) ?? undefined,
+    [stops, trip?.destination_lat, trip?.destination_lng, trip?.id],
   );
 
   /** Alvo “mais próximo” no mapa/card (mesma base que `nearestDashedCoords` / trecho tracejado). */
@@ -2909,38 +2957,50 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   };
 
   /**
-   * Cancelamento de coleta no sheet de detalhes (passageiro/dependente não
-   * compareceu ou coleta desistida no local). Chama `driver_cancel_pickup`
-   * que marca a parada de pickup — e o dropoff da mesma entidade — como
-   * `skipped`, permitindo avançar a rota sem mexer em bookings/shipments.
+   * Cancelamento definitivo de coleta/embarque a partir do sheet de detalhes.
+   * Aciona a edge function `driver-cancel-pickup` que: pula pickup + dropoff
+   * (via RPC `driver_cancel_pickup`), marca a `bookings`/`shipments`/`dependent_shipments`
+   * com `status = 'cancelled'` + `cancellation_reason = 'driver_pickup_cancelled'`,
+   * dispara estorno via `process-refund` e notifica o cliente.
    */
   const handleCancelPickup = () => {
     const stop = detailSheetStop;
     if (!stop) return;
+    // Fecha o sheet de detalhes sem animar antes de abrir o modal de confirmação.
+    // Dois Modais transparentes simultâneos no iOS interceptam toques (mesmo motivo descrito no fluxo de "Iniciar embarque").
+    syncCloseDetailOnly();
+    setCancelPickupStop(stop);
+  };
 
-    const isPackage = stop.stopType === 'package_pickup';
-    const isDep = stop.stopType === 'dependent_pickup';
+  const cancelPickupCopy = useMemo(() => {
+    if (!cancelPickupStop) return null;
+    const isPackage = cancelPickupStop.stopType === 'package_pickup';
+    const isDep = cancelPickupStop.stopType === 'dependent_pickup';
     const title = isPackage
-      ? isPackagePickupAtBase(stop)
+      ? isPackagePickupAtBase(cancelPickupStop)
         ? 'Cancelar retirada?'
         : 'Cancelar coleta?'
       : isDep
         ? 'Cancelar embarque do dependente?'
         : 'Cancelar embarque?';
     const message = isPackage
-      ? 'A coleta será ignorada e a rota avança para a próxima parada. A encomenda continua no sistema — fale com o suporte se precisar de cancelamento definitivo.'
+      ? 'A encomenda será cancelada definitivamente, o cliente será notificado e o estorno integral é iniciado. A parada é removida da rota e não pode ser desfeita.'
       : isDep
-        ? 'O embarque e o desembarque deste dependente serão ignorados e a rota avança para a próxima parada. Use só quando o responsável/dependente não comparecer.'
-        : 'O embarque e o desembarque deste passageiro serão ignorados e a rota avança para a próxima parada. Use só em caso de não comparecimento do passageiro.';
+        ? 'O envio do dependente será cancelado definitivamente, o responsável será notificado e o estorno integral é iniciado. A ação não pode ser desfeita.'
+        : 'A reserva do passageiro será cancelada definitivamente, ele será notificado e o estorno integral é iniciado. A ação não pode ser desfeita.';
+    return { title, message };
+  }, [cancelPickupStop]);
 
-    Alert.alert(title, message, [
-      { text: 'Voltar', style: 'cancel' },
-      {
-        text: 'Sim, cancelar',
-        style: 'destructive',
-        onPress: () => void runCancelPickup(stop),
-      },
-    ]);
+  const handleConfirmCancelPickup = async () => {
+    const stop = cancelPickupStop;
+    if (!stop) return;
+    setCancelPickupLoading(true);
+    try {
+      await runCancelPickup(stop);
+    } finally {
+      setCancelPickupLoading(false);
+      setCancelPickupStop(null);
+    }
   };
 
   const runCancelPickup = async (stop: Stop) => {
@@ -2958,16 +3018,22 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     }
 
     try {
-      const { data, error } = await supabase.rpc(
-        'driver_cancel_pickup' as never,
-        { p_trip_stop_id: stopId } as never,
-      );
+      // Edge function: pula a parada + cancela booking/shipment/dependent + dispara estorno via process-refund.
+      const { data, error } = await supabase.functions.invoke('driver-cancel-pickup', {
+        body: { trip_stop_id: stopId },
+      });
       if (error) {
         showAlert('Erro', getUserErrorMessage(error));
         return;
       }
-      const payload = (data ?? {}) as { ok?: boolean; error?: string };
-      if (payload.ok === false) {
+      const payload = (data ?? {}) as {
+        cancelled?: boolean;
+        refunded?: boolean;
+        refund_amount_cents?: number;
+        refund_error?: string | null;
+        error?: string;
+      };
+      if (payload.error) {
         const err = String(payload.error ?? '');
         const msg =
           err === 'forbidden'
@@ -2976,9 +3042,16 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               ? 'Parada não encontrada.'
               : err === 'not_a_pickup'
                 ? 'Esta parada não pode ser cancelada.'
-                : 'Não foi possível cancelar a parada.';
+                : err;
         showAlert('Erro', msg);
         return;
+      }
+      if (payload.refund_error) {
+        // Pula stops e marca cancelado funcionou, mas estorno falhou — alerta sem reverter.
+        showAlert(
+          'Cancelado com pendência',
+          'A reserva foi cancelada, mas o estorno automático falhou. Acione o suporte para o reembolso.',
+        );
       }
     } catch (e) {
       showAlert('Erro', getUserErrorMessage(e));
@@ -3104,6 +3177,23 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           );
           return;
         }
+      }
+
+      // Destino final da viagem acessado pela bandeira lateral: o Stop é sintético
+      // (id = 'sidebar-trip-destination'), não existe em trip_stops. Concluir essa
+      // "chegada" deve abrir o fluxo de finalização da viagem, não chamar
+      // complete_trip_stop (que rejeitaria o id por não ser UUID).
+      if (stop.stopType === 'trip_destination') {
+        confirmTargetStopRef.current = null;
+        setConfirmUiStop(null);
+        setConfirmError('');
+        setConfirmCode('');
+        confirmSheetSlide.setValue(600);
+        setConfirmPickupVisible(false);
+        setConfirmDeliveryVisible(false);
+        syncCloseDetailOnly();
+        openFinalize();
+        return;
       }
 
       let stopId = stop.id;
@@ -3501,17 +3591,68 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const networkBadgeState =
     isOnline ? 'online' : stopsRouteCoords.length >= 2 ? 'offline-cached' : 'offline-no-cache';
 
+  /**
+   * O SDK Mapbox Navigation chama `onWaypointArrival` enquanto o motorista
+   * ainda está afastado (~500m), cobrindo o mapa cedo demais. Só abrimos o
+   * detail sheet quando ele realmente chegar — dentro de AUTO_OPEN_DETAIL_RADIUS_M.
+   * Se o SDK disparou longe, guardamos o stop em `pendingArrivalStopRef` e
+   * abrimos depois que `driverPosition` cruzar o limiar (effect abaixo).
+   * Enquanto isso, o miniSheet inferior continua dando todas as infos.
+   */
+  const AUTO_OPEN_DETAIL_RADIUS_M = 80;
+  const pendingArrivalStopRef = useRef<Stop | null>(null);
+  const openDetailForStopIfClose = useCallback((stop: Stop): boolean => {
+    const driver = driverPositionRef.current;
+    if (driver && stop.lat != null && stop.lng != null) {
+      const dist = distanceMetersApprox(
+        { latitude: driver.latitude, longitude: driver.longitude },
+        { latitude: stop.lat, longitude: stop.lng },
+      );
+      if (dist > AUTO_OPEN_DETAIL_RADIUS_M) return false;
+    }
+    setDetailViewStop(stop);
+    openDetail();
+    return true;
+  }, [openDetail]);
+
   const handleNativeWaypointArrival = useCallback((waypointIndex: number) => {
     const relativeIndex = Math.max(0, waypointIndex - 1);
     const maxStopIndex = Math.max(stops.length - 1, 0);
     const stop = stops[Math.min(currentStopIndex + relativeIndex, maxStopIndex)] ?? currentStop;
     if (stop) {
-      setDetailViewStop(stop);
-      openDetail();
+      const opened = openDetailForStopIfClose(stop);
+      if (!opened) {
+        // SDK disparou cedo: aguarda o motorista realmente chegar.
+        pendingArrivalStopRef.current = stop;
+      }
       return;
     }
     if (allDone) openFinalize();
-  }, [allDone, currentStop, currentStopIndex, openDetail, openFinalize, stops]);
+  }, [allDone, currentStop, currentStopIndex, openDetailForStopIfClose, openFinalize, stops]);
+
+  // Quando há uma chegada pendente e o motorista enfim cruza o raio, abre o detail.
+  useEffect(() => {
+    const pending = pendingArrivalStopRef.current;
+    if (!pending || !driverPosition) return;
+    if (pending.lat == null || pending.lng == null) return;
+    const dist = distanceMetersApprox(
+      { latitude: driverPosition.latitude, longitude: driverPosition.longitude },
+      { latitude: pending.lat, longitude: pending.lng },
+    );
+    if (dist <= AUTO_OPEN_DETAIL_RADIUS_M) {
+      pendingArrivalStopRef.current = null;
+      setDetailViewStop(pending);
+      openDetail();
+    }
+  }, [driverPosition, openDetail]);
+
+  // Se a próxima parada mudou (motorista concluiu / pulou), descarta o pendente.
+  useEffect(() => {
+    const pending = pendingArrivalStopRef.current;
+    if (pending && pending.id !== currentStop?.id) {
+      pendingArrivalStopRef.current = null;
+    }
+  }, [currentStop?.id]);
 
   // ---------------------------------------------------------------------------
   // Loading
@@ -3597,8 +3738,13 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           const baseLng = mapInitialRegion.longitude;
           const lat = hasCoord ? stop.lat! : baseLat + idx * 0.002;
           const lng = hasCoord ? stop.lng! : baseLng + idx * 0.002;
-          const isCompleted = idx < currentStopIndex;
-          const markerBg = isCompleted ? '#374151' : STOP_TYPE_COLORS[stop.stopType];
+          const isSkipped = stop.status === 'skipped';
+          const isCompleted = !isSkipped && idx < currentStopIndex;
+          const markerBg = isSkipped
+            ? '#9CA3AF'
+            : isCompleted
+              ? '#374151'
+              : STOP_TYPE_COLORS[stop.stopType];
           const isActiveSequentialStop = idx === mapHighlightStopIndex && !allDone;
           return (
             <ActiveStopMarker
@@ -3608,6 +3754,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
               latitude={lat}
               longitude={lng}
               completed={isCompleted}
+              skipped={isSkipped}
               isActiveSequentialStop={isActiveSequentialStop}
               markerBg={markerBg}
             />
@@ -3784,26 +3931,50 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         )}
 
         {(stops.length > 0 || showSidebarTripEndFlag) && (
-          <View style={[styles.sidebar, { top: overlayTop, right: 14 }]} pointerEvents="box-none">
+          <View
+            style={[
+              styles.sidebar,
+              {
+                top: overlayTop,
+                bottom: nativeSdkToggleBottom + 60,
+                right: 14,
+              },
+            ]}
+            pointerEvents="box-none"
+          >
+            <ScrollView
+              style={styles.sidebarScroll}
+              contentContainerStyle={styles.sidebarScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
             {(stops.length + (showSidebarTripEndFlag ? 1 : 0)) > 1 && (
               <View style={styles.sidebarLine} pointerEvents="none" />
             )}
 
             {stops.map((stop, idx) => {
-              const isCompleted = idx < currentStopIndex;
-              const isCurrent = idx === mapHighlightStopIndex;
-              const btnBg = isCompleted ? '#9CA3AF' : isCurrent ? STOP_TYPE_COLORS[stop.stopType] : '#E5E7EB';
-              const iconColor = isCompleted || isCurrent ? '#fff' : '#6B7280';
+              const isSkipped = stop.status === 'skipped';
+              const isCompleted = !isSkipped && idx < currentStopIndex;
+              const isCurrent = !isSkipped && idx === mapHighlightStopIndex;
+              const btnBg = isSkipped
+                ? '#FCA5A5'
+                : isCompleted
+                  ? '#9CA3AF'
+                  : isCurrent
+                    ? STOP_TYPE_COLORS[stop.stopType]
+                    : '#E5E7EB';
+              const iconColor = isSkipped || isCompleted || isCurrent ? '#fff' : '#6B7280';
               return (
                 <TouchableOpacity
                   key={stop.id}
                   style={[styles.sidebarBtn, { backgroundColor: btnBg }]}
                   accessibilityRole="button"
-                  accessibilityLabel={stopPhaseShortLabel(stop)}
+                  accessibilityLabel={
+                    isSkipped ? `${stopPhaseShortLabel(stop)} (cancelada)` : stopPhaseShortLabel(stop)
+                  }
                   activeOpacity={0.85}
                   onPress={() => focusMapOnSidebarStop(stop, idx)}
                 >
-                  <StopKindMarkerIcon stop={stop} completed={isCompleted} color={iconColor} />
+                  <StopKindMarkerIcon stop={stop} completed={isCompleted} skipped={isSkipped} color={iconColor} />
                 </TouchableOpacity>
               );
             })}
@@ -3819,6 +3990,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 <MaterialIcons name="flag" size={18} color={DARK} />
               </TouchableOpacity>
             )}
+            </ScrollView>
           </View>
         )}
 
@@ -3856,9 +4028,9 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             <Text style={styles.miniSheetName} numberOfLines={1}>
               {totalStops > 0 ? cardInfo.label : (trip?.origin_address ?? cardInfo.label)}
             </Text>
-            {nativeNavigationActive && nativeMiniSheetCode?.code ? (
+            {nativeMiniSheetCode?.code ? (
               <Text style={styles.miniSheetOrderId} numberOfLines={1}>
-                {nativeMiniSheetCode.label} #{nativeMiniSheetCode.code}
+                ID da Reserva: {nativeMiniSheetCode.code}
               </Text>
             ) : null}
 
@@ -3927,6 +4099,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.detailScroll}>
+            {(() => {
+              const code = detailSheetStop ? stopModalCode(detailSheetStop)?.code : null;
+              return code ? (
+                <Text style={styles.reservaCodeLine}>ID da Reserva: {code}</Text>
+              ) : null;
+            })()}
             {detailSheetStop && isPickup(detailSheetStop) ? (
               <>
                 <View style={styles.avatarCenter}>
@@ -4124,6 +4302,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                 <Text style={styles.confirmSheetSubtitle}>
                   Insira o código informado pelo cliente para confirmar a entrega.
                 </Text>
+                {(() => {
+                  const code = confirmSheetStop ? stopModalCode(confirmSheetStop)?.code : null;
+                  return code ? (
+                    <Text style={styles.reservaCodeLine}>ID da Reserva: {code}</Text>
+                  ) : null;
+                })()}
                 {confirmSheetCashPayment ? (
                   <View style={styles.cashPaymentNotice}>
                     <MaterialIcons name="payments" size={20} color="#92400E" />
@@ -4180,6 +4364,12 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                   </TouchableOpacity>
                 </View>
                 <Text style={styles.confirmSheetSubtitle}>{confirmPickupSubtitle(confirmSheetStop)}</Text>
+                {(() => {
+                  const code = confirmSheetStop ? stopModalCode(confirmSheetStop)?.code : null;
+                  return code ? (
+                    <Text style={styles.reservaCodeLine}>ID da Reserva: {code}</Text>
+                  ) : null;
+                })()}
                 {confirmSheetCashPayment ? (
                   <View style={styles.cashPaymentNotice}>
                     <MaterialIcons name="payments" size={20} color="#92400E" />
@@ -4467,6 +4657,19 @@ export function ActiveTripScreen({ navigation, route }: Props) {
         </KeyboardAvoidingView>
         </View>
       ) : null}
+      <AppConfirmModal
+        visible={cancelPickupStop !== null}
+        title={cancelPickupCopy?.title ?? ''}
+        message={cancelPickupCopy?.message ?? ''}
+        confirmLabel="Sim, cancelar"
+        cancelLabel="Voltar"
+        loading={cancelPickupLoading}
+        destructive
+        onConfirm={() => void handleConfirmCancelPickup()}
+        onCancel={() => {
+          if (!cancelPickupLoading) setCancelPickupStop(null);
+        }}
+      />
     </View>
   );
 }
@@ -4645,8 +4848,15 @@ const styles = StyleSheet.create({
   // ── Right sidebar ─────────────────────────────────────────
   sidebar: {
     position: 'absolute',
+    width: 44,
+  },
+  sidebarScroll: {
+    flex: 1,
+  },
+  sidebarScrollContent: {
     alignItems: 'center',
     gap: 6,
+    paddingVertical: 0,
   },
   sidebarLine: {
     position: 'absolute',
@@ -4877,6 +5087,7 @@ const styles = StyleSheet.create({
   },
   avatarInitials: { color: '#fff', fontSize: 20, fontWeight: '700' },
   detailName: { fontSize: 20, fontWeight: '700', color: DARK, textAlign: 'center', marginBottom: 6 },
+  reservaCodeLine: { fontSize: 14, fontWeight: '700', color: DARK, textAlign: 'center', marginBottom: 12 },
   detailMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -230,18 +230,13 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           return;
         }
         const totalPax = dependentShipmentTotalPassengers(extraPassengers ?? 0);
-        if (bagsCount > totalPax) {
-          showAlert('Malas', 'O número de malas não pode ser maior que o de passageiros (1 mala por pessoa).');
-          setSubmitting(false);
-          return;
-        }
         const allowedBags = maxBagsForTrip(totalPax, driver?.bags);
         if (bagsCount > allowedBags) {
           showAlert(
             'Malas',
             driver?.bags != null && Number(driver.bags) > 0
-              ? `No máximo ${allowedBags} mala(s): 1 por passageiro e limite desta viagem (${driver.bags} mala(s)).`
-              : `No máximo ${allowedBags} mala(s) (1 por passageiro).`,
+              ? `Capacidade disponível no bagageiro desta viagem: ${allowedBags} mala${allowedBags === 1 ? '' : 's'}.`
+              : `Capacidade do bagageiro indisponível — limite estimado em ${allowedBags} mala${allowedBags === 1 ? '' : 's'}.`,
           );
           setSubmitting(false);
           return;
@@ -425,7 +420,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           </Text>
           <Text style={styles.summaryMeta}>
             Bagagens: {bagsCount} {bagsCount === 1 ? 'mala' : 'malas'}
-            {driver ? ` · máx. ${maxBagsAllowed} (regra da viagem)` : ` · máx. ${maxBagsAllowed} (1 por pessoa)`}
+            {driver ? ` · máx. ${maxBagsAllowed} (bagageiro da viagem)` : ` · máx. ${maxBagsAllowed} (estimativa)`}
           </Text>
           {instructions ? <Text style={styles.summaryMeta}>Instruções: {instructions}</Text> : null}
           <View style={styles.divider} />

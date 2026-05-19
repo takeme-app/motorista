@@ -113,10 +113,10 @@ export async function ensureAllTripStopsRemote(tripId: string): Promise<void> {
   ]);
 }
 
-/** Índice da primeira parada ainda não concluída; se todas concluídas, retorna `stops.length`. */
+/** Índice da primeira parada ainda não finalizada; `skipped` (cancelado pelo motorista) também conta como terminal junto com `completed`. */
 export function computeFirstIncompleteStopIndex(stops: TripStop[]): number {
   if (stops.length === 0) return 0;
-  const idx = stops.findIndex((s) => s.status !== 'completed');
+  const idx = stops.findIndex((s) => s.status !== 'completed' && s.status !== 'skipped');
   return idx === -1 ? stops.length : idx;
 }
 
@@ -373,6 +373,8 @@ type ShipmentRow = {
   delivery_code?: string | null;
   /** PDF cenário 3: PIN C (motorista digita ao retirar na base). */
   base_to_driver_code?: string | null;
+  /** Quando setado, preparador perdeu a janela; coleta volta a ser direto no cliente. */
+  preparer_handoff_expired_at?: string | null;
 };
 
 type BaseRow = {
@@ -424,7 +426,8 @@ async function buildShipmentStopsOnly(tripId: string): Promise<TripStop[]> {
       recipient_name,
       pickup_code,
       delivery_code,
-      base_to_driver_code
+      base_to_driver_code,
+      preparer_handoff_expired_at
     `)
     .eq('scheduled_trip_id', tripId)
     .eq('driver_id', tripDriverId)
@@ -448,7 +451,10 @@ async function buildShipmentStopsOnly(tripId: string): Promise<TripStop[]> {
   for (const s of rows) {
     const dropLL = latLngFromDbColumns(s.destination_lat, s.destination_lng);
     const baseId = s.base_id ? String(s.base_id) : null;
-    const b = baseId ? baseById.get(baseId) : null;
+    const handoffExpired = Boolean(s.preparer_handoff_expired_at);
+    // Se a janela do preparador expirou, ignora a base — coleta volta a ser direta com o cliente.
+    // Espelha a regra do RPC `ensure_shipment_trip_stops` (migration 20260608010000).
+    const b = baseId && !handoffExpired ? baseById.get(baseId) : null;
 
     if (b) {
       const baseLL = latLngFromDbColumns(b.lat, b.lng);

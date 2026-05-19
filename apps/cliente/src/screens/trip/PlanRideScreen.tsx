@@ -279,6 +279,17 @@ export function PlanRideScreen({ navigation, route }: Props) {
     if (!selectedTripId) return;
     const trip = scheduledTrips.find((t) => t.id === selectedTripId);
     if (!trip || !effectiveDestination) return;
+    // Janela mínima de 30min antes da partida (alinha com PendingRequestsScreen do motorista).
+    if (trip.departure_at) {
+      const minutesUntilDeparture = (new Date(trip.departure_at).getTime() - Date.now()) / 60000;
+      if (minutesUntilDeparture < 30) {
+        showAlert(
+          'Viagem muito próxima',
+          'Esta viagem sai em menos de 30 minutos. Para dar tempo do motorista aceitar, escolha uma viagem com pelo menos 30 minutos de antecedência.',
+        );
+        return;
+      }
+    }
     navigation.navigate('ConfirmDetails', {
       scheduled_trip_id: trip.id,
       origin: { address: origin.address, latitude: origin.latitude, longitude: origin.longitude },
@@ -306,7 +317,7 @@ export function PlanRideScreen({ navigation, route }: Props) {
       immediateTrip: false,
       scheduledTripDepartureAt: trip.departure_at,
     });
-  }, [selectedTripId, scheduledTrips, effectiveDestination, origin, navigation]);
+  }, [selectedTripId, scheduledTrips, effectiveDestination, origin, navigation, showAlert]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>

@@ -449,6 +449,16 @@ export function CheckoutScreen({ navigation, route }: Props) {
         depIsoForGuard = (stRow?.departure_at as string | undefined) ?? null;
       }
       if (depIsoForGuard) {
+        // Defesa: motorista tem janela de 30min antes da partida para aceitar
+        // (alinha com PendingRequestsScreen). Reservar abaixo disso vira oferta expirada na hora.
+        const minutesUntilDeparture = (new Date(depIsoForGuard).getTime() - Date.now()) / 60000;
+        if (minutesUntilDeparture < 30) {
+          showAlert(
+            'Viagem muito próxima',
+            'Esta viagem sai em menos de 30 minutos. Para dar tempo do motorista aceitar, escolha uma viagem com pelo menos 30 minutos de antecedência.',
+          );
+          return;
+        }
         const dupMsg = await getDuplicateDestinationSameDayMessage({
           userId: user.id,
           destLat: destination.latitude,

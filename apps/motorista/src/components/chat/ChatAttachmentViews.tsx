@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -10,6 +10,23 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { Text } from '../Text';
 import { chatAttachmentSignedUrl } from '../../utils/storageUrl';
+import { loadExpoAv } from '../../utils/expoAvOptional';
+
+function formatMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '0:00';
+  const total = Math.floor(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+type SoundLike = {
+  playAsync: () => Promise<unknown>;
+  pauseAsync: () => Promise<unknown>;
+  unloadAsync: () => Promise<unknown>;
+  setPositionAsync: (pos: number) => Promise<unknown>;
+  getStatusAsync: () => Promise<{ isLoaded?: boolean; isPlaying?: boolean }>;
+};
 
 const GOLD = '#C9A227';
 
@@ -59,36 +76,101 @@ export function ChatAttachmentImage({ attachmentPath, isOutgoing, outgoingPalett
 /** Sem expo-av no bundle: abre URL assinada no player do sistema. */
 export function ChatAttachmentAudio({ attachmentPath, isOutgoing, outgoingPalette = 'gold' }: Props) {
   const [uri, setUri] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [position, setPosition] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const soundRef = useRef<SoundLike | null>(null);
   const darkOut = isOutgoing && outgoingPalette === 'dark';
+  const accent = darkOut ? '#FFFFFF' : isOutgoing ? '#111827' : GOLD;
+  const trackBg = darkOut ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.12)';
 
   useEffect(() => {
     let cancelled = false;
     chatAttachmentSignedUrl(attachmentPath).then((u) => {
       if (!cancelled) setUri(u);
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      const s = soundRef.current;
+      soundRef.current = null;
+      if (s) void s.unloadAsync().catch(() => {});
+    };
   }, [attachmentPath]);
 
-  const open = useCallback(async () => {
-    if (uri) await Linking.openURL(uri);
-  }, [uri]);
+  const togglePlay = useCallback(async () => {
+    if (!uri || loading) return;
+    try {
+      const existing = soundRef.current;
+      if (existing) {
+        const st = await existing.getStatusAsync();
+        if (st.isLoaded && st.isPlaying) {
+          await existing.pauseAsync();
+        } else {
+          await existing.playAsync();
+        }
+        return;
+      }
+      setLoading(true);
+      const av = await loadExpoAv();
+      if (!av) {
+        await Linking.openURL(uri);
+        return;
+      }
+      const { sound } = await av.Audio.Sound.createAsync(
+        { uri },
+        { shouldPlay: true },
+        (status: unknown) => {
+          const s = status as {
+            isLoaded?: boolean;
+            isPlaying?: boolean;
+            positionMillis?: number;
+            durationMillis?: number;
+            didJustFinish?: boolean;
+          };
+          if (!s?.isLoaded) return;
+          setIsPlaying(Boolean(s.isPlaying));
+          if (typeof s.positionMillis === 'number') setPosition(s.positionMillis);
+          if (typeof s.durationMillis === 'number' && s.durationMillis > 0) setDuration(s.durationMillis);
+          if (s.didJustFinish) {
+            void soundRef.current?.setPositionAsync(0).catch(() => {});
+            setIsPlaying(false);
+          }
+        },
+      );
+      soundRef.current = sound as SoundLike;
+    } catch (err) {
+      console.warn('[chat-audio-player] falhou', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [uri, loading]);
+
+  const progressPct = duration > 0 ? Math.min(100, (position / duration) * 100) : 0;
+  const timeLabel = duration > 0
+    ? formatMs(isPlaying ? duration - position : (position > 0 ? position : duration))
+    : (uri ? '—' : '…');
+  const iconName = loading ? null : isPlaying ? 'pause' : 'play-arrow';
 
   return (
-    <TouchableOpacity
-      style={[styles.audioRow, isOutgoing && styles.audioRowOut]}
-      onPress={open}
-      disabled={!uri}
-      activeOpacity={0.8}
-    >
-      <MaterialIcons
-        name="graphic-eq"
-        size={36}
-        color={darkOut ? '#FFFFFF' : isOutgoing ? '#111827' : GOLD}
-      />
-      <Text style={[styles.audioLabel, isOutgoing && styles.audioLabelOut, darkOut && styles.audioLabelDarkOut]}>
-        {uri ? 'Abrir áudio' : 'Carregando…'}
-      </Text>
-    </TouchableOpacity>
+    <View style={styles.audioRow}>
+      <TouchableOpacity
+        onPress={togglePlay}
+        disabled={!uri || loading}
+        activeOpacity={0.75}
+        style={[styles.audioPlayBtn, { borderColor: accent }]}
+      >
+        {loading ? (
+          <ActivityIndicator size="small" color={accent} />
+        ) : (
+          <MaterialIcons name={iconName as 'play-arrow' | 'pause'} size={22} color={accent} />
+        )}
+      </TouchableOpacity>
+      <View style={[styles.audioProgressTrack, { backgroundColor: trackBg }]}>
+        <View style={[styles.audioProgressFill, { width: `${progressPct}%`, backgroundColor: accent }]} />
+      </View>
+      <Text style={[styles.audioTimeLabel, { color: accent }]}>{timeLabel}</Text>
+    </View>
   );
 }
 
@@ -147,11 +229,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     paddingVertical: 6,
+    minWidth: 200,
   },
   audioRowOut: {},
   audioLabel: { fontSize: 15, fontWeight: '600', color: '#374151' },
   audioLabelOut: { color: '#111827' },
   audioLabelDarkOut: { color: '#FFFFFF' },
+  audioPlayBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  audioProgressTrack: {
+    flex: 1,
+    height: 4,
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  audioProgressFill: {
+    height: '100%',
+  },
+  audioTimeLabel: {
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+    minWidth: 36,
+    textAlign: 'right',
+  },
   fileRow: {
     flexDirection: 'row',
     alignItems: 'center',

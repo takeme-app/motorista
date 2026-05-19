@@ -202,12 +202,13 @@ export type LoadClientScheduledTripsOptions = {
    */
   applyBookingsPromoToList?: boolean;
   /**
-   * Quando true, filtra por `bags_available > 0` em vez de `seats_available > 0`.
-   * Encomenda não ocupa assento, só mala — antes uma viagem cheia de passageiros
-   * mas com espaço de bagagem ficava invisível na lista de envios.
+   * Quando true, ignora o filtro de capacidade (`seats_available > 0`).
+   * Encomenda não ocupa assento — o motorista decide na oferta se acomoda a carga.
+   * Antes filtrávamos por `bags_available > 0`, mas motoristas costumam deixar
+   * esse valor em 0, então a lista vinha sempre vazia.
    * Padrão (false/undefined): mantém o filtro de assentos (Viagens / Dependentes).
    */
-  bagsOnly?: boolean;
+  skipCapacityFilter?: boolean;
 };
 
 type PromoBatchRow = {
@@ -310,9 +311,7 @@ export async function loadClientScheduledTrips(opts?: LoadClientScheduledTripsOp
 }> {
   const sb = supabase as { from: (table: string) => any };
   const nowIso = new Date().toISOString();
-  // Viagens / Dependentes filtram por assentos; Encomendas (bagsOnly=true) filtra por bagagem.
-  const capacityColumn = opts?.bagsOnly ? 'bags_available' : 'seats_available';
-  const { data: tripsRaw, error: tripsErr } = await sb
+  let query = sb
     .from('scheduled_trips')
     .select(
       'id, title, driver_id, route_id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, departure_at, arrival_at, seats_available, bags_available, capacity, badge, amount_cents, price_per_person_cents'
@@ -320,9 +319,12 @@ export async function loadClientScheduledTrips(opts?: LoadClientScheduledTripsOp
     .eq('status', 'active')
     .eq('is_active', true)
     .is('driver_journey_started_at', null)
-    .gt('departure_at', nowIso)
-    .gt(capacityColumn, 0)
-    .order('departure_at');
+    .gt('departure_at', nowIso);
+  // Viagens / Dependentes filtram por assentos; Encomendas ignoram capacidade (motorista decide na oferta).
+  if (!opts?.skipCapacityFilter) {
+    query = query.gt('seats_available', 0);
+  }
+  const { data: tripsRaw, error: tripsErr } = await query.order('departure_at');
   if (tripsErr) {
     return { items: [], error: getUserErrorMessage(tripsErr, 'Não foi possível carregar as viagens.') };
   }

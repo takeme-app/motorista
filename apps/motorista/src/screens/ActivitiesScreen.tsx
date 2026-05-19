@@ -25,6 +25,7 @@ import { supabase } from '../lib/supabase';
 import { invokeRefundJourneyStartNotAccepted } from '../lib/refundJourneyStartNotAccepted';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { useAppAlert } from '../contexts/AppAlertContext';
+import { AppConfirmModal } from '../components/AppConfirmModal';
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Activities'>,
@@ -198,13 +199,13 @@ function TripCard({
     : isConfirmed
       ? styles.badgeTextConfirmed
       : styles.badgeTextPlanned;
-  const badgeLabel = journeyStarted ? 'Em andamento' : isConfirmed ? 'Confirmada' : 'Planejada';
+  const badgeLabel = journeyStarted ? 'Em andamento' : isConfirmed ? 'Aguardando início' : 'Planejada';
 
   return (
     <View style={styles.card}>
       {/* Row 1: code + badge */}
       <View style={styles.cardRow}>
-        <Text style={styles.tripCode}>{formatTripCode(trip.id)}</Text>
+        <Text style={styles.tripCode}>ID da Viagem: {formatTripCode(trip.id)}</Text>
         <View style={[styles.badge, badgeStyle]}>
           <Text style={[styles.badgeText, badgeTextStyle]}>{badgeLabel}</Text>
         </View>
@@ -352,20 +353,16 @@ function TripCard({
         </TouchableOpacity>
       ) : null}
 
-      {/* Bottom link */}
+      {/* Bottom link — sempre leva ao detalhe da viagem.
+          Quando journeyStarted, o botão grande "Continuar no mapa" já leva
+          ao ActiveTrip; este link complementa abrindo o detalhe (TripDetail). */}
       <TouchableOpacity
-        onPress={() => {
-          if (journeyStarted && onContinueTrip) {
-            onContinueTrip();
-          } else {
-            onPress();
-          }
-        }}
+        onPress={onPress}
         activeOpacity={0.7}
         style={styles.linkBtn}
       >
         <Text style={styles.linkText}>
-          {journeyStarted ? 'Abrir mapa da viagem' : 'Ver mais'}
+          {journeyStarted ? 'Detalhes da viagem' : 'Ver mais'}
         </Text>
       </TouchableOpacity>
     </View>
@@ -376,6 +373,7 @@ export function ActivitiesScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
   const [loading, setLoading] = useState(true);
   const [startingTripId, setStartingTripId] = useState<string | null>(null);
+  const [pendingStartTripId, setPendingStartTripId] = useState<string | null>(null);
   const [confirmedTrips, setConfirmedTrips] = useState<TripRow[]>([]);
   const [plannedTrips, setPlannedTrips] = useState<TripRow[]>([]);
   const [filterVisible, setFilterVisible] = useState(false);
@@ -489,6 +487,31 @@ export function ActivitiesScreen({ navigation }: Props) {
   useFocusEffect(
     useCallback(() => {
       load();
+    }, [load]),
+  );
+
+  // Realtime: ao receber INSERT/UPDATE/DELETE em bookings (filtro automático
+  // pela RLS — só vêm bookings de viagens deste motorista), recarrega a
+  // lista para o card refletir o número de passageiros / capacidade do
+  // bagageiro / estados sem precisar de pull-to-refresh.
+  useFocusEffect(
+    useCallback(() => {
+      const channel = supabase
+        .channel('activities-bookings-and-trips')
+        .on(
+          'postgres_changes' as never,
+          { event: '*', schema: 'public', table: 'bookings' } as never,
+          () => { void load(); },
+        )
+        .on(
+          'postgres_changes' as never,
+          { event: 'UPDATE', schema: 'public', table: 'scheduled_trips' } as never,
+          () => { void load(); },
+        )
+        .subscribe();
+      return () => {
+        void supabase.removeChannel(channel);
+      };
     }, [load]),
   );
 
@@ -678,7 +701,7 @@ export function ActivitiesScreen({ navigation }: Props) {
                     onPress={() => goTripDetail(trip.id)}
                     onTrunkChange={(pct) => updateTrunk(trip.id, pct)}
                     onStartTrip={() => {
-                      void startTripJourney(trip.id);
+                      setPendingStartTripId(trip.id);
                     }}
                     onContinueTrip={() => navigation.navigate('ActiveTrip', { tripId: trip.id })}
                     startTripLoading={startingTripId === trip.id}
@@ -698,7 +721,7 @@ export function ActivitiesScreen({ navigation }: Props) {
                     onPress={() => goTripDetail(trip.id)}
                     onTrunkChange={(pct) => updateTrunk(trip.id, pct)}
                     onStartTrip={() => {
-                      void startTripJourney(trip.id);
+                      setPendingStartTripId(trip.id);
                     }}
                     onContinueTrip={() => navigation.navigate('ActiveTrip', { tripId: trip.id })}
                     startTripLoading={startingTripId === trip.id}
@@ -895,6 +918,25 @@ export function ActivitiesScreen({ navigation }: Props) {
         </View>
         </KeyboardAvoidingView>
       </Modal>
+      <AppConfirmModal
+        visible={pendingStartTripId !== null}
+        title="Iniciar viagem?"
+        message="Após iniciar, os passageiros e a base de operações serão notificados, e o cronômetro da viagem começa a contar. Confirme se está pronto para sair."
+        confirmLabel="Sim, iniciar"
+        cancelLabel="Voltar"
+        loading={startingTripId !== null && startingTripId === pendingStartTripId}
+        onConfirm={() => {
+          const tripId = pendingStartTripId;
+          if (!tripId) return;
+          void (async () => {
+            await startTripJourney(tripId);
+            setPendingStartTripId(null);
+          })();
+        }}
+        onCancel={() => {
+          if (startingTripId === null) setPendingStartTripId(null);
+        }}
+      />
     </SafeAreaView>
   );
 }

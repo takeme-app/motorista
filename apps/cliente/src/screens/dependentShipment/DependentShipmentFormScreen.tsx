@@ -125,8 +125,8 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
       showAlert('Atenção', 'Preencha o contato com DDD e número (ex.: (00) 00000-0000).');
       return;
     }
-    if (bagsCount > totalPassengers) {
-      showAlert('Malas', 'O número de malas não pode ser maior que o de passageiros (1 mala por pessoa).');
+    if (bagsCount > maxBags) {
+      showAlert('Malas', `Acima do limite estimado (${maxBags} mala${maxBags === 1 ? '' : 's'}). Ao escolher o motorista, o limite real do bagageiro da viagem se aplica.`);
       return;
     }
     navigation.navigate('DefineDependentTrip', {
@@ -257,7 +257,7 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
               </TouchableOpacity>
             </View>
             <Text style={styles.stepperHint}>
-              Até 1 mala por passageiro ({totalPassengers} no total); aqui no máximo {maxBags} mala(s). Ao escolher o motorista, o limite da viagem também se aplica.
+              Ao escolher o motorista, o limite real do bagageiro da viagem se aplica. Combine com o motorista no embarque se houver dúvida.
             </Text>
           </View>
           <View style={styles.separator}>
