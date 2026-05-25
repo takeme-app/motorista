@@ -37,6 +37,20 @@ export type PricingResult = {
   discountPctApplied: number;
 };
 
+export const DEFAULT_PLATFORM_FEE_PCT = 15;
+export const MAX_PLATFORM_FEE_PCT = 40;
+
+export const PLATFORM_FEE_SERVICE_TYPES = [
+  'booking',
+  'dependent_shipment',
+  'shipment_driver',
+  'shipment_preparer',
+  'excursion',
+] as const;
+
+export type PlatformFeeServiceType = (typeof PLATFORM_FEE_SERVICE_TYPES)[number];
+export type PlatformFeePctByService = Partial<Record<PlatformFeeServiceType, number>>;
+
 export class PricingDenominatorOverflowError extends Error {
   readonly denom: number;
   constructor(denom: number) {
@@ -53,6 +67,46 @@ const sanitizePct = (value: number | null | undefined): number => {
   if (!Number.isFinite(n) || n < 0) return 0;
   return n;
 };
+
+const isValidConfiguredPct = (value: unknown): value is number => {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 && n <= MAX_PLATFORM_FEE_PCT;
+};
+
+export function isPlatformFeeServiceType(value: string): value is PlatformFeeServiceType {
+  return (PLATFORM_FEE_SERVICE_TYPES as readonly string[]).includes(value);
+}
+
+export function normalizePlatformFeePctByService(raw: unknown): PlatformFeePctByService {
+  const source =
+    raw && typeof raw === 'object' && 'value' in raw && (raw as { value?: unknown }).value != null
+      ? (raw as { value?: unknown }).value
+      : raw;
+  if (!source || typeof source !== 'object') return {};
+
+  const input = source as Record<string, unknown>;
+  const result: PlatformFeePctByService = {};
+  for (const service of PLATFORM_FEE_SERVICE_TYPES) {
+    const value = input[service];
+    if (isValidConfiguredPct(value)) {
+      result[service] = Number(value);
+    }
+  }
+  return result;
+}
+
+export function resolvePlatformFeePct(
+  raw: unknown,
+  serviceType: PlatformFeeServiceType,
+  fallbackPct: unknown = DEFAULT_PLATFORM_FEE_PCT
+): number {
+  const byService = normalizePlatformFeePctByService(raw);
+  const servicePct = byService[serviceType];
+  if (servicePct != null) return servicePct;
+
+  if (isValidConfiguredPct(fallbackPct)) return Number(fallbackPct);
+  return DEFAULT_PLATFORM_FEE_PCT;
+}
 
 const sanitizeCents = (value: number | null | undefined): number => {
   const n = Number(value);

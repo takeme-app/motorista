@@ -535,7 +535,21 @@ export default function PagamentoCriarTrechoScreen() {
     React.createElement('h2', { style: tituloCard }, 'Percentuais de ganho'),
     React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
       fieldText(pctWorkerLabel, f.pctWorker, (v) => patch({ pctWorker: v }), 'Ex: 15%'),
-      fieldText('% ganho do admin', f.pctAdmin, (v) => patch({ pctAdmin: v }), 'Ex: 5%')));
+      fieldText('% ganho do admin', f.pctAdmin, (v) => patch({ pctAdmin: v }), 'Ex: 5%')),
+    React.createElement('div', {
+      style: {
+        background: '#fff8e6',
+        border: '1px solid #cba04b',
+        borderRadius: 8,
+        padding: '10px 12px',
+        width: '100%',
+        boxSizing: 'border-box' as const,
+      },
+    },
+      React.createElement('p', {
+        style: { margin: 0, fontSize: 12, color: '#654c01', lineHeight: 1.5, ...font },
+      },
+        'Atenção: este percentual fica salvo no catálogo do trecho. No checkout de viagem, a cobrança atual usa a taxa global da plataforma configurada em Configurações; pedidos já criados mantêm o snapshot aplicado.')));
 
   const bannerInfo = React.createElement('div', {
     style: {

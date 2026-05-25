@@ -26,6 +26,7 @@ import {
 import { snapshotFromPricingResult } from '../../lib/orderPricingSnapshot';
 import { dependentShipmentTotalPassengers, maxBagsForTrip } from '../../lib/tripCapacityLimits';
 import { fetchDriverStripeChargesEnabled } from '../../lib/driverStripeConnect';
+import { fetchPlatformFeePctForService } from '../../lib/platformFees';
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'ConfirmDependentShipment'>;
 
@@ -81,19 +82,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     }
     let cancelled = false;
     void (async () => {
-      let adminPct = 15;
-      try {
-        const { data: setting } = await supabase
-          .from('platform_settings')
-          .select('value')
-          .eq('key', 'default_admin_pct')
-          .maybeSingle();
-        const raw = setting?.value as { percentage?: number; value?: number } | null;
-        const n = Number(raw?.percentage ?? raw?.value);
-        if (Number.isFinite(n) && n >= 0) adminPct = n;
-      } catch {
-        /* fallback 15% */
-      }
+      const adminPct = await fetchPlatformFeePctForService('dependent_shipment');
 
       const { data: { user } } = await supabase.auth.getUser();
       let gainPct = 0;
@@ -290,18 +279,34 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         if (photoUri) {
           photoUrl = await uploadPhotoAndGetPath(user.id, photoUri);
         }
-        const pricingFields = pricingInsertRow ?? {
-          amount_cents: amountCents,
-          pricing_subtotal_cents: amountCents,
-          platform_fee_cents: 0,
-          pricing_surcharges_cents: 0,
-          promo_discount_cents: 0,
-          promo_gain_cents: 0,
-          price_route_base_cents: amountCents,
-          worker_earning_cents: amountCents,
-          admin_earning_cents: 0,
-          admin_pct_applied: 0,
-        };
+        let pricingFields = pricingInsertRow;
+        if (!pricingFields) {
+          const fallbackAdminPct = await fetchPlatformFeePctForService('dependent_shipment');
+          try {
+            pricingFields = snapshotFromPricingResult(
+              computeOrderPricing({
+                baseCents: amountCents,
+                surchargesCents: 0,
+                adminPct: fallbackAdminPct,
+                gainPct: 0,
+                discountPct: 0,
+              }),
+            );
+          } catch {
+            pricingFields = {
+              amount_cents: amountCents,
+              pricing_subtotal_cents: amountCents,
+              platform_fee_cents: 0,
+              pricing_surcharges_cents: 0,
+              promo_discount_cents: 0,
+              promo_gain_cents: 0,
+              price_route_base_cents: amountCents,
+              worker_earning_cents: amountCents,
+              admin_earning_cents: 0,
+              admin_pct_applied: fallbackAdminPct,
+            };
+          }
+        }
         const { data: row, error } = await supabase
           .from('dependent_shipments')
           .insert({

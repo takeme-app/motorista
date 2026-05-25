@@ -31,11 +31,19 @@ export {
   formatPricingSummary,
   normalizeApplyPromotion,
   PricingDenominatorOverflowError,
+  DEFAULT_PLATFORM_FEE_PCT,
+  MAX_PLATFORM_FEE_PCT,
+  PLATFORM_FEE_SERVICE_TYPES,
+  isPlatformFeeServiceType,
+  normalizePlatformFeePctByService,
+  resolvePlatformFeePct,
 } from './orderPricing';
 export type {
   PricingInput,
   PricingResult,
   ApplyPromotionResult,
+  PlatformFeePctByService,
+  PlatformFeeServiceType,
 } from './orderPricing';
 export {
   formatDependentShipmentCode,

@@ -26,19 +26,104 @@ function isAdmin(user: { app_metadata?: Record<string, unknown> }): boolean {
  */
 type BudgetTeamLine = {
   role: string;
-  name: string;
+  name?: string;
   worker_id?: string;
   value_cents: number;
 };
 
+type BudgetItemLine = {
+  label?: string;
+  name?: string;
+  item?: string;
+  qty?: number;
+  quantity?: number;
+  value_cents?: number;
+  amount_cents?: number;
+};
+
+type BudgetDisplayLine = {
+  kind: "team" | "basic" | "additional" | "recreation";
+  label: string;
+  qty: number;
+  value_cents: number;
+  amount_cents: number;
+  worker_id?: string | null;
+  role?: string;
+};
+
 type BudgetLines = {
   team?: BudgetTeamLine[];
-  basic_items?: Array<{ name: string; quantity: number; value_cents: number }>;
-  additional_services?: Array<{ name: string; quantity: number; value_cents: number }>;
-  recreation_items?: Array<{ name: string; quantity: number; value_cents: number }>;
+  basic_items?: BudgetItemLine[];
+  additional_services?: BudgetItemLine[];
+  recreation_items?: BudgetItemLine[];
+  display_lines?: BudgetDisplayLine[];
   discount?: { type: "percentage" | "fixed"; value: number } | null;
   total_cents: number;
 };
+
+function clampCents(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.floor(n);
+}
+
+function lineLabel(row: BudgetItemLine, fallback: string): string {
+  return String(row.label ?? row.name ?? row.item ?? fallback).trim() || fallback;
+}
+
+function normalizeItemLines(kind: "basic" | "additional" | "recreation", rows: BudgetItemLine[] | undefined): BudgetDisplayLine[] {
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((row) => {
+      const qty = Math.max(1, Math.floor(Number(row.qty ?? row.quantity ?? 1) || 1));
+      const unit = clampCents(row.value_cents ?? row.amount_cents);
+      return {
+        kind,
+        label: lineLabel(row, "Item"),
+        qty,
+        value_cents: unit,
+        amount_cents: qty * unit,
+      };
+    })
+    .filter((row) => row.label || row.amount_cents > 0);
+}
+
+function normalizeBudgetLines(budget: BudgetLines): BudgetLines & { display_lines: BudgetDisplayLine[] } {
+  const team = Array.isArray(budget.team) ? budget.team : [];
+  const teamLines: BudgetDisplayLine[] = team.map((row) => {
+    const role = String(row.role ?? "").toLowerCase().includes("driver") ? "driver" : "preparer";
+    const amount = clampCents(row.value_cents);
+    return {
+      kind: "team",
+      label: row.name?.trim() || (role === "driver" ? "Motorista" : "Preparador de excursões"),
+      qty: 1,
+      value_cents: amount,
+      amount_cents: amount,
+      worker_id: row.worker_id ?? null,
+      role,
+    };
+  });
+  return {
+    ...budget,
+    team,
+    basic_items: budget.basic_items ?? [],
+    additional_services: budget.additional_services ?? [],
+    recreation_items: budget.recreation_items ?? [],
+    display_lines: [
+      ...teamLines,
+      ...normalizeItemLines("basic", budget.basic_items),
+      ...normalizeItemLines("additional", budget.additional_services),
+      ...normalizeItemLines("recreation", budget.recreation_items),
+    ],
+  };
+}
+
+function deriveWorkerPayoutCents(team: BudgetTeamLine[] | undefined): number {
+  if (!team?.length) return 0;
+  return Math.floor(
+    team.reduce((acc, t) => acc + clampCents(t.value_cents), 0),
+  );
+}
 
 // Deriva preparer_payout_cents a partir de budget_lines.team quando o body
 // nao envia o valor explicitamente.
@@ -176,8 +261,19 @@ Deno.serve(async (req) => {
       );
     }
 
+    const normalizedBudgetLines = normalizeBudgetLines(budget_lines);
     const totalCents =
-      total_amount_cents ?? budget_lines.total_cents ?? 0;
+      total_amount_cents ?? normalizedBudgetLines.total_cents ?? 0;
+    const workerPayout = deriveWorkerPayoutCents(normalizedBudgetLines.team);
+    if (workerPayout > totalCents) {
+      return new Response(
+        JSON.stringify({ error: "Total do orçamento não cobre os valores de motorista/preparador" }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
 
     const nowIso = new Date().toISOString();
 
@@ -189,12 +285,25 @@ Deno.serve(async (req) => {
     const preparerPayout = derivePreparerPayoutCents(
       preparer_payout_cents,
       effectivePreparerId,
-      budget_lines.team,
+      normalizedBudgetLines.team,
     );
+    const adminEarning = Math.max(0, totalCents - workerPayout);
+    const adminPctApplied =
+      totalCents > 0 ? Math.round((adminEarning / totalCents) * 10000) / 100 : 0;
 
     const updates: Record<string, unknown> = {
-      budget_lines,
+      budget_lines: {
+        ...normalizedBudgetLines,
+        total_cents: totalCents,
+      },
       total_amount_cents: totalCents,
+      price_route_base_cents: workerPayout,
+      pricing_subtotal_cents: totalCents,
+      pricing_surcharges_cents: adminEarning,
+      platform_fee_cents: adminEarning,
+      worker_earning_cents: workerPayout,
+      admin_earning_cents: adminEarning,
+      admin_pct_applied: adminPctApplied,
       preparer_payout_cents: preparerPayout,
       budget_created_by: user.id,
       budget_created_at: nowIso,
@@ -225,6 +334,20 @@ Deno.serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         }
       );
+    }
+
+    if (effectivePreparerId && effectivePreparerId !== excursion.preparer_id) {
+      await admin.from("notifications").insert({
+        user_id: effectivePreparerId,
+        title: "Nova excursão atribuída",
+        message: "Você foi vinculado a uma nova excursão. Abra o app para conferir os detalhes.",
+        category: "excursion",
+        target_app_slug: "motorista",
+        data: {
+          route: "DetalhesExcursao",
+          params: { excursionId: excursion_id },
+        },
+      });
     }
 
     if (action === "finalize" && excursion.user_id) {

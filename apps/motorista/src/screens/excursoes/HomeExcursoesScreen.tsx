@@ -38,8 +38,8 @@ const SIZE_COLORS: Record<GroupSize, { bg: string; text: string }> = {
   Grande: { bg: '#FEE2E2', text: '#991B1B' },
 };
 
-/** Mesmos status em que Detalhes permite "aceitar" (vira approved). */
-const ACCEPTABLE_STATUSES = new Set(['pending', 'contacted', 'quoted', 'in_analysis']);
+/** Cliente pagou/aprovou; agora o preparador confirma a operação e agenda. */
+const ACCEPTABLE_STATUSES = new Set(['approved']);
 
 function peopleToSize(count: number): GroupSize {
   if (count <= 15) return 'Pequeno';
@@ -131,7 +131,8 @@ export function HomeExcursoesScreen() {
       const st = String(r.status ?? '');
       const isActiveOrScheduled = st === 'scheduled' || st === 'in_progress';
       const needsAccept = ACCEPTABLE_STATUSES.has(st);
-      if (isActiveOrScheduled || needsAccept) {
+      const waitingAssignment = st === 'pending' || st === 'contacted' || st === 'quoted' || st === 'in_analysis';
+      if (isActiveOrScheduled || needsAccept || waitingAssignment) {
         byId.set(r.id, r);
       }
     }
@@ -212,7 +213,7 @@ export function HomeExcursoesScreen() {
     const { error } = await (supabase as any)
       .from('excursion_requests')
       .update({
-        status: 'approved',
+        status: 'scheduled',
         confirmed_at: new Date().toISOString(),
       })
       .eq('id', acceptModal.id);
@@ -229,6 +230,13 @@ export function HomeExcursoesScreen() {
   }, [acceptModal, load]);
 
   const needsAccept = (s: Solicitacao) => ACCEPTABLE_STATUSES.has(s.status);
+  const isAccepted = (s: Solicitacao) => ['scheduled', 'in_progress', 'completed'].includes(s.status);
+  const waitingLabel = (s: Solicitacao) =>
+    s.status === 'quoted'
+      ? 'Aguardando pagamento do cliente'
+      : s.status === 'pending' || s.status === 'contacted' || s.status === 'in_analysis'
+        ? 'Em análise/orçamento'
+        : 'Aguardando confirmação';
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -282,7 +290,7 @@ export function HomeExcursoesScreen() {
           </Text>
         ) : (
           solicitacoes.map((s) => {
-            const accepted = !needsAccept(s);
+            const accepted = isAccepted(s);
             const c = SIZE_COLORS[s.size];
             const expanded = !!expandedIds[s.id];
             return (
@@ -324,10 +332,15 @@ export function HomeExcursoesScreen() {
                     <MaterialIcons name="check-circle" size={16} color="#065F46" />
                     <Text style={styles.acceptedText}>Aceito</Text>
                   </View>
-                ) : (
+                ) : needsAccept(s) ? (
                   <TouchableOpacity style={styles.acceptBtn} onPress={() => setAcceptModal(s)} activeOpacity={0.85}>
                     <Text style={styles.acceptBtnText}>Aceitar viagem</Text>
                   </TouchableOpacity>
+                ) : (
+                  <View style={styles.waitingBadge}>
+                    <MaterialIcons name="schedule" size={16} color="#92400E" />
+                    <Text style={styles.waitingText}>{waitingLabel(s)}</Text>
+                  </View>
                 )}
               </View>
             );
@@ -407,6 +420,8 @@ const styles = StyleSheet.create({
   acceptBtnText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
   acceptedBadge: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, marginTop: 12, backgroundColor: '#D1FAE5', borderRadius: 12 },
   acceptedText: { fontSize: 14, fontWeight: '600', color: '#065F46' },
+  waitingBadge: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, marginTop: 12, backgroundColor: '#FEF3C7', borderRadius: 12, paddingHorizontal: 10 },
+  waitingText: { fontSize: 13, fontWeight: '600', color: '#92400E', textAlign: 'center' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalBox: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 28, paddingBottom: 40 },
   modalTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 10 },

@@ -92,14 +92,45 @@ async function computePricing(
   return data as OrderPricing;
 }
 
-async function getDefaultAdminPct(admin: SupabaseClient): Promise<number> {
+const DEFAULT_PLATFORM_FEE_PCT = 15;
+const MAX_PLATFORM_FEE_PCT = 40;
+
+function readValidPlatformFeePct(value: unknown): number | null {
+  const pct = Number(value);
+  if (!Number.isFinite(pct) || pct < 0 || pct > MAX_PLATFORM_FEE_PCT) return null;
+  return pct;
+}
+
+function readDefaultAdminPctValue(raw: unknown): number {
+  if (raw && typeof raw === "object") {
+    const obj = raw as { percentage?: unknown; value?: unknown };
+    return readValidPlatformFeePct(obj.percentage ?? obj.value) ?? DEFAULT_PLATFORM_FEE_PCT;
+  }
+  return DEFAULT_PLATFORM_FEE_PCT;
+}
+
+function readServiceAdminPctValue(raw: unknown, fallbackPct: number): number {
+  const source =
+    raw && typeof raw === "object" && "value" in raw && (raw as { value?: unknown }).value != null
+      ? (raw as { value?: unknown }).value
+      : raw;
+  if (source && typeof source === "object") {
+    const servicePct = readValidPlatformFeePct((source as { booking?: unknown }).booking);
+    if (servicePct != null) return servicePct;
+  }
+  return fallbackPct;
+}
+
+async function getBookingAdminPct(admin: SupabaseClient): Promise<number> {
   const { data } = await admin
     .from('platform_settings')
-    .select('value')
-    .eq('key', 'default_admin_pct')
-    .maybeSingle();
-  const pct = Number((data?.value as { percentage?: number } | null)?.percentage);
-  return Number.isFinite(pct) && pct >= 0 ? pct : 15;
+    .select('key, value')
+    .in('key', ['default_admin_pct', 'platform_fee_pct_by_service']);
+  const rows = Array.isArray(data) ? data : [];
+  const defaultRow = rows.find((row: { key?: string }) => row.key === 'default_admin_pct');
+  const byServiceRow = rows.find((row: { key?: string }) => row.key === 'platform_fee_pct_by_service');
+  const fallbackPct = readDefaultAdminPctValue((defaultRow as { value?: unknown } | undefined)?.value);
+  return readServiceAdminPctValue((byServiceRow as { value?: unknown } | undefined)?.value, fallbackPct);
 }
 
 async function stripeFetch(
@@ -465,7 +496,7 @@ Deno.serve(async (req) => {
         workerRouteId,
         pricingRouteId
       );
-      const baseAdminPct = await getDefaultAdminPct(admin);
+      const baseAdminPct = await getBookingAdminPct(admin);
       const pricing = await computePricing(
         admin,
         amountCents,

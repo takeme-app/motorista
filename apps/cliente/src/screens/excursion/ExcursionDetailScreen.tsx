@@ -144,6 +144,14 @@ function getInitials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+function getExcursionBudgetLines(raw: unknown): BudgetLine[] {
+  if (Array.isArray(raw)) return raw as BudgetLine[];
+  if (!raw || typeof raw !== 'object') return [];
+  const obj = raw as Record<string, unknown>;
+  if (Array.isArray(obj.display_lines)) return obj.display_lines as BudgetLine[];
+  return [];
+}
+
 export function ExcursionDetailScreen({ navigation, route }: Props) {
   const excursionRequestId = route.params?.excursionRequestId ?? '';
   const [detail, setDetail] = useState<ExcursionDetail | null>(null);
@@ -216,7 +224,11 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
 
   const notes = (detail?.assignment_notes ?? {}) as AssignmentNotes;
   const vehicle = detail?.vehicle_details ?? null;
-  const canShowBudget = detail?.status && ['quoted', 'approved', 'scheduled', 'in_progress', 'completed'].includes(detail.status) && Array.isArray(detail.budget_lines) && detail.budget_lines.length > 0;
+  const budgetLines = getExcursionBudgetLines(detail?.budget_lines);
+  const canShowBudget =
+    detail?.status &&
+    ['quoted', 'approved', 'scheduled', 'in_progress', 'completed'].includes(detail.status) &&
+    budgetLines.length > 0;
 
   if (loading) {
     return (

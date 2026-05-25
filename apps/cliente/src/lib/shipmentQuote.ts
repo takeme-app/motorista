@@ -25,7 +25,12 @@
 
 import { supabase } from './supabase';
 import { getRouteWithDuration, type RoutePoint } from './route';
-import { computeOrderPricing, PricingDenominatorOverflowError } from '@take-me/shared';
+import {
+  computeOrderPricing,
+  PricingDenominatorOverflowError,
+  resolvePlatformFeePct,
+  type PlatformFeeServiceType,
+} from '@take-me/shared';
 
 export type PreparerShipmentPricingRoute = {
   id: string;
@@ -232,6 +237,7 @@ type PricingDefaults = {
     km_price_cents: number | null;
     shipment_base_delivery_fee_cents: number | null;
     default_admin_pct: number | null;
+    platform_fee_pct_by_service: unknown;
     package_size_multipliers: PackageSizeMultipliers;
   };
   /** Catálogo antigo (fallback). */
@@ -283,6 +289,7 @@ async function readPricingDefaults(preparerId?: string): Promise<PricingDefaults
       'km_price_cents',
       'shipment_base_delivery_fee_cents',
       'default_admin_pct',
+      'platform_fee_pct_by_service',
       'shipment_package_size_multipliers',
     ]);
 
@@ -325,6 +332,7 @@ async function readPricingDefaults(preparerId?: string): Promise<PricingDefaults
       settingMap.get('shipment_base_delivery_fee_cents'),
     ),
     default_admin_pct: parseIntValue(settingMap.get('default_admin_pct'), 'percentage'),
+    platform_fee_pct_by_service: settingMap.get('platform_fee_pct_by_service'),
     package_size_multipliers: parsePackageMultipliers(
       settingMap.get('shipment_package_size_multipliers'),
     ),
@@ -407,6 +415,14 @@ export async function quoteShipmentForClient(params: {
     params.destinationLat,
     params.destinationLng,
   );
+  const serviceType: PlatformFeeServiceType = params.preparerId
+    ? 'shipment_preparer'
+    : 'shipment_driver';
+  const resolvedAdminPct = resolvePlatformFeePct(
+    defaults.globals.platform_fee_pct_by_service,
+    serviceType,
+    defaults.globals.default_admin_pct ?? DEFAULT_ADMIN_PCT_FALLBACK,
+  );
 
   // Tarifas efetivas após precedência (preparador > admin global).
   const effPerKm =
@@ -429,12 +445,10 @@ export async function quoteShipmentForClient(params: {
 
   if (hasOverride) {
     baseCents = clampInt((effDelivery ?? 0) + km * (effPerKm ?? 0));
-    const pct = defaults.globals.default_admin_pct;
-    adminPctApplied = pct != null && Number.isFinite(pct) && pct >= 0 ? pct : DEFAULT_ADMIN_PCT_FALLBACK;
+    adminPctApplied = resolvedAdminPct;
   } else if (bestRoute) {
     baseCents = await catalogBaseCentsAsync(bestRoute, km);
-    const routePct = Number(bestRoute.admin_pct ?? 0);
-    adminPctApplied = Number.isFinite(routePct) && routePct >= 0 ? routePct : 0;
+    adminPctApplied = resolvedAdminPct;
   } else {
     return {
       ok: false,

@@ -75,7 +75,7 @@ export default function AtendimentoDetalheScreen() {
   const { id: conversationId } = useParams<{ id: string }>();
   const ticket = (location.state as any)?.ticket || {};
   const [orcamentoCriado, setOrcamentoCriado] = useState(false);
-  const [orcamentoValor] = useState('R$ 5.000,00');
+  const [orcamentoValor, setOrcamentoValor] = useState('—');
 
   // ── Fetch real messages from Supabase ────────────────────────────────
   const [realMessages, setRealMessages] = useState<{ sender: string; content: string; time: string }[]>([]);
@@ -144,6 +144,7 @@ export default function AtendimentoDetalheScreen() {
   const [solicitacaoShort, setSolicitacaoShort] = useState(conversationId ? String(conversationId).slice(0, 8).toUpperCase() : '—');
   const [subjectUserId, setSubjectUserId] = useState<string>('');
   const [ctxJson, setCtxJson] = useState<Record<string, unknown>>({});
+  const [excursionRequestId, setExcursionRequestId] = useState<string | null>(null);
   const [historicoReal, setHistoricoReal] = useState<Array<{ id: string; titulo: string; atendente: string; data: string; desc: string; desc2: string }>>([]);
   const [complaintBody, setComplaintBody] = useState('');
 
@@ -342,6 +343,11 @@ export default function AtendimentoDetalheScreen() {
       setSolicitacaoShort(conv.id.replace(/-/g, '').slice(0, 8).toUpperCase());
       setSubjectUserId(conv.client_id);
       setCtxJson(conv.context || {});
+      const ctxExcursionId =
+        typeof conv.context?.excursion_request_id === 'string'
+          ? (conv.context.excursion_request_id as string).trim()
+          : '';
+      setExcursionRequestId(ctxExcursionId || null);
       const bid = conv.booking_id || (typeof conv.context?.booking_id === 'string' ? (conv.context.booking_id as string) : null);
       if (conv.context?.complaint && typeof conv.context.complaint === 'string') {
         setComplaintBody(conv.context.complaint as string);
@@ -405,6 +411,36 @@ export default function AtendimentoDetalheScreen() {
         setPeriodoLinha('—');
         setViagemRefLinha('—');
         setViagemStatusLinha('—');
+      }
+      if (conv.category === 'excursao' && ctxExcursionId) {
+        const { data: exc } = await (supabase as any)
+          .from('excursion_requests')
+          .select('id, destination, excursion_date, scheduled_departure_at, status, total_amount_cents, budget_lines')
+          .eq('id', ctxExcursionId)
+          .maybeSingle();
+        if (exc && !cancelled) {
+          const e = exc as {
+            id: string;
+            destination?: string | null;
+            excursion_date?: string | null;
+            scheduled_departure_at?: string | null;
+            status?: string | null;
+            total_amount_cents?: number | null;
+            budget_lines?: unknown;
+          };
+          const dateIso = e.scheduled_departure_at ?? e.excursion_date ?? null;
+          setTrechoLinha(e.destination ? `Destino: ${e.destination}` : 'Excursão');
+          setPeriodoLinha(dateIso ? new Date(dateIso).toLocaleDateString('pt-BR') : 'Data a definir');
+          setViagemRefLinha(e.id.slice(0, 8).toUpperCase());
+          setViagemStatusLinha(e.status ?? 'pending');
+          const total = Number(e.total_amount_cents ?? 0);
+          setOrcamentoCriado(total > 0 || (Array.isArray(e.budget_lines) && e.budget_lines.length > 0));
+          setOrcamentoValor(
+            total > 0
+              ? (total / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+              : 'Rascunho salvo',
+          );
+        }
       }
       if (conv.category === 'reembolso' && bid) {
         setRefundEntityId(bid);
@@ -729,12 +765,18 @@ export default function AtendimentoDetalheScreen() {
           }, 'Reprovar excursão'),
           React.createElement('button', {
             type: 'button',
-            onClick: () => { if (!orcamentoCriado) navigate('/atendimentos/0/orcamento'); else { /* enviar */ } },
+            onClick: () => {
+              if (!excursionRequestId) {
+                showToast('Excursão não encontrada neste atendimento.');
+                return;
+              }
+              navigate(`/atendimentos/${excursionRequestId}/orcamento`);
+            },
             style: {
               flex: 1, height: 47, borderRadius: 999, border: 'none',
               background: '#0d8344', color: '#fff8e6', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
             },
-          }, orcamentoCriado ? 'Enviar orçamento' : 'Elaborar orçamento'))
+          }, orcamentoCriado ? 'Editar orçamento' : 'Elaborar orçamento'))
       : isEncomenda
         ? (hideEncomendaAprovarReprovar
           ? React.createElement('div', { style: { padding: 16 } }, encomendaDecididoBanner)
@@ -1734,6 +1776,25 @@ export default function AtendimentoDetalheScreen() {
           type: 'button',
           disabled: reprovarSubmitting,
           onClick: async () => {
+            if (rawCategory === 'excursao') {
+              const id = excursionRequestId || (typeof ctxJson.excursion_request_id === 'string' ? ctxJson.excursion_request_id.trim() : '');
+              if (!id) { showToast('Excursão não encontrada.'); return; }
+              setReprovarSubmitting(true);
+              const { error } = await (supabase as any)
+                .from('excursion_requests')
+                .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+                .eq('id', id);
+              setReprovarSubmitting(false);
+              if (error) { showToast(`Erro ao reprovar: ${error.message || error}`); return; }
+              setViagemStatusLinha('cancelled');
+              if (conversationId) {
+                await (supabase as any).rpc('close_support_conversation', { p_conversation_id: conversationId, p_finish_note: 'Excursão reprovada' });
+              }
+              setReprovarOpen(false);
+              showToast('Excursão reprovada');
+              setTimeout(() => navigate('/atendimentos'), 1500);
+              return;
+            }
             if (rawCategory === 'encomendas') {
               const sid = (ctxJson.shipment_id as string) || (ctxJson.dependent_shipment_id as string);
               if (!sid) { showToast('Encomenda não encontrada.'); return; }

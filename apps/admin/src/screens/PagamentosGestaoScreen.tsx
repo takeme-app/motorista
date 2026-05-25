@@ -753,12 +753,12 @@ export default function PagamentosGestaoScreen() {
     style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const, marginBottom: 16 },
   },
     React.createElement('div', { style: s.metricCard },
-      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Média de ganho por trecho'),
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Ganho estimado com taxa global'),
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
         React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', ...font } }, '+12.5%')),
       React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4 } },
         React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `${motoristaKpiData.avgGanhoPct}%`),
-        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'de lucro'))),
+        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'default'))),
     React.createElement('div', { style: s.metricCard },
       React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Média de ganho fixo por trecho'),
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
@@ -767,12 +767,12 @@ export default function PagamentosGestaoScreen() {
         React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `R$ ${(motoristaKpiData.avgGanhoFixo / 100).toFixed(2).replace('.', ',')}`),
         React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'por rota'))),
     React.createElement('div', { style: s.metricCard },
-      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Média de ganho por trecho pelo administrador'),
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Taxa global padrão da plataforma'),
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
         React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#b53838', ...font } }, '-3.1%')),
       React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4 } },
         React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `${motoristaKpiData.avgAdminPct}%`),
-        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'de lucro'))));
+        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'novos pedidos'))));
 
   // KPIs Encomenda — média de valor por tamanho
   // Avaliações reais
@@ -915,12 +915,12 @@ export default function PagamentosGestaoScreen() {
     style: { display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' as const, marginBottom: 16 },
   },
     React.createElement('div', { style: s.metricCard },
-      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Média de ganho por trecho'),
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Ganho estimado com taxa global'),
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
         React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#22c55e', ...font } }, '+8.5%')),
       React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4 } },
         React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `${prepKpi.avgGanhoPct}%`),
-        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'de lucro'))),
+        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'default'))),
     React.createElement('div', { style: s.metricCard },
       React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Média de ganho fixo por trecho'),
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
@@ -929,16 +929,16 @@ export default function PagamentosGestaoScreen() {
         React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `R$ ${(prepKpi.avgGanhoFixo / 100).toFixed(2).replace('.', ',')}`),
         React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'por rota'))),
     React.createElement('div', { style: s.metricCard },
-      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Média de ganho por trecho pelo administrador'),
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 500, color: '#767676', margin: 0, ...font } }, 'Taxa global padrão da plataforma'),
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
         React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#b53838', ...font } }, '-2.9%')),
       React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4 } },
         React.createElement('p', { style: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, `${prepKpi.avgAdminPct}%`),
-        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'de lucro'))));
+        React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'novos pedidos'))));
 
   const gestaoKpiPlaceholder = React.createElement('p', {
     style: { fontSize: 14, color: '#767676', margin: '0 0 16px', maxWidth: 640, lineHeight: 1.5, ...font },
-  }, 'Indicadores agregados desta aba. As tabelas abaixo refletem dados reais do Supabase.');
+  }, 'Indicadores agregados desta aba. Percentuais globais são defaults para novos pedidos; percentuais de trecho e snapshots financeiros podem diferir conforme o fluxo.');
 
   // ── Table ─────────────────────────────────────────────────────────────
   const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font, padding: '0 6px' };

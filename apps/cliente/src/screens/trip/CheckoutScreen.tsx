@@ -57,6 +57,7 @@ import { waitForShipmentStripePaymentIntentId } from '../../lib/waitForShipmentS
 import { displayCpf } from '../../utils/formatCpf';
 import { bookingTotalPassengers, maxBagsForTrip } from '../../lib/tripCapacityLimits';
 import { fetchDriverStripeChargesEnabled } from '../../lib/driverStripeConnect';
+import { fetchPlatformFeePctForService } from '../../lib/platformFees';
 
 const supabasePublicUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 
@@ -321,19 +322,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
     void (async () => {
       const { data: { user } } = await supabase.auth.getUser();
 
-      let adminPct = 15;
-      try {
-        const { data: setting } = await supabase
-          .from('platform_settings')
-          .select('value')
-          .eq('key', 'default_admin_pct')
-          .maybeSingle();
-        const raw = setting?.value as { percentage?: number; value?: number } | null;
-        const n = Number(raw?.percentage ?? raw?.value);
-        if (Number.isFinite(n) && n >= 0) adminPct = n;
-      } catch {
-        /* usa fallback 15 */
-      }
+      const adminPct = await fetchPlatformFeePctForService('booking');
 
       let gainPct = 0;
       let discountPct = 0;
@@ -525,10 +514,12 @@ export function CheckoutScreen({ navigation, route }: Props) {
         }
 
         // Snapshot alinhado à base total do pedido (por pessoa × passageiros quando aplicável).
+        const bookingAdminPct =
+          pricingPreview?.adminPctApplied ?? (await fetchPlatformFeePctForService('booking'));
         const previewToUse: PricingResult = computeOrderPricing({
           baseCents: finalOrderBaseCents,
           surchargesCents: 0,
-          adminPct: pricingPreview?.adminPctApplied ?? 15,
+          adminPct: bookingAdminPct,
           gainPct: pricingPreview?.gainPctApplied ?? 0,
           discountPct: pricingPreview?.discountPctApplied ?? 0,
         });

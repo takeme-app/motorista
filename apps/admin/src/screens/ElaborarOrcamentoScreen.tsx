@@ -52,6 +52,16 @@ type BudgetItemLine = {
   value_cents: number;
 };
 
+type BudgetPayloadLine = {
+  kind: 'team' | 'basic' | 'additional' | 'recreation';
+  label: string;
+  qty: number;
+  value_cents: number;
+  amount_cents: number;
+  worker_id?: string | null;
+  role?: 'driver' | 'preparer';
+};
+
 function parseBRLInputToCents(text: string): number {
   const digits = text.replace(/\D/g, '');
   if (!digits) return 0;
@@ -60,6 +70,16 @@ function parseBRLInputToCents(text: string): number {
 
 function formatCentsBRL(cents: number): string {
   return formatCurrencyBRL(cents);
+}
+
+function sanitizeBudgetRows(rows: BudgetItemLine[]): BudgetItemLine[] {
+  return rows
+    .map((row) => ({
+      label: row.label.trim(),
+      qty: Math.max(1, Math.floor(Number(row.qty) || 1)),
+      value_cents: Math.max(0, Math.floor(Number(row.value_cents) || 0)),
+    }))
+    .filter((row) => row.label || row.value_cents > 0);
 }
 
 export default function ElaborarOrcamentoScreen() {
@@ -149,6 +169,9 @@ export default function ElaborarOrcamentoScreen() {
           const kind = String(l.kind ?? l.category ?? 'basic');
           if (kind === 'additional' || kind === 'additional_service') additional.push(item);
           else if (kind === 'recreation') recreation.push(item);
+          else if (kind === 'team') {
+            // Equipe é hidratada pelos campos de payout; evita duplicar como item básico.
+          }
           else basic.push(item);
         }
         setBasicItems(basic);
@@ -223,13 +246,49 @@ export default function ElaborarOrcamentoScreen() {
     const team: BudgetTeamLine[] = [];
     if (selectedDriverId) team.push({ worker_id: selectedDriverId, role: 'driver', value_cents: driverValueCents });
     if (selectedPreparerId) team.push({ worker_id: selectedPreparerId, role: 'preparer', value_cents: preparerValueCents });
+    const cleanBasicItems = sanitizeBudgetRows(basicItems);
+    const cleanAdditionalServices = sanitizeBudgetRows(additionalServices);
+    const cleanRecreationItems = sanitizeBudgetRows(recreationItems);
+    const displayLines: BudgetPayloadLine[] = [
+      ...team.map((row) => ({
+        kind: 'team' as const,
+        label: row.role === 'driver' ? 'Motorista' : 'Preparador de excursões',
+        qty: 1,
+        value_cents: Math.max(0, row.value_cents),
+        amount_cents: Math.max(0, row.value_cents),
+        worker_id: row.worker_id,
+        role: row.role,
+      })),
+      ...cleanBasicItems.map((row) => ({
+        kind: 'basic' as const,
+        label: row.label,
+        qty: row.qty,
+        value_cents: row.value_cents,
+        amount_cents: row.qty * row.value_cents,
+      })),
+      ...cleanAdditionalServices.map((row) => ({
+        kind: 'additional' as const,
+        label: row.label,
+        qty: row.qty,
+        value_cents: row.value_cents,
+        amount_cents: row.qty * row.value_cents,
+      })),
+      ...cleanRecreationItems.map((row) => ({
+        kind: 'recreation' as const,
+        label: row.label,
+        qty: row.qty,
+        value_cents: row.value_cents,
+        amount_cents: row.qty * row.value_cents,
+      })),
+    ];
     setSubmitting(true);
     try {
       const res = await submitExcursionBudget(excursionId, {
         team,
-        basic_items: basicItems,
-        additional_services: additionalServices,
-        recreation_items: recreationItems,
+        basic_items: cleanBasicItems,
+        additional_services: cleanAdditionalServices,
+        recreation_items: cleanRecreationItems,
+        display_lines: displayLines,
         total_cents: totalCents,
       }, finalize, {
         driver_id: selectedDriverId || null,
