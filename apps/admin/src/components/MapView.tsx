@@ -80,6 +80,8 @@ export interface MapViewProps {
    * quando o roteiro terminou (mesmo se algum `trip_stops.status` não estiver sincronizado).
    */
   tripCompleted?: boolean;
+  /** Texto opcional no marcador ao vivo (ex.: "5 min") — alinhado ao `DriverEtaMarkerIcon` do app cliente. */
+  liveVehicleEta?: string;
   style?: React.CSSProperties;
 }
 
@@ -90,6 +92,14 @@ const LINE_SOURCE_ID = 'takeme-trip-line';
 const LINE_LAYER_ID = 'takeme-trip-line-layer';
 const LINE_NAV_SOURCE_ID = 'takeme-trip-nav-line';
 const LINE_NAV_LAYER_ID = 'takeme-trip-nav-line-layer';
+const LINE_LIVE_TRAIL_SOURCE_ID = 'takeme-live-trail-source';
+const LINE_LIVE_TRAIL_LAYER_ID = 'takeme-live-trail-layer';
+
+/** Path do ícone carro em `DriverEtaMarkerIcon` (cliente) — viewBox 0 0 40 40. */
+const DRIVER_ETA_CAR_PATH =
+  'M25.7667 14.175C25.6 13.6834 25.1333 13.3334 24.5833 13.3334H15.4167C14.8667 13.3334 14.4083 13.6834 14.2333 14.175L12.5917 18.9C12.5333 19.075 12.5 19.2584 12.5 19.45V25.4167C12.5 26.1084 13.0583 26.6667 13.75 26.6667C14.4417 26.6667 15 26.1084 15 25.4167V25H25V25.4167C25 26.1 25.5583 26.6667 26.25 26.6667C26.9333 26.6667 27.5 26.1084 27.5 25.4167V19.45C27.5 19.2667 27.4667 19.075 27.4083 18.9L25.7667 14.175ZM15.4167 22.5C14.725 22.5 14.1667 21.9417 14.1667 21.25C14.1667 20.5584 14.725 20 15.4167 20C16.1083 20 16.6667 20.5584 16.6667 21.25C16.6667 21.9417 16.1083 22.5 15.4167 22.5ZM24.5833 22.5C23.8917 22.5 23.3333 21.9417 23.3333 21.25C23.3333 20.5584 23.8917 20 24.5833 20C25.275 20 25.8333 20.5584 25.8333 21.25C25.8333 21.9417 25.275 22.5 24.5833 22.5ZM14.1667 18.3334L15.225 15.15C15.3417 14.8167 15.6583 14.5834 16.0167 14.5834H23.9833C24.3417 14.5834 24.6583 14.8167 24.775 15.15L25.8333 18.3334H14.1667Z';
+
+const LIVE_TRAIL_FETCH_DEBOUNCE_MS = 750;
 
 /** Mesma paleta do app motorista (TripDetail / Home / viagem ativa). */
 const MOTORISTA_GOLD = '#C9A227';
@@ -531,6 +541,86 @@ function removeTripNavLineLayer(map: any) {
   } catch { /* ignore */ }
 }
 
+function removeLiveTrailLayer(map: any) {
+  try {
+    if (map.getLayer(LINE_LIVE_TRAIL_LAYER_ID)) map.removeLayer(LINE_LIVE_TRAIL_LAYER_ID);
+    if (map.getSource(LINE_LIVE_TRAIL_SOURCE_ID)) map.removeSource(LINE_LIVE_TRAIL_SOURCE_ID);
+  } catch { /* ignore */ }
+}
+
+/** Trail dourada GPS → próximo alvo (par com `TripInProgressScreen` no cliente). */
+function setLiveTrailLayer(map: any, geometry: { type: 'LineString'; coordinates: number[][] }) {
+  const geojson = {
+    type: 'Feature' as const,
+    properties: {},
+    geometry,
+  };
+  if (map.getSource(LINE_LIVE_TRAIL_SOURCE_ID)) {
+    (map.getSource(LINE_LIVE_TRAIL_SOURCE_ID) as any).setData(geojson);
+  } else {
+    map.addSource(LINE_LIVE_TRAIL_SOURCE_ID, { type: 'geojson', data: geojson });
+    map.addLayer({
+      id: LINE_LIVE_TRAIL_LAYER_ID,
+      type: 'line',
+      source: LINE_LIVE_TRAIL_SOURCE_ID,
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': MOTORISTA_GOLD,
+        'line-width': 4,
+        'line-opacity': 1,
+      },
+    });
+  }
+  bringLiveTrailLayerToFront(map);
+}
+
+function bringLiveTrailLayerToFront(map: any) {
+  if (!map.getLayer(LINE_LIVE_TRAIL_LAYER_ID)) return;
+  try {
+    map.moveLayer(LINE_LIVE_TRAIL_LAYER_ID);
+  } catch { /* ignore */ }
+}
+
+/** Marcador ao vivo alinhado a `DriverEtaMarkerIcon` (cliente); âncora bottom no ponto. */
+function createLiveVehicleMarkerElement(eta?: string | null): HTMLDivElement {
+  const wrap = document.createElement('div');
+  wrap.style.display = 'flex';
+  wrap.style.flexDirection = 'column';
+  wrap.style.alignItems = 'center';
+  wrap.style.pointerEvents = 'none';
+  const etaTrim = eta?.trim();
+  if (etaTrim) {
+    const badge = document.createElement('div');
+    badge.textContent = etaTrim;
+    badge.style.backgroundColor = '#0d0d0d';
+    badge.style.color = '#ffffff';
+    badge.style.fontSize = '11px';
+    badge.style.fontWeight = '700';
+    badge.style.padding = '3px 8px';
+    badge.style.borderRadius = '6px';
+    badge.style.marginBottom = '4px';
+    badge.style.fontFamily = 'Inter, system-ui, sans-serif';
+    wrap.appendChild(badge);
+  }
+  const circle = document.createElement('div');
+  const size = 32;
+  circle.style.width = `${size}px`;
+  circle.style.height = `${size}px`;
+  circle.style.borderRadius = `${size / 2}px`;
+  circle.style.backgroundColor = '#0d0d0d';
+  circle.style.display = 'flex';
+  circle.style.alignItems = 'center';
+  circle.style.justifyContent = 'center';
+  circle.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+  const clipId = `clip_driver_eta_${Math.random().toString(36).slice(2, 11)}`;
+  circle.innerHTML =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 40 40" fill="none" aria-hidden="true">` +
+    `<defs><clipPath id="${clipId}"><rect width="20" height="20" fill="white" x="10" y="10"/></clipPath></defs>` +
+    `<g clip-path="url(#${clipId})"><path d="${DRIVER_ETA_CAR_PATH}" fill="#FFFFFF"/></g></svg>`;
+  wrap.appendChild(circle);
+  return wrap;
+}
+
 /** Trecho escuro motorista → próxima parada pendente (espelha polyline “driver” no ActiveTrip). */
 function setTripNavSegmentLayer(map: any, from: MapCoord, to: MapCoord) {
   const geojson = {
@@ -694,6 +784,7 @@ export default function MapView(props: MapViewProps) {
     followTarget,
     onFollowVehicleInterrupted,
     tripCompleted = false,
+    liveVehicleEta,
     style,
   } = props;
   const followVehicleRef = useRef(followVehicle);
@@ -946,6 +1037,7 @@ export default function MapView(props: MapViewProps) {
               ) {
                 setTripNavSegmentLayer(m, routeOrigin, navTo);
               }
+              bringLiveTrailLayerToFront(m);
             } catch {
               if (cancelled || ac.signal.aborted || !mapRef.current) return;
               try {
@@ -964,6 +1056,7 @@ export default function MapView(props: MapViewProps) {
                 if (navTo && !coordsNearlyEqual(routeOrigin, navTo, COORDS_DEDupe_DEST_EPS)) {
                   setTripNavSegmentLayer(m, routeOrigin, navTo);
                 }
+                bringLiveTrailLayerToFront(m);
               } catch { /* ignore */ }
             }
           } else {
@@ -1172,6 +1265,7 @@ export default function MapView(props: MapViewProps) {
           if (navTo && !coordsNearlyEqual(routeOrigin, navTo, COORDS_DEDupe_DEST_EPS)) {
             setTripNavSegmentLayer(m, routeOrigin, navTo);
           }
+          bringLiveTrailLayerToFront(m);
         } catch { /* ignore */ }
       })();
       return () => { cancelled = true; };
@@ -1236,45 +1330,112 @@ export default function MapView(props: MapViewProps) {
   ]);
 
   useEffect(() => {
+    const map = mapRef.current;
+    if (staticMode || useStatic || !token || !mapStyleReady) {
+      if (map) removeLiveTrailLayer(map);
+      return;
+    }
+
+    if (!currentPosition || !connectPoints || tripCompleted) {
+      if (map) removeLiveTrailLayer(map);
+      return;
+    }
+
+    const navTarget = resolveNextNavTarget(destination, waypoints);
+    if (
+      !navTarget ||
+      !Number.isFinite(navTarget.lat) ||
+      !Number.isFinite(navTarget.lng) ||
+      !Number.isFinite(currentPosition.lat) ||
+      !Number.isFinite(currentPosition.lng)
+    ) {
+      if (map) removeLiveTrailLayer(map);
+      return;
+    }
+
+    if (coordsNearlyEqual(currentPosition, navTarget, COORDS_DEDupe_DEST_EPS)) {
+      if (map) removeLiveTrailLayer(map);
+      return;
+    }
+
+    const ac = new AbortController();
+    const from = { ...currentPosition };
+    const to = { ...navTarget };
+    const t = setTimeout(() => {
+      void (async () => {
+        if (ac.signal.aborted) return;
+        const m = mapRef.current;
+        if (!m || (typeof m.isStyleLoaded === 'function' && !m.isStyleLoaded())) return;
+        try {
+          let line = await fetchDirectionsLineString(from, to, token, directionsProfile, ac.signal);
+          if (ac.signal.aborted || !mapRef.current) return;
+          if (!line && directionsProfile === 'driving-traffic') {
+            line = await fetchDirectionsLineString(from, to, token, 'driving', ac.signal);
+          }
+          if (ac.signal.aborted || !mapRef.current) return;
+          const mapNow = mapRef.current;
+          if (!mapNow || (typeof mapNow.isStyleLoaded === 'function' && !mapNow.isStyleLoaded())) return;
+          if (line && line.coordinates.length >= 2) {
+            setLiveTrailLayer(mapNow, line);
+          } else {
+            setLiveTrailLayer(mapNow, {
+              type: 'LineString',
+              coordinates: [
+                [from.lng, from.lat],
+                [to.lng, to.lat],
+              ],
+            });
+          }
+        } catch {
+          if (ac.signal.aborted || !mapRef.current) return;
+          try {
+            setLiveTrailLayer(mapRef.current, {
+              type: 'LineString',
+              coordinates: [
+                [from.lng, from.lat],
+                [to.lng, to.lat],
+              ],
+            });
+          } catch { /* ignore */ }
+        }
+      })();
+    }, LIVE_TRAIL_FETCH_DEBOUNCE_MS);
+
+    return () => {
+      ac.abort();
+      clearTimeout(t);
+    };
+  }, [
+    staticMode,
+    useStatic,
+    token,
+    mapStyleReady,
+    connectPoints,
+    tripCompleted,
+    directionsProfile,
+    currentPosition?.lat,
+    currentPosition?.lng,
+    destination?.lat,
+    destination?.lng,
+    waypoints,
+  ]);
+
+  useEffect(() => {
     try {
       currentPositionMarkerRef.current?.remove();
       currentPositionMarkerRef.current = null;
     } catch { /* ignore */ }
 
-    if (!mapRef.current || !currentPosition || !mapboxLoaded || !token) return;
+    if (!mapRef.current || !currentPosition || !mapboxLoaded || !mapStyleReady || !token) return;
 
-    const wrap = document.createElement('div');
-    wrap.style.width = '48px';
-    wrap.style.height = '48px';
-    wrap.style.borderRadius = '50%';
-    wrap.style.background = 'rgba(17,24,39,0.15)';
-    wrap.style.display = 'flex';
-    wrap.style.alignItems = 'center';
-    wrap.style.justifyContent = 'center';
-    wrap.style.pointerEvents = 'none';
-
-    const inner = document.createElement('div');
-    inner.style.width = '30px';
-    inner.style.height = '30px';
-    inner.style.borderRadius = '50%';
-    inner.style.background = MOTORISTA_DARK;
-    inner.style.border = '2.5px solid #ffffff';
-    inner.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
-    inner.style.display = 'flex';
-    inner.style.alignItems = 'center';
-    inner.style.justifyContent = 'center';
-    inner.innerHTML =
-      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-      '<path d="M8 5v14l11-7z" fill="#ffffff"/>' +
-      '</svg>';
-    wrap.appendChild(inner);
+    const element = createLiveVehicleMarkerElement(liveVehicleEta);
 
     (async () => {
       try {
         const pack: any = await import('mapbox-gl');
         const mapboxgl = pack.default ?? pack;
         if (!mapRef.current) return;
-        const mk = new (mapboxgl as any).Marker({ element: wrap, anchor: 'center' })
+        const mk = new (mapboxgl as any).Marker({ element, anchor: 'bottom' })
           .setLngLat([currentPosition.lng, currentPosition.lat])
           .addTo(mapRef.current);
         currentPositionMarkerRef.current = mk;
@@ -1287,7 +1448,7 @@ export default function MapView(props: MapViewProps) {
         currentPositionMarkerRef.current = null;
       } catch { /* ignore */ }
     };
-  }, [currentPosition?.lat, currentPosition?.lng, mapboxLoaded, token]);
+  }, [currentPosition?.lat, currentPosition?.lng, mapboxLoaded, mapStyleReady, token, liveVehicleEta]);
 
   const noCoords = !origin && !destination;
   if (noCoords) {
