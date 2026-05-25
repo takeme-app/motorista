@@ -6,6 +6,8 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
+  Clipboard,
+  Linking,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -14,6 +16,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
+import { PaymentMethodSection, type CardPaymentConfirmParams, type PaymentMethodType } from '../../components/PaymentMethodSection';
+import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
+import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ExcursionBudget'>;
 
@@ -33,16 +38,34 @@ type ExcursionBudgetDetail = {
   excursion_date: string;
   people_count: number;
   total_amount_cents: number | null;
-  budget_lines: BudgetLine[] | null;
+  budget_lines: unknown;
   payment_method: string | null;
+  status?: string | null;
 };
 
-const PAYMENT_OPTIONS: { value: string; label: string }[] = [
-  { value: 'credit_card', label: 'Cartão de crédito' },
-  { value: 'debit_card', label: 'Cartão de débito' },
-  { value: 'pix', label: 'Pix' },
-  { value: 'cash', label: 'Dinheiro' },
-];
+type PixPaymentInfo = {
+  paymentIntentId: string | null;
+  hostedVoucherUrl: string | null;
+  pixCopyPaste: string | null;
+};
+
+function normalizeBudgetLines(raw: unknown): BudgetLine[] {
+  if (Array.isArray(raw)) {
+    return raw.map((line) => {
+      const row = (line ?? {}) as Record<string, unknown>;
+      const qty = Number(row.qty ?? row.quantity ?? 1) || 1;
+      const unit = Number(row.value_cents ?? 0) || 0;
+      return {
+        label: String(row.label ?? row.name ?? 'Item'),
+        amount_cents: Number(row.amount_cents ?? qty * unit) || 0,
+      };
+    });
+  }
+  if (!raw || typeof raw !== 'object') return [];
+  const obj = raw as Record<string, unknown>;
+  if (Array.isArray(obj.display_lines)) return normalizeBudgetLines(obj.display_lines);
+  return [];
+}
 
 function formatDate(iso: string): string {
   const d = new Date(iso + 'T12:00:00');
@@ -60,6 +83,8 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
   const [detail, setDetail] = useState<ExcursionBudgetDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingPayment, setSavingPayment] = useState(false);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('pix');
+  const [pixPaymentInfo, setPixPaymentInfo] = useState<PixPaymentInfo | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,7 +96,7 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
       }
       const { data, error } = await supabase
         .from('excursion_requests')
-        .select('id, destination, excursion_date, people_count, total_amount_cents, budget_lines, payment_method')
+        .select('id, destination, excursion_date, people_count, total_amount_cents, budget_lines, payment_method, status')
         .eq('id', excursionRequestId)
         .eq('user_id', user.id)
         .single();
@@ -81,6 +106,10 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
         return;
       }
       setDetail(data as ExcursionBudgetDetail);
+      const savedMethod = (data as ExcursionBudgetDetail).payment_method;
+      if (savedMethod === 'credit_card') setSelectedPaymentMethod('credito');
+      else if (savedMethod === 'debit_card') setSelectedPaymentMethod('debito');
+      else if (savedMethod === 'pix') setSelectedPaymentMethod('pix');
       setLoading(false);
     })();
     return () => { cancelled = true; };
@@ -101,9 +130,76 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
     setDetail((prev) => prev ? { ...prev, payment_method: method } : null);
   };
 
+  const handleConfirmPayment = async (params: CardPaymentConfirmParams) => {
+    if (!detail || savingPayment) return;
+    const total = detail.total_amount_cents ?? 0;
+    if (total < 1) {
+      Alert.alert('Orçamento', 'Este orçamento ainda não tem valor para pagamento.');
+      return;
+    }
+    const payment_method =
+      params.method === 'credito'
+        ? 'credit_card'
+        : params.method === 'debito'
+          ? 'debit_card'
+          : params.method === 'pix'
+            ? 'pix'
+            : null;
+    if (!payment_method) {
+      Alert.alert('Pagamento', 'Este orçamento só aceita Pix ou cartão pelo app.');
+      return;
+    }
+
+    setSavingPayment(true);
+    setPixPaymentInfo(null);
+    try {
+      const tokenRes = await ensureAccessTokenForStripeFunctions({
+        holderCpfDigits: params.holderCpfDigits,
+      });
+      if (!tokenRes.ok) {
+        Alert.alert('Pagamento', tokenRes.message);
+        return;
+      }
+      const body: Record<string, unknown> = {
+        excursion_request_id: detail.id,
+        payment_method,
+      };
+      if (params.savedPaymentMethodId) body.payment_method_id = params.savedPaymentMethodId.trim();
+      if (params.paymentMethodId) body.stripe_payment_method_id = params.paymentMethodId.trim();
+      const { data, error } = await supabase.functions.invoke('charge-excursion-request', {
+        headers: { Authorization: `Bearer ${tokenRes.accessToken}` },
+        body,
+      });
+      const payload = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+      const edgeError =
+        error || (typeof payload.error === 'string' && payload.error.trim() ? { message: payload.error.trim() } : null);
+      if (edgeError) {
+        const message = await describeInvokeFailure(data, edgeError);
+        Alert.alert('Pagamento', message || 'Não foi possível iniciar o pagamento.');
+        return;
+      }
+      if (payload.pix_requires_payment === true) {
+        setPixPaymentInfo({
+          paymentIntentId: typeof payload.payment_intent_id === 'string' ? payload.payment_intent_id : null,
+          hostedVoucherUrl: typeof payload.hosted_voucher_url === 'string' ? payload.hosted_voucher_url : null,
+          pixCopyPaste: typeof payload.pix_copy_paste === 'string' ? payload.pix_copy_paste : null,
+        });
+        setDetail((prev) => prev ? { ...prev, payment_method } : prev);
+        Alert.alert('Pix gerado', 'Use o código Pix para concluir o pagamento no app do seu banco.');
+        return;
+      }
+      setDetail((prev) => prev ? { ...prev, payment_method, status: 'approved' } : prev);
+      Alert.alert('Pagamento', 'Pagamento aprovado. Sua excursão será confirmada em instantes.', [
+        { text: 'OK', onPress: () => navigation.goBack() },
+      ]);
+    } finally {
+      setSavingPayment(false);
+    }
+  };
+
   const handleDownloadBudget = () => {
     if (!detail) return;
-    const lines = (detail.budget_lines ?? []);
+    const lines = normalizeBudgetLines(detail.budget_lines);
     const total = detail.total_amount_cents ?? 0;
     const text = [
       'Resumo da excursão',
@@ -157,7 +253,7 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
     );
   }
 
-  const lines = (detail.budget_lines ?? []) as BudgetLine[];
+  const lines = normalizeBudgetLines(detail.budget_lines);
   const total = detail.total_amount_cents ?? 0;
   const hasBudget = lines.length > 0;
 
@@ -219,22 +315,68 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
           </View>
         )}
 
-        <Text style={styles.sectionTitle}>Método de pagamento</Text>
-        {PAYMENT_OPTIONS.map((opt) => (
-          <TouchableOpacity
-            key={opt.value}
-            style={styles.paymentRow}
-            onPress={() => handlePaymentSelect(opt.value)}
-            disabled={savingPayment}
-          >
-            <Text style={styles.paymentLabel}>{opt.label}</Text>
-            {detail.payment_method === opt.value ? (
-              <MaterialIcons name="radio-button-checked" size={24} color={COLORS.black} />
-            ) : (
-              <MaterialIcons name="radio-button-unchecked" size={24} color={COLORS.neutral700} />
-            )}
-          </TouchableOpacity>
-        ))}
+        {detail.status && detail.status !== 'quoted' ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Status do orçamento</Text>
+            <Text style={styles.mutedText}>
+              {detail.status === 'approved'
+                ? 'Pagamento aprovado. A equipe já pode preparar a operação.'
+                : 'Este orçamento não está disponível para pagamento no momento.'}
+            </Text>
+          </View>
+        ) : null}
+
+        {pixPaymentInfo ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Pix gerado</Text>
+            {pixPaymentInfo.pixCopyPaste ? (
+              <TouchableOpacity
+                style={styles.downloadButton}
+                onPress={() => {
+                  Clipboard.setString(pixPaymentInfo.pixCopyPaste ?? '');
+                  Alert.alert('Pix', 'Código copiado.');
+                }}
+              >
+                <MaterialIcons name="content-copy" size={20} color={COLORS.black} />
+                <Text style={styles.downloadButtonText}>Copiar código Pix</Text>
+              </TouchableOpacity>
+            ) : null}
+            {pixPaymentInfo.hostedVoucherUrl ? (
+              <TouchableOpacity
+                style={styles.downloadButton}
+                onPress={() => Linking.openURL(pixPaymentInfo.hostedVoucherUrl ?? '')}
+              >
+                <MaterialIcons name="open-in-new" size={20} color={COLORS.black} />
+                <Text style={styles.downloadButtonText}>Abrir comprovante Pix</Text>
+              </TouchableOpacity>
+            ) : null}
+            {pixPaymentInfo.paymentIntentId ? (
+              <Text style={styles.mutedText}>Pagamento: {pixPaymentInfo.paymentIntentId}</Text>
+            ) : null}
+          </View>
+        ) : null}
+
+        {detail.status === 'quoted' ? (
+          <PaymentMethodSection
+            amountCents={total}
+            selectedMethod={selectedPaymentMethod}
+            onSelectMethod={(method) => {
+              setSelectedPaymentMethod(method);
+              void handlePaymentSelect(
+                method === 'credito'
+                  ? 'credit_card'
+                  : method === 'debito'
+                    ? 'debit_card'
+                    : method,
+              );
+            }}
+            onConfirmPayment={handleConfirmPayment}
+            confirmLabel="Pagar orçamento"
+            cancellationPolicyVariant="trip"
+            loading={savingPayment}
+            allowedMethods={['credito', 'debito', 'pix']}
+          />
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );

@@ -52,6 +52,10 @@ function fmtMotoristaHistWhen(iso: string | null | undefined): string {
   return `${day}, ${time}`;
 }
 
+function fmtPlatformBRL(cents: number): string {
+  return `R$ ${(cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 // Campo estilo Figma textFieldLightMode (label 14 medium #0d0d0d, valor 16 regular #3a3a3a)
 const roField = (label: string, value: string) =>
   React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, flex: '1 1 0', minWidth: 200 } },
@@ -645,6 +649,36 @@ export default function MotoristaEditScreen() {
     return rows.slice(0, 40);
   }, [worker, profile, routes, vehicles, reviewerName]);
 
+  const handleConfirmSettle = useCallback(async () => {
+    if (!id) return;
+    setSettleErr(null);
+    const cents = parseBRLInputToCents(settleInput);
+    if (cents == null) {
+      setSettleErr('Informe um valor válido em reais.');
+      return;
+    }
+    const owed = Math.max(0, Math.round(Number((worker as any)?.platform_fee_owed_cents ?? 0)));
+    if (cents > owed) {
+      setSettleErr(`Máximo: ${fmtPlatformBRL(owed)}`);
+      return;
+    }
+    setSettleBusy(true);
+    try {
+      const res = await adminManualSettlePlatformFee(id, cents);
+      if (!res.ok) {
+        setSettleErr(res.error ?? 'Falha ao quitar.');
+        return;
+      }
+      setWorker((prev: any) => (prev ? { ...prev, platform_fee_owed_cents: res.owedAfter ?? 0 } : prev));
+      setSettleOpen(false);
+      setSettleInput('');
+      setPfToast(`Quitado ${fmtPlatformBRL(res.settledCents ?? 0)}. Saldo: ${fmtPlatformBRL(res.owedAfter ?? 0)}.`);
+      await loadPlatformFeeLedger();
+    } finally {
+      setSettleBusy(false);
+    }
+  }, [id, worker, settleInput, loadPlatformFeeLedger]);
+
   if (loading) {
     return React.createElement('div', { style: { display: 'flex', justifyContent: 'center', padding: 64 } },
       React.createElement('span', { style: { fontSize: 16, color: '#767676', ...font } }, 'Carregando motorista...'));
@@ -904,38 +938,6 @@ export default function MotoristaEditScreen() {
     stripeConnectSection);
 
   const platformFeeOwed = Math.max(0, Math.round(Number((worker as any)?.platform_fee_owed_cents ?? 0)));
-  const fmtPlatformBRL = (cents: number) =>
-    `R$ ${(cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-  const handleConfirmSettle = useCallback(async () => {
-    if (!id) return;
-    setSettleErr(null);
-    const cents = parseBRLInputToCents(settleInput);
-    if (cents == null) {
-      setSettleErr('Informe um valor válido em reais.');
-      return;
-    }
-    const owed = Math.max(0, Math.round(Number((worker as any)?.platform_fee_owed_cents ?? 0)));
-    if (cents > owed) {
-      setSettleErr(`Máximo: ${fmtPlatformBRL(owed)}`);
-      return;
-    }
-    setSettleBusy(true);
-    try {
-      const res = await adminManualSettlePlatformFee(id, cents);
-      if (!res.ok) {
-        setSettleErr(res.error ?? 'Falha ao quitar.');
-        return;
-      }
-      setWorker((prev: any) => (prev ? { ...prev, platform_fee_owed_cents: res.owedAfter ?? 0 } : prev));
-      setSettleOpen(false);
-      setSettleInput('');
-      setPfToast(`Quitado ${fmtPlatformBRL(res.settledCents ?? 0)}. Saldo: ${fmtPlatformBRL(res.owedAfter ?? 0)}.`);
-      await loadPlatformFeeLedger();
-    } finally {
-      setSettleBusy(false);
-    }
-  }, [id, worker, settleInput, loadPlatformFeeLedger]);
 
   const platformFeeSection = id
     ? React.createElement('div', {

@@ -3,6 +3,7 @@ import { getUserErrorMessage } from '../utils/errorMessage';
 import { computeOrderPricing, PricingDenominatorOverflowError } from '@take-me/shared';
 import { parseTimeSlotRange, toISODateFromUtcIso, toISODate } from './dateTimeSlots';
 import type { WhenTimeResult } from '../hooks/useWhenTimeSelection';
+import { fetchPlatformFeePctForService } from './platformFees';
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
@@ -218,21 +219,6 @@ type PromoBatchRow = {
   promotion_id?: string | null;
 };
 
-async function readDefaultAdminPct(): Promise<number> {
-  const sb = supabase as { from: (table: string) => any };
-  const { data } = await sb
-    .from('platform_settings')
-    .select('value')
-    .eq('key', 'default_admin_pct')
-    .maybeSingle();
-  const raw = data?.value;
-  if (raw && typeof raw === 'object') {
-    const pct = Number((raw as { percentage?: unknown; value?: unknown }).percentage ?? (raw as { value?: unknown }).value);
-    if (Number.isFinite(pct) && pct >= 0) return pct;
-  }
-  return 15;
-}
-
 /**
  * Ajusta os `amount_cents` exibidos na lista aplicando o gross-up canônico
  * (admin_pct + ganho_motorista − desconto_passageiro) com a promoção ativa que
@@ -432,7 +418,7 @@ export async function loadClientScheduledTrips(opts?: LoadClientScheduledTripsOp
     } = await supabase.auth.getUser();
     if (user?.id) {
       try {
-        const adminPct = await readDefaultAdminPct();
+        const adminPct = await fetchPlatformFeePctForService('booking');
         const workerRouteByTripId = new Map<string, string | null>();
         for (const t of trips) {
           workerRouteByTripId.set(t.id, (t.route_id as string | null) ?? null);

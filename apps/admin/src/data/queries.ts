@@ -160,6 +160,33 @@ export async function submitExcursionBudget(
   return invokeEdgeFunction('manage-excursion-budget', 'POST', undefined, body);
 }
 
+function normalizeExcursionBudgetLines(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  if (!raw || typeof raw !== 'object') return [];
+  const obj = raw as Record<string, unknown>;
+  if (Array.isArray(obj.display_lines)) return obj.display_lines;
+
+  const out: unknown[] = [];
+  const appendRows = (kind: string, rows: unknown) => {
+    if (!Array.isArray(rows)) return;
+    rows.forEach((row) => {
+      if (!row || typeof row !== 'object') return;
+      const r = row as Record<string, unknown>;
+      out.push({
+        kind,
+        label: String(r.label ?? r.name ?? r.item ?? 'Item'),
+        qty: Number(r.qty ?? r.quantity ?? 1) || 1,
+        value_cents: Number(r.value_cents ?? r.amount_cents ?? 0) || 0,
+      });
+    });
+  };
+  appendRows('team', obj.team);
+  appendRows('basic', obj.basic_items);
+  appendRows('additional', obj.additional_services);
+  appendRows('recreation', obj.recreation_items);
+  return out;
+}
+
 export async function runChargeExcursionRequest(
   excursionId: string,
   method: 'pix' | 'card',
@@ -2303,7 +2330,7 @@ export async function fetchPreparadorEditDetail(id: string): Promise<PreparadorE
     totalAmountCents: row.total_amount_cents ?? null,
     preparerId: row.preparer_id ?? null,
     vehicleDetails: asRecord(row.vehicle_details),
-    budgetLines: Array.isArray(row.budget_lines) ? row.budget_lines : [],
+    budgetLines: normalizeExcursionBudgetLines(row.budget_lines),
     assignmentNotes: asRecord(row.assignment_notes),
     clientNome: cp?.full_name ?? null,
     clientCity: cp?.city ?? null,
@@ -2357,8 +2384,9 @@ export async function fetchPreparadorCandidates(): Promise<PreparadorCandidate[]
   const { data, error } = await sb
     .from('worker_profiles')
     .select('id, subtype, profiles ( full_name, avatar_url, rating )')
-    .in('subtype', ['excursions', 'shipments'])
-    .neq('status', 'inactive')
+    .eq('role', 'preparer')
+    .eq('subtype', 'excursions')
+    .eq('status', 'approved')
     .order('created_at', { ascending: false })
     .limit(40);
 

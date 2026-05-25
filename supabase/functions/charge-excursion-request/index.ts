@@ -53,7 +53,7 @@ type ExcursionRow = {
  *
  * Diferenças de charge-shipments:
  * - Tabela public.excursion_requests, valor em total_amount_cents.
- * - Status permitido: 'quoted' ou 'approved' (fluxo: quoted -> pagamento -> approved).
+ * - Status permitido: 'quoted' (fluxo: quoted -> pagamento/webhook -> approved).
  * - payment_method da tabela usa snake_case inglês: credit_card/debit_card/pix/cash.
  *
  * Sem transfer_data: charge vai 100% para a plataforma. O split (driver + preparer)
@@ -146,12 +146,20 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Só permite cobrança após orçamento disponibilizado (quoted/approved).
-    if (!["quoted", "approved"].includes(s.status)) {
+    // Só permite cobrança após orçamento disponibilizado. `approved` já significa pago.
+    if (s.status !== "quoted") {
       return new Response(
         JSON.stringify({
-          error: `Status atual (${s.status}) não permite cobrança; aguarde orçamento`,
+          error: s.status === "approved"
+            ? "Este orçamento já foi aprovado/pago."
+            : `Status atual (${s.status}) não permite cobrança; aguarde orçamento`,
         }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+    if (s.stripe_payment_intent_id) {
+      return new Response(
+        JSON.stringify({ error: "Este orçamento já possui pagamento registrado." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
@@ -236,22 +244,8 @@ Deno.serve(async (req) => {
       };
 
       if (piPix.status === "succeeded" || piPix.status === "requires_capture") {
-        const { error: updateErrPix } = await admin
-          .from("excursion_requests")
-          .update({ stripe_payment_intent_id: piPix.id ?? null } as never)
-          .eq("id", excursionId)
-          .eq("user_id", userId);
-        if (updateErrPix) {
-          console.error("charge-excursion-request: update after Pix PI succeeded", updateErrPix);
-          return new Response(
-            JSON.stringify({
-              error: "Pagamento aprovado mas falha ao gravar orçamento; contate o suporte",
-            }),
-            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-          );
-        }
         return new Response(
-          JSON.stringify({ ok: true, excursion_request_id: excursionId }),
+          JSON.stringify({ ok: true, excursion_request_id: excursionId, payment_intent_id: piPix.id ?? null }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
@@ -341,33 +335,8 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { error: updateErr } = await admin
-      .from("excursion_requests")
-      .update({ stripe_payment_intent_id: pi.id ?? null } as never)
-      .eq("id", excursionId)
-      .eq("user_id", userId);
-
-    if (updateErr) {
-      console.error(
-        "[charge-excursion-request] update after PI succeeded:",
-        JSON.stringify({
-          message: updateErr.message,
-          details: updateErr.details,
-          hint: updateErr.hint,
-          code: updateErr.code,
-        }),
-      );
-      const detail = updateErr.message?.trim() || "sem detalhe";
-      return new Response(
-        JSON.stringify({
-          error: `Pagamento aprovado mas falha ao gravar orçamento; contate o suporte. (detalhe: ${detail})`,
-        }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
     return new Response(
-      JSON.stringify({ ok: true, excursion_request_id: excursionId }),
+      JSON.stringify({ ok: true, excursion_request_id: excursionId, payment_intent_id: pi.id ?? null }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (err) {

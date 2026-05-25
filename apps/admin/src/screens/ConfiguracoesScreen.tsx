@@ -9,8 +9,29 @@ import { fetchAdminUsers, createAdminUser, deleteAdminUser, invokeEdgeFunction }
 import type { AdminUserListItem } from '../data/types';
 import { usePlatformSettings } from '../hooks/usePlatformSettings';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import {
+  formatBRLCents,
+  formatPercent,
+  MAX_GLOBAL_PLATFORM_FEE_PCT,
+  normalizeServiceFeeInputs,
+  parsePercentInput,
+  PLATFORM_FEE_SERVICE_LABELS,
+  PLATFORM_FEE_SIMULATION_BASE_CENTS,
+  serviceFeeInputsToPayload,
+  simulateGlobalPlatformFee,
+  validateGlobalPlatformFeePct,
+} from '../utils/platformFeeSimulation';
+import type { PlatformFeeServiceType } from '@take-me/shared';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
+
+const defaultServiceFeeInputs: Record<PlatformFeeServiceType, string> = {
+  booking: '15',
+  dependent_shipment: '15',
+  shipment_driver: '15',
+  shipment_preparer: '15',
+  excursion: '15',
+};
 
 const editPencilWhiteSvg = React.createElement('svg', { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7', stroke: '#fff', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
@@ -295,6 +316,10 @@ export default function ConfiguracoesScreen() {
   const [gasPrice, setGasPrice] = useState('');
   const [kmPrice, setKmPrice] = useState('');
   const [baseDeliveryPrice, setBaseDeliveryPrice] = useState('');
+  const [globalAdminPct, setGlobalAdminPct] = useState('');
+  const [globalAdminPctError, setGlobalAdminPctError] = useState<string | null>(null);
+  const [serviceFeeInputs, setServiceFeeInputs] = useState<Record<PlatformFeeServiceType, string>>(defaultServiceFeeInputs);
+  const [serviceFeeError, setServiceFeeError] = useState<string | null>(null);
   const [cancelFreeWindowHours, setCancelFreeWindowHours] = useState('');
   const [driverPenaltyPct, setDriverPenaltyPct] = useState('');
   const [driverPenaltyEnabled, setDriverPenaltyEnabled] = useState(true);
@@ -307,6 +332,15 @@ export default function ConfiguracoesScreen() {
       setBaseDeliveryPrice(
         String((platSettings.shipment_base_delivery_fee_cents ?? 500) / 100),
       );
+      setGlobalAdminPct(String(platSettings.default_admin_pct ?? 15));
+      setGlobalAdminPctError(null);
+      setServiceFeeInputs(
+        normalizeServiceFeeInputs(
+          platSettings.platform_fee_pct_by_service,
+          Number(platSettings.default_admin_pct ?? 15),
+        ),
+      );
+      setServiceFeeError(null);
       setCancelFreeWindowHours(
         String(platSettings.booking_cancellation_free_window_hours ?? 2),
       );
@@ -321,9 +355,40 @@ export default function ConfiguracoesScreen() {
     const gasCents = Math.round(parseFloat(gasPrice || '0') * 100);
     const kmCents = Math.round(parseFloat(kmPrice || '0') * 100);
     const baseDeliveryCents = Math.round(parseFloat(baseDeliveryPrice || '0') * 100);
+    const parsedAdminPct = parsePercentInput(globalAdminPct);
+    const adminPctValidation = validateGlobalPlatformFeePct(parsedAdminPct);
+    if (adminPctValidation) {
+      setGlobalAdminPctError(adminPctValidation);
+      return;
+    }
+    const servicePayload = serviceFeeInputsToPayload(serviceFeeInputs);
+    if (servicePayload.error || !servicePayload.value) {
+      setServiceFeeError(servicePayload.error ?? 'Revise as taxas por serviço.');
+      return;
+    }
+    const normalizedAdminPct = Math.round((parsedAdminPct ?? 0) * 100) / 100;
+    const currentAdminPct = Number(platSettings.default_admin_pct ?? 15);
+    const currentServicePayload = serviceFeeInputsToPayload(
+      normalizeServiceFeeInputs(platSettings.platform_fee_pct_by_service, currentAdminPct),
+    );
+    const hasServicePctChange =
+      currentServicePayload.value != null &&
+      JSON.stringify(servicePayload.value) !== JSON.stringify(currentServicePayload.value);
+    if (
+      Number.isFinite(currentAdminPct) &&
+      (normalizedAdminPct !== currentAdminPct || hasServicePctChange) &&
+      !window.confirm(
+        `Salvar taxas da plataforma?\n\nGlobal: ${formatPercent(currentAdminPct)} -> ${formatPercent(normalizedAdminPct)}.\n` +
+          'A mudança vale somente para novos pedidos/cotações. Pedidos já criados continuam com o snapshot financeiro original.',
+      )
+    ) {
+      return;
+    }
     const cancelHours = Math.max(0, parseFloat(cancelFreeWindowHours || '0'));
     const penaltyPct = Math.max(0, parseFloat(driverPenaltyPct || '0'));
     await Promise.all([
+      updateSetting('default_admin_pct', normalizedAdminPct),
+      updateSetting('platform_fee_pct_by_service', servicePayload.value),
       updateSetting('gas_price_cents', gasCents),
       updateSetting('km_price_cents', kmCents),
       updateSetting('shipment_base_delivery_fee_cents', baseDeliveryCents),
@@ -331,15 +396,20 @@ export default function ConfiguracoesScreen() {
       updateSetting('driver_cancellation_penalty_pct', penaltyPct),
       updateSetting('driver_cancellation_penalty_enabled', driverPenaltyEnabled),
     ]);
+    setServiceFeeError(null);
     setPlatSaved(true);
     setTimeout(() => setPlatSaved(false), 2000);
   }, [
     gasPrice,
     kmPrice,
     baseDeliveryPrice,
+    globalAdminPct,
+    serviceFeeInputs,
     cancelFreeWindowHours,
     driverPenaltyPct,
     driverPenaltyEnabled,
+    platSettings.default_admin_pct,
+    platSettings.platform_fee_pct_by_service,
     updateSetting,
   ]);
 
@@ -423,10 +493,182 @@ export default function ConfiguracoesScreen() {
         : null,
     );
 
+  const parsedGlobalAdminPct = parsePercentInput(globalAdminPct);
+  const globalAdminPctValidation = validateGlobalPlatformFeePct(parsedGlobalAdminPct);
+  const globalAdminSimulation =
+    globalAdminPctValidation == null && parsedGlobalAdminPct != null
+      ? simulateGlobalPlatformFee(parsedGlobalAdminPct)
+      : null;
+  const simulationResult = globalAdminSimulation?.ok ? globalAdminSimulation.result : null;
+  const simulationError = globalAdminSimulation && !globalAdminSimulation.ok ? globalAdminSimulation.error : null;
+  const feeInfoLine = (label: string, value: string, helper?: string) =>
+    React.createElement('div', {
+      style: {
+        flex: '1 1 160px',
+        minWidth: 150,
+        background: '#fff',
+        border: '1px solid #e2e2e2',
+        borderRadius: 12,
+        padding: '12px 14px',
+        boxSizing: 'border-box' as const,
+      },
+    },
+      React.createElement('p', { style: { margin: 0, fontSize: 12, color: '#767676', ...font } }, label),
+      React.createElement('p', { style: { margin: '4px 0 0', fontSize: 18, fontWeight: 700, color: '#0d0d0d', ...font } }, value),
+      helper ? React.createElement('p', { style: { margin: '4px 0 0', fontSize: 11, color: '#767676', lineHeight: 1.4, ...font } }, helper) : null);
+
+  const serviceFeeRows = PLATFORM_FEE_SERVICE_LABELS.map((service) => {
+    const inputValue = serviceFeeInputs[service.type] ?? '';
+    const parsed = parsePercentInput(inputValue);
+    const validation = validateGlobalPlatformFeePct(parsed);
+    const simulation =
+      validation == null && parsed != null
+        ? simulateGlobalPlatformFee(parsed)
+        : null;
+    const result = simulation?.ok ? simulation.result : null;
+    const error = simulation && !simulation.ok ? simulation.error : validation;
+    return React.createElement('div', {
+      key: service.type,
+      style: {
+        background: '#fff',
+        border: '1px solid #e2e2e2',
+        borderRadius: 12,
+        padding: 14,
+        display: 'flex',
+        flexDirection: 'column' as const,
+        gap: 10,
+        flex: '1 1 240px',
+        minWidth: 220,
+      },
+    },
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' } },
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 3, flex: 1 } },
+          React.createElement('p', { style: { margin: 0, fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, service.label),
+          React.createElement('p', { style: { margin: 0, fontSize: 11, color: '#767676', lineHeight: 1.4, ...font } }, service.description)),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+          React.createElement('input', {
+            type: 'number',
+            step: '0.1',
+            min: '0',
+            max: String(MAX_GLOBAL_PLATFORM_FEE_PCT),
+            value: inputValue,
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+              setServiceFeeInputs((prev) => ({ ...prev, [service.type]: e.target.value }));
+              setServiceFeeError(null);
+            },
+            style: {
+              height: 38,
+              width: 84,
+              borderRadius: 8,
+              border: `1px solid ${error ? '#b53838' : '#d9d9d9'}`,
+              padding: '0 10px',
+              fontSize: 14,
+              color: '#0d0d0d',
+              outline: 'none',
+              background: '#fff',
+              ...font,
+            },
+          }),
+          React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, '%'))),
+      React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
+        feeInfoLine('Cliente paga', result ? formatBRLCents(result.totalCents) : '—'),
+        feeInfoLine('Plataforma', result ? formatBRLCents(result.adminEarningCents) : '—')),
+      error ? React.createElement('p', { style: { margin: 0, color: '#b53838', fontSize: 11, ...font } }, error) : null);
+  });
+
+  const globalPlatformFeeCard = React.createElement('div', {
+    style: {
+      background: '#f6f6f6',
+      border: '1px solid #e2e2e2',
+      borderRadius: 16,
+      padding: 20,
+      display: 'flex',
+      flexDirection: 'column' as const,
+      gap: 16,
+      width: '100%',
+      boxSizing: 'border-box' as const,
+    },
+  },
+    React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' as const } },
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, flex: '1 1 280px' } },
+        React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Taxas da plataforma'),
+        React.createElement('p', { style: { fontSize: 13, color: '#555', lineHeight: 1.5, margin: 0, ...font } },
+          'Configure a taxa global de fallback e percentuais específicos por serviço. Não altera pedidos já criados.')),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 150 } },
+        React.createElement('input', {
+          type: 'number',
+          step: '0.1',
+          min: '0',
+          max: String(MAX_GLOBAL_PLATFORM_FEE_PCT),
+          value: globalAdminPct,
+          placeholder: '15',
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+            setGlobalAdminPct(e.target.value);
+            setGlobalAdminPctError(null);
+          },
+          style: {
+            height: 44,
+            width: 110,
+            borderRadius: 8,
+            border: `1px solid ${globalAdminPctError || globalAdminPctValidation ? '#b53838' : '#d9d9d9'}`,
+            padding: '0 14px',
+            fontSize: 16,
+            color: '#0d0d0d',
+            outline: 'none',
+            background: '#fff',
+            ...font,
+          },
+        }),
+        React.createElement('span', { style: { fontSize: 16, color: '#767676', ...font } }, '%'))),
+    globalAdminPctError || globalAdminPctValidation
+      ? React.createElement('p', { style: { margin: 0, color: '#b53838', fontSize: 12, ...font } }, globalAdminPctError ?? globalAdminPctValidation)
+      : React.createElement('p', { style: { margin: 0, color: '#767676', fontSize: 12, ...font } },
+          `Limite operacional nesta tela: 0% a ${MAX_GLOBAL_PLATFORM_FEE_PCT}%.`),
+    React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap' as const } },
+      feeInfoLine('Base simulada', formatBRLCents(PLATFORM_FEE_SIMULATION_BASE_CENTS)),
+      feeInfoLine(
+        'Cliente paga',
+        simulationResult ? formatBRLCents(simulationResult.totalCents) : '—',
+        'Valor total do PaymentIntent.',
+      ),
+      feeInfoLine(
+        'Worker recebe',
+        simulationResult ? formatBRLCents(simulationResult.workerEarningCents) : '—',
+        'Motorista/preparador conforme snapshot.',
+      ),
+      feeInfoLine(
+        'Plataforma retém',
+        simulationResult ? formatBRLCents(simulationResult.adminEarningCents) : '—',
+        'application_fee_amount quando houver Connect.',
+      )),
+    simulationError
+      ? React.createElement('p', { style: { margin: 0, fontSize: 12, color: '#b53838', ...font } }, simulationError)
+      : null,
+    React.createElement('div', { style: { height: 1, width: '100%', background: '#e2e2e2' } }),
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6 } },
+      React.createElement('h4', { style: { margin: 0, fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Taxas por serviço'),
+      React.createElement('p', { style: { margin: 0, fontSize: 12, color: '#555', lineHeight: 1.5, ...font } },
+        'Cada percentual usa a mesma fórmula de gross-up. Se uma chave faltar ou vier inválida, os checkouts usam a taxa global como fallback.')),
+    serviceFeeError
+      ? React.createElement('p', { style: { margin: 0, color: '#b53838', fontSize: 12, ...font } }, serviceFeeError)
+      : null,
+    React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap' as const } }, ...serviceFeeRows),
+    React.createElement('div', {
+      style: {
+        background: '#fff8e6',
+        border: '1px solid #cba04b',
+        borderRadius: 8,
+        padding: '10px 12px',
+      },
+    },
+      React.createElement('p', { style: { margin: 0, fontSize: 12, color: '#5f4510', lineHeight: 1.5, ...font } },
+        'Mudanças de taxa passam a valer apenas para novos pedidos e cotações. Snapshots financeiros e payouts existentes permanecem como estão.')));
+
   const plataformaContent = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%', maxWidth: 600 },
   },
     React.createElement('h2', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Configurações da Plataforma'),
+    globalPlatformFeeCard,
     React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
       platInput('Preço da gasolina (litro)', gasPrice, setGasPrice, '5.99'),
       platInput(

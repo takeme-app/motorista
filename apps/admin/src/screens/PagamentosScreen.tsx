@@ -137,6 +137,56 @@ type PagAppliedFiltro = {
   dataFim?: string;
 };
 
+type PayoutAuditSummary = {
+  orphanCount: number;
+  orphanSamples: string[];
+};
+
+type PayoutAuditRow = {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+};
+
+const payoutEntityTableByType: Record<string, string> = {
+  booking: 'bookings',
+  shipment: 'shipments',
+  dependent_shipment: 'dependent_shipments',
+  excursion: 'excursion_requests',
+};
+
+async function fetchPayoutAuditSummary(): Promise<PayoutAuditSummary> {
+  if (!isSupabaseConfigured) return { orphanCount: 0, orphanSamples: [] };
+  const { data, error } = await (supabase as any)
+    .from('payouts')
+    .select('id, entity_type, entity_id')
+    .in('entity_type', Object.keys(payoutEntityTableByType))
+    .limit(500);
+  if (error || !data) return { orphanCount: 0, orphanSamples: [] };
+
+  const rows = data as PayoutAuditRow[];
+  const existingIds = new Set<string>();
+  for (const [entityType, table] of Object.entries(payoutEntityTableByType)) {
+    const ids = rows
+      .filter((r) => r.entity_type === entityType && r.entity_id)
+      .map((r) => r.entity_id);
+    if (ids.length === 0) continue;
+    const { data: found } = await (supabase as any)
+      .from(table)
+      .select('id')
+      .in('id', [...new Set(ids)]);
+    for (const item of found ?? []) {
+      existingIds.add(`${entityType}:${item.id}`);
+    }
+  }
+
+  const orphanRows = rows.filter((r) => !existingIds.has(`${r.entity_type}:${r.entity_id}`));
+  return {
+    orphanCount: orphanRows.length,
+    orphanSamples: orphanRows.slice(0, 3).map((r) => `${r.entity_type}:${r.entity_id.slice(0, 8)}`),
+  };
+}
+
 export default function PagamentosScreen() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
@@ -163,6 +213,10 @@ export default function PagamentosScreen() {
     status: string;
     created_at: string;
   }>>([]);
+  const [payoutAuditSummary, setPayoutAuditSummary] = useState<PayoutAuditSummary>({
+    orphanCount: 0,
+    orphanSamples: [],
+  });
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -178,9 +232,14 @@ export default function PagamentosScreen() {
   }, []);
 
   const refetchAll = useCallback(async () => {
-    const [items, c] = await Promise.all([fetchPagamentos(), fetchPagamentoCounts()]);
+    const [items, c, audit] = await Promise.all([
+      fetchPagamentos(),
+      fetchPagamentoCounts(),
+      fetchPayoutAuditSummary(),
+    ]);
     setPagamentos(items);
     setCounts(c);
+    setPayoutAuditSummary(audit);
     setSelectedIds(new Set());
   }, []);
   const [filtroTabelaAtivo, setFiltroTabelaAtivo] = useState(false);
@@ -195,8 +254,13 @@ export default function PagamentosScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([fetchPagamentos(), fetchPagamentoCounts()]).then(([items, c]) => {
-      if (!cancelled) { setPagamentos(items); setCounts(c); setLoading(false); }
+    Promise.all([fetchPagamentos(), fetchPagamentoCounts(), fetchPayoutAuditSummary()]).then(([items, c, audit]) => {
+      if (!cancelled) {
+        setPagamentos(items);
+        setCounts(c);
+        setPayoutAuditSummary(audit);
+        setLoading(false);
+      }
     });
     return () => { cancelled = true; };
   }, []);
@@ -441,6 +505,17 @@ export default function PagamentosScreen() {
    */
   const handleBatchRelease = useCallback(async () => {
     if (selectedIds.size === 0) return;
+    const selectedShipmentRiskCount = pagamentos.filter((p) =>
+      selectedIds.has(p.id) &&
+      (p.entityTypeRaw === 'shipment' || p.entityTypeRaw === 'dependent_shipment') &&
+      p.workerHasConnect &&
+      (p.statusRaw === 'pending' || p.statusRaw === 'processing') &&
+      !p.stripeTransferId
+    ).length;
+    if (selectedShipmentRiskCount > 0) {
+      showToast('⚠️ Revise os payouts de encomenda com Connect antes de liberar via transfer explícito.');
+      return;
+    }
     setConfirmMode('connect_release');
     setDryRunPreview(null);
     setDryRunLoading(true);
@@ -455,7 +530,7 @@ export default function PagamentosScreen() {
     } finally {
       setDryRunLoading(false);
     }
-  }, [selectedIds, showToast]);
+  }, [pagamentos, selectedIds, showToast]);
 
   /**
    * Modo "Marcar pago manualmente" (PIX/banco). Valido SO para selecao
@@ -530,6 +605,16 @@ export default function PagamentosScreen() {
   }, [selectedIds, confirmMode, refetchAll, showToast, receiptFile]);
 
   const handleReleaseAll = useCallback(async () => {
+    const shipmentRiskCount = pagamentos.filter((p) =>
+      (p.entityTypeRaw === 'shipment' || p.entityTypeRaw === 'dependent_shipment') &&
+      p.workerHasConnect &&
+      (p.statusRaw === 'pending' || p.statusRaw === 'processing') &&
+      !p.stripeTransferId
+    ).length;
+    if (payoutAuditSummary.orphanCount > 0 || shipmentRiskCount > 0) {
+      showToast('⚠️ Auditoria pendente: revise payouts órfãos/encomendas com Connect antes de liberar todos.');
+      return;
+    }
     if (!confirm(
       'Liberar TODOS os pagamentos pendentes?\n\n' +
       '• Workers com Stripe Connect: será criado stripe.transfers.create automaticamente (entity_type ∈ shipment/excursion/dependent_shipment) ou apenas marcado paid (booking).\n' +
@@ -557,7 +642,7 @@ export default function PagamentosScreen() {
     }
     await refetchAll();
     setBatchLoading(false);
-  }, [refetchAll, showToast]);
+  }, [pagamentos, payoutAuditSummary.orphanCount, refetchAll, showToast]);
 
   const handleExportCsv = useCallback(async () => {
     setBatchLoading(true);
@@ -751,6 +836,48 @@ export default function PagamentosScreen() {
               cursor: 'pointer', ...font,
             },
           }, 'Ver lista (filtrar por Agendado)')))
+    : null;
+
+  const connectShipmentRiskRows = pagamentos.filter((p) =>
+    (p.entityTypeRaw === 'shipment' || p.entityTypeRaw === 'dependent_shipment') &&
+    p.workerHasConnect &&
+    (p.statusRaw === 'pending' || p.statusRaw === 'processing') &&
+    !p.stripeTransferId
+  );
+  const hasAuditWarnings = payoutAuditSummary.orphanCount > 0 || connectShipmentRiskRows.length > 0;
+  const auditBanner = hasAuditWarnings
+    ? React.createElement('div', {
+        style: {
+          display: 'flex',
+          flexDirection: 'column' as const,
+          gap: 8,
+          background: '#fffbeb',
+          border: '1.5px solid #f59e0b',
+          borderRadius: 12,
+          padding: '14px 18px',
+          width: '100%',
+          boxSizing: 'border-box' as const,
+        },
+      },
+        React.createElement('span', {
+          style: { fontSize: 14, fontWeight: 700, color: '#92400e', ...font },
+        }, 'Auditoria financeira: revisar antes de liberar em lote'),
+        payoutAuditSummary.orphanCount > 0
+          ? React.createElement('span', {
+              style: { fontSize: 13, color: '#92400e', lineHeight: 1.5, ...font },
+            },
+              `${payoutAuditSummary.orphanCount} payout(s) apontam para pedidos que não foram encontrados. `,
+              payoutAuditSummary.orphanSamples.length > 0
+                ? `Amostras: ${payoutAuditSummary.orphanSamples.join(', ')}.`
+                : '')
+          : null,
+        connectShipmentRiskRows.length > 0
+          ? React.createElement('span', {
+              style: { fontSize: 13, color: '#92400e', lineHeight: 1.5, ...font },
+            },
+              `${connectShipmentRiskRows.length} payout(s) de encomenda/dependente com Connect ainda podem passar por transfer explícito. `,
+              'Confirme se o PaymentIntent original não usou transfer_data antes de liberar.')
+          : null)
     : null;
 
   // ── Toast notification ─────────────────────────────────────────────────
@@ -1058,5 +1185,5 @@ export default function PagamentosScreen() {
     : null;
 
   return React.createElement(React.Fragment, null,
-    title, searchRow, stuckBanner, metricCards, selectionBar, emptyMsg || tableSection, filtroTabelaModal, toastEl, confirmModal);
+    title, searchRow, stuckBanner, auditBanner, metricCards, selectionBar, emptyMsg || tableSection, filtroTabelaModal, toastEl, confirmModal);
 }

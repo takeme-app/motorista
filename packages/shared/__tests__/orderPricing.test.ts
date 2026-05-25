@@ -20,6 +20,8 @@ import {
   applicationFeeCentsOf,
   formatPricingBreakdown,
   PricingDenominatorOverflowError,
+  normalizePlatformFeePctByService,
+  resolvePlatformFeePct,
 } from '../src/orderPricing.ts';
 
 const invariants = (label: string, r: ReturnType<typeof computeOrderPricing>) => {
@@ -88,6 +90,27 @@ describe('computeOrderPricing — cenário 1: viagem', () => {
     const r = computeOrderPricing({ baseCents: 10000, adminPct: 15 });
     assert.equal(applicationFeeCentsOf(r), r.adminEarningCents);
     assert.equal(r.workerEarningCents, 10000);
+  });
+
+  it('taxa global editável: 15%, 5% e 0% preservam split por snapshot', () => {
+    const admin15 = computeOrderPricing({ baseCents: 10000, adminPct: 15 });
+    assert.equal(admin15.totalCents, 11765);
+    assert.equal(admin15.workerEarningCents, 10000);
+    assert.equal(admin15.adminEarningCents, 1765);
+
+    const admin5 = computeOrderPricing({ baseCents: 10000, adminPct: 5 });
+    assert.equal(admin5.totalCents, 10526);
+    assert.equal(admin5.workerEarningCents, 10000);
+    assert.equal(admin5.adminEarningCents, 526);
+
+    const admin0 = computeOrderPricing({ baseCents: 10000, adminPct: 0 });
+    assert.equal(admin0.totalCents, 10000);
+    assert.equal(admin0.workerEarningCents, 10000);
+    assert.equal(admin0.adminEarningCents, 0);
+
+    invariants('taxa global 15%', admin15);
+    invariants('taxa global 5%', admin5);
+    invariants('taxa global 0%', admin0);
   });
 });
 
@@ -181,6 +204,44 @@ describe('computeOrderPricing — cenário 5: excursão (manual)', () => {
     assert.ok(lines.length >= 3);
     assert.ok(lines.some((l) => l.label === 'Total' && l.valueCents === 60000));
     invariants('excursão manual', r);
+  });
+});
+
+describe('resolvePlatformFeePct — taxas por serviço', () => {
+  it('usa taxa específica quando configurada', () => {
+    const settings = {
+      value: {
+        booking: 5,
+        dependent_shipment: 7.5,
+        shipment_driver: 9,
+        shipment_preparer: 11,
+        excursion: 13,
+      },
+    };
+    assert.equal(resolvePlatformFeePct(settings, 'booking', 15), 5);
+    assert.equal(resolvePlatformFeePct(settings, 'dependent_shipment', 15), 7.5);
+    assert.equal(resolvePlatformFeePct(settings, 'shipment_driver', 15), 9);
+    assert.equal(resolvePlatformFeePct(settings, 'shipment_preparer', 15), 11);
+    assert.equal(resolvePlatformFeePct(settings, 'excursion', 15), 13);
+  });
+
+  it('cai para default_admin_pct e depois 15% quando chave estiver ausente ou inválida', () => {
+    assert.equal(resolvePlatformFeePct({ value: { booking: 'x' } }, 'booking', 8), 8);
+    assert.equal(resolvePlatformFeePct({ value: {} }, 'shipment_driver', 6), 6);
+    assert.equal(resolvePlatformFeePct(null, 'excursion', 'invalid'), 15);
+  });
+
+  it('normaliza apenas percentuais dentro do limite operacional', () => {
+    const normalized = normalizePlatformFeePctByService({
+      booking: 5,
+      dependent_shipment: -1,
+      shipment_driver: 41,
+      shipment_preparer: 0,
+    });
+    assert.deepEqual(normalized, {
+      booking: 5,
+      shipment_preparer: 0,
+    });
   });
 });
 
