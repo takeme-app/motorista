@@ -514,6 +514,8 @@ export default function AtendimentoDetalheScreen() {
     workerCadastroStatus === 'approved' ||
     workerCadastroStatus === 'rejected' ||
     workerCadastroStatus === 'suspended';
+  const isCadastroApprovalCategory =
+    rawCategory === 'cadastro_transporte' || rawCategory === 'autorizar_menores';
   const hideCadastroAprovarReprovar =
     rawCategory === 'cadastro_transporte' && Boolean(motoristaDocWorkerId) && cadastroWorkerDecidido;
 
@@ -795,7 +797,8 @@ export default function AtendimentoDetalheScreen() {
                   background: '#0d8344', color: '#fff8e6', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
                 },
               }, 'Aprovar encomenda')))
-      : hideCadastroAprovarReprovar
+      : isCadastroApprovalCategory
+        ? (hideCadastroAprovarReprovar
           ? React.createElement('div', { style: { padding: 16 } }, cadastroDecididoBanner)
           : React.createElement('div', { style: { display: 'flex', gap: 16, padding: 16 } },
               React.createElement('button', {
@@ -811,7 +814,8 @@ export default function AtendimentoDetalheScreen() {
                   flex: 1, height: 47, borderRadius: 999, border: 'none',
                   background: '#0d8344', color: '#fff8e6', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
                 },
-              }, rawCategory === 'autorizar_menores' ? 'Autorizar menor' : workerSubtype === 'excursions' || workerSubtype === 'shipments' ? 'Autorizar preparador' : 'Autorizar cadastro')));
+              }, rawCategory === 'autorizar_menores' ? 'Autorizar menor' : workerSubtype === 'excursions' || workerSubtype === 'shipments' ? 'Autorizar preparador' : 'Autorizar cadastro')))
+        : null);
 
   // ── Right panel: Histórico ────────────────────────────────────────────
   const rightPanel = React.createElement('div', {
