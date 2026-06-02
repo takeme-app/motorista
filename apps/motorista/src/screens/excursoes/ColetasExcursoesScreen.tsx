@@ -85,7 +85,7 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
     const { data, error } = await supabase
       .from('excursion_requests')
       .select(
-        'id, origin, destination, excursion_date, scheduled_departure_at, scheduled_return_at, excursion_time, check_in_volta_started_at, fleet_type, status, user_id, created_at, confirmed_at',
+        'id, destination, excursion_date, scheduled_departure_at, scheduled_return_at, excursion_time, check_in_volta_started_at, fleet_type, status, user_id, created_at, confirmed_at',
       )
       .eq('preparer_id', user.id)
       .order('created_at', { ascending: false })

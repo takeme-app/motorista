@@ -292,9 +292,9 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
       .from('excursion_requests')
       .select(
         [
-          'id, destination, origin, excursion_date, scheduled_departure_at, scheduled_return_at, excursion_time,',
+          'id, destination, excursion_date, scheduled_departure_at, scheduled_return_at, excursion_time,',
           'check_in_volta_started_at, fleet_type, status, user_id,',
-          'created_at, confirmed_at, origin_lat, origin_lng, destination_lat, destination_lng',
+          'created_at, confirmed_at, destination_lat, destination_lng',
         ].join(' '),
       )
       .eq('id', excursionId)
