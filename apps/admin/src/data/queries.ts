@@ -2383,17 +2383,32 @@ export async function fetchPreparadorCandidates(): Promise<PreparadorCandidate[]
 
   const { data, error } = await sb
     .from('worker_profiles')
-    .select('id, subtype, profiles ( full_name, avatar_url, rating )')
+    .select('id, subtype')
     .eq('role', 'preparer')
     .eq('subtype', 'excursions')
     .eq('status', 'approved')
     .order('created_at', { ascending: false })
     .limit(40);
 
-  if (error || !data) return [];
+  if (error || !data || data.length === 0) return [];
+
+  const workerIds = (data as any[]).map((w) => w.id as string);
+  const { data: profilesData } = await supabase
+    .from('profiles')
+    .select('id, full_name, avatar_url, rating')
+    .in('id', workerIds);
+
+  const profileMap = new Map<string, { full_name: string | null; avatar_url: string | null; rating: number | null }>();
+  (profilesData ?? []).forEach((p: any) => {
+    profileMap.set(p.id, {
+      full_name: p.full_name ?? null,
+      avatar_url: p.avatar_url ?? null,
+      rating: p.rating != null ? Number(p.rating) : null,
+    });
+  });
 
   return (data as any[]).map((w) => {
-    const p = w.profiles;
+    const p = profileMap.get(w.id);
     const badge: 'takeme' | 'parceiro' = w.subtype === 'partner' ? 'parceiro' : 'takeme';
     return {
       id: w.id,
@@ -2592,9 +2607,21 @@ export async function fetchDependentsByUser(userId: string): Promise<any[]> {
 export async function updateExcursionStatus(
   excursionId: string,
   status: string,
-  opts?: { driver_id?: string; preparer_id?: string },
+  opts?: { driver_id?: string; preparer_id?: string; allowWithoutPayment?: boolean },
 ): Promise<{ error: string | null }> {
   if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  // A transição para `approved` é normalmente feita pelo webhook do Stripe após o
+  // pagamento do cliente. Bloqueia aprovação manual sem pagamento confirmado para
+  // evitar excursões "aprovadas" sem PaymentIntent (e sem payouts).
+  if (status === 'approved' && !opts?.allowWithoutPayment) {
+    const { data: row } = await (supabase.from('excursion_requests') as any)
+      .select('stripe_payment_intent_id')
+      .eq('id', excursionId)
+      .maybeSingle();
+    if (!row?.stripe_payment_intent_id) {
+      return { error: 'Excursão ainda não foi paga pelo cliente. A aprovação ocorre automaticamente após o pagamento.' };
+    }
+  }
   const updateFields: any = { status };
   if (opts?.driver_id) updateFields.driver_id = opts.driver_id;
   if (opts?.preparer_id) updateFields.preparer_id = opts.preparer_id;

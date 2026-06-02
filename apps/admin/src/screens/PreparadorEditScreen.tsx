@@ -883,7 +883,8 @@ export default function PreparadorEditScreen() {
               btns.push(React.createElement('button', {
                 key: 'advance', type: 'button',
                 onClick: async () => {
-                  await updateExcursionStatus(detail.id, flow.next);
+                  const { error } = await updateExcursionStatus(detail.id, flow.next);
+                  if (error) { alert(error); return; }
                   navigate(0);
                 },
                 style: { display: 'flex', alignItems: 'center', gap: 6, height: 36, padding: '0 16px', borderRadius: 999, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', ...font },
@@ -1032,10 +1033,9 @@ export default function PreparadorEditScreen() {
       detail.passengers.length > 0 ? React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap' as const } },
         ...[
           { label: 'Total', value: detail.passengers.length, bg: '#f6f6f6', color: '#0d0d0d' },
-          { label: '✅ Embarcados', value: detail.passengers.filter((p) => p.statusDeparture === 'embarked').length, bg: '#b0e8d1', color: '#174f38' },
-          { label: '⏳ Aguardando', value: detail.passengers.filter((p) => !p.statusDeparture || p.statusDeparture === 'not_started').length, bg: '#e5e7eb', color: '#374151' },
-          { label: '❌ Ausentes', value: detail.passengers.filter((p) => p.statusDeparture === 'absent').length, bg: '#eeafaa', color: '#551611' },
-          { label: '📋 Just. ausência', value: detail.passengers.filter((p) => p.absenceJustified).length, bg: '#fef3c7', color: '#92400e' },
+          { label: '✅ Embarcados', value: detail.passengers.filter((p) => p.statusDeparture === 'embarked' || p.statusDeparture === 'disembarked').length, bg: '#b0e8d1', color: '#174f38' },
+          { label: '⏳ Aguardando', value: detail.passengers.filter((p) => (!p.statusDeparture || p.statusDeparture === 'not_embarked') && !p.absenceJustified).length, bg: '#e5e7eb', color: '#374151' },
+          { label: '📋 Ausência justif.', value: detail.passengers.filter((p) => p.absenceJustified).length, bg: '#fef3c7', color: '#92400e' },
         ].map((k) => React.createElement('div', {
           key: k.label,
           style: { flex: '1 1 0', minWidth: 100, background: k.bg, borderRadius: 12, padding: '12px 16px', display: 'flex', flexDirection: 'column' as const, gap: 6, boxSizing: 'border-box' as const },
@@ -1053,10 +1053,11 @@ export default function PreparadorEditScreen() {
           }).map((pass) => {
             // Boarding status badge
             const depStatus = pass.statusDeparture;
-            const depBadge = depStatus === 'embarked'
-              ? { label: 'Embarcado', bg: '#b0e8d1', color: '#174f38' }
-              : depStatus === 'absent'
-              ? { label: pass.absenceJustified ? 'Ausente (justif.)' : 'Ausente', bg: pass.absenceJustified ? '#fef3c7' : '#eeafaa', color: pass.absenceJustified ? '#92400e' : '#551611' }
+            const isBoarded = depStatus === 'embarked' || depStatus === 'disembarked';
+            const depBadge = isBoarded
+              ? { label: depStatus === 'disembarked' ? 'Desembarcado' : 'Embarcado', bg: '#b0e8d1', color: '#174f38' }
+              : pass.absenceJustified
+              ? { label: 'Ausente (justif.)', bg: '#fef3c7', color: '#92400e' }
               : { label: 'Aguardando', bg: '#e5e7eb', color: '#374151' };
 
             return React.createElement('div', {
@@ -1079,22 +1080,22 @@ export default function PreparadorEditScreen() {
                   type: 'button',
                   onClick: async () => {
                     await (await import('../lib/supabase')).supabase.from('excursion_passengers')
-                      .update({ status_departure: 'embarked' }).eq('id', pass.id);
+                      .update({ status_departure: 'embarked', absence_justified: false }).eq('id', pass.id);
                     setToast(`${pass.fullName} embarcado(a) ✅`);
-                    setDetail((prev) => prev ? { ...prev, passengers: prev.passengers.map((p) => p.id === pass.id ? { ...p, statusDeparture: 'embarked' } : p) } : prev);
+                    setDetail((prev) => prev ? { ...prev, passengers: prev.passengers.map((p) => p.id === pass.id ? { ...p, statusDeparture: 'embarked', absenceJustified: false } : p) } : prev);
                   },
-                  style: { flex: 1, height: 36, borderRadius: 8, border: 'none', background: depStatus === 'embarked' ? '#0d8344' : '#22c55e', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font },
-                }, depStatus === 'embarked' ? '✅ Embarcado' : 'Check-in'),
+                  style: { flex: 1, height: 36, borderRadius: 8, border: 'none', background: isBoarded ? '#0d8344' : '#22c55e', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font },
+                }, isBoarded ? '✅ Embarcado' : 'Check-in'),
                 React.createElement('button', {
                   type: 'button',
                   onClick: async () => {
                     await (await import('../lib/supabase')).supabase.from('excursion_passengers')
-                      .update({ status_departure: 'absent' }).eq('id', pass.id);
+                      .update({ status_departure: 'not_embarked', absence_justified: true }).eq('id', pass.id);
                     setToast(`${pass.fullName} marcado(a) como ausente`);
-                    setDetail((prev) => prev ? { ...prev, passengers: prev.passengers.map((p) => p.id === pass.id ? { ...p, statusDeparture: 'absent' } : p) } : prev);
+                    setDetail((prev) => prev ? { ...prev, passengers: prev.passengers.map((p) => p.id === pass.id ? { ...p, statusDeparture: 'not_embarked', absenceJustified: true } : p) } : prev);
                   },
-                  style: { flex: 1, height: 36, borderRadius: 8, border: '1px solid #e2e2e2', background: depStatus === 'absent' ? '#d64545' : '#fff', color: depStatus === 'absent' ? '#fff' : '#0d0d0d', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font },
-                }, depStatus === 'absent' ? '❌ Ausente' : 'Ausente')));
+                  style: { flex: 1, height: 36, borderRadius: 8, border: '1px solid #e2e2e2', background: pass.absenceJustified ? '#d64545' : '#fff', color: pass.absenceJustified ? '#fff' : '#0d0d0d', fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font },
+                }, pass.absenceJustified ? '❌ Ausente' : 'Ausente')));
           }))),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
       secTitle('Métricas e histórico'),
