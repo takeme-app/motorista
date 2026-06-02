@@ -40,7 +40,30 @@ type ConversationRow = {
   unread_driver: number;
   status: string;
   conversation_kind?: string | null;
+  client_id?: string | null;
+  support_requester_id?: string | null;
 };
+
+/**
+ * Mantém apenas UMA conversa por pessoa (a mais recente). O sistema cria uma
+ * conversa por contexto (booking/encomenda/excursão), então o mesmo cliente
+ * aparecia várias vezes na lista. `list` precisa vir ordenada por
+ * last_message_at desc (a primeira de cada chave é a mais recente).
+ */
+function dedupeByPerson(list: ConversationRow[]): ConversationRow[] {
+  const seen = new Set<string>();
+  const out: ConversationRow[] = [];
+  for (const c of list) {
+    const key =
+      c.conversation_kind === 'support_backoffice'
+        ? 'support'
+        : `client:${c.client_id ?? c.participant_name ?? c.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(c);
+  }
+  return out;
+}
 
 function formatTime(iso: string | null): string {
   if (!iso) return '';
@@ -85,14 +108,14 @@ export function ConversationsScreen({ navigation }: Props) {
       const { data } = await sb
         .from('conversations')
         .select(
-          'id, participant_name, participant_avatar, last_message, last_message_at, unread_driver, status, conversation_kind',
+          'id, participant_name, participant_avatar, last_message, last_message_at, unread_driver, status, conversation_kind, client_id, support_requester_id',
         )
         .eq('driver_id', user.id)
         .order('last_message_at', { ascending: false });
 
       const all = (data ?? []) as ConversationRow[];
-      setRecentes(all.filter((c) => c.status === 'active'));
-      setFinalizadas(all.filter((c) => c.status === 'closed'));
+      setRecentes(dedupeByPerson(all.filter((c) => c.status === 'active')));
+      setFinalizadas(dedupeByPerson(all.filter((c) => c.status === 'closed')));
     }
     setLoading(false);
   }, []);

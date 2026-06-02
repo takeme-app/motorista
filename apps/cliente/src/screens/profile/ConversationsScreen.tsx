@@ -57,6 +57,27 @@ function previewText(lastMessage: string | null): string {
   return t.length > 72 ? `${t.slice(0, 72)}…` : t;
 }
 
+/**
+ * Mantém apenas UMA conversa por pessoa (a mais recente). Há uma conversa por
+ * contexto (viagem/encomenda), então o mesmo motorista/suporte aparecia
+ * repetido. `list` já vem ordenada desc por data, então a primeira de cada
+ * chave é a mais recente.
+ */
+function dedupeByPeer(list: ClientConversationListRow[]): ClientConversationListRow[] {
+  const seen = new Set<string>();
+  const out: ClientConversationListRow[] = [];
+  for (const r of list) {
+    const key =
+      r.conversation_kind === 'support_backoffice'
+        ? 'support'
+        : `peer:${r.driver_id ?? r.client_id ?? r.displayName ?? r.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out;
+}
+
 export function ConversationsScreen({ navigation }: Props) {
   const [activeTab, setActiveTab] = useState<'recent' | 'finished'>('recent');
   const [rows, setRows] = useState<ClientConversationListRow[]>([]);
@@ -132,11 +153,13 @@ export function ConversationsScreen({ navigation }: Props) {
 
   const filteredRows = useMemo(
     () =>
-      rows.filter((r) => {
-        const s = normStatus(r.status);
-        if (activeTab === 'recent') return s !== 'closed';
-        return s === 'closed';
-      }),
+      dedupeByPeer(
+        rows.filter((r) => {
+          const s = normStatus(r.status);
+          if (activeTab === 'recent') return s !== 'closed';
+          return s === 'closed';
+        }),
+      ),
     [rows, activeTab],
   );
 

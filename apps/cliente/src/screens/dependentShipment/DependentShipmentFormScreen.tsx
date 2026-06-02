@@ -66,7 +66,7 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      showAlert('Permissão', 'Precisamos de acesso à galeria para adicionar uma foto da encomenda.');
+      showAlert('Permissão', 'Precisamos de acesso à galeria para adicionar uma foto do dependente.');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -278,7 +278,7 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
             numberOfLines={3}
           />
 
-          <Text style={styles.label}>Foto da encomenda (opcional)</Text>
+          <Text style={styles.label}>Foto do dependente (opcional)</Text>
           <TouchableOpacity style={styles.photoBox} onPress={pickImage} activeOpacity={0.8}>
             {photoUri ? (
               <Text style={styles.photoPlaceholderText} numberOfLines={1}>Foto selecionada</Text>
