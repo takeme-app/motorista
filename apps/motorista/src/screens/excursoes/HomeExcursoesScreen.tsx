@@ -179,7 +179,6 @@ export function HomeExcursoesScreen({ navigation }: Props) {
     showConfirm('Concluir excursão', 'Deseja realmente concluir a excursão?', {
       confirmLabel: 'Sim',
       cancelLabel: 'Não',
-      destructive: true,
       onConfirm: async () => {
         const { error } = await supabase
           .from('excursion_requests')
