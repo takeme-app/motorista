@@ -403,16 +403,18 @@ export default function ElaborarOrcamentoScreen() {
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDriverValueCents(parseBRLInputToCents(e.target.value)),
           style: inputStyle,
         }))),
-    React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
-      React.createElement('div', { style: { flex: '1 1 0', minWidth: 160, display: 'flex', flexDirection: 'column' as const, gap: 4 } },
-        React.createElement('span', { style: labelStyle }, 'Nome do motorista (exibição)'),
-        React.createElement('input', {
-          type: 'text',
-          value: driverName,
-          placeholder: 'Nome do motorista (van/ônibus)',
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDriverName(e.target.value),
-          style: inputStyle,
-        }))),
+    !selectedDriverId
+      ? React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+          React.createElement('div', { style: { flex: '1 1 0', minWidth: 160, display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+            React.createElement('span', { style: labelStyle }, 'Nome do motorista (exibição)'),
+            React.createElement('input', {
+              type: 'text',
+              value: driverName,
+              placeholder: 'Nome do motorista (van/ônibus)',
+              onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDriverName(e.target.value),
+              style: inputStyle,
+            })))
+      : null,
     React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
       React.createElement('div', { style: { flex: '2 1 0', minWidth: 160, display: 'flex', flexDirection: 'column' as const, gap: 4 } },
         React.createElement('span', { style: labelStyle }, 'Preparador de excursões'),
