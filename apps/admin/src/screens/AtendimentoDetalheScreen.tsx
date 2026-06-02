@@ -677,13 +677,16 @@ export default function AtendimentoDetalheScreen() {
   const encomendaDecidido = encomendaShipmentStatus === 'confirmed' || encomendaShipmentStatus === 'cancelled';
   const hideEncomendaAprovarReprovar = isEncomenda && encomendaDecidido;
 
-  const excursaoDecidido = excursionStatusRaw === 'cancelled' || excursionStatusRaw === 'rejected';
-  const hideExcursaoReprovar = isExcursao && excursaoDecidido;
+  const excursaoReprovada = excursionStatusRaw === 'cancelled' || excursionStatusRaw === 'rejected';
+  const excursaoAprovada = ['approved', 'scheduled', 'in_progress', 'completed'].includes(excursionStatusRaw);
+  const hideExcursaoReprovar = isExcursao && (excursaoReprovada || excursaoAprovada);
   const orcamentoEditavel = ['pending', 'contacted', 'quoted', 'in_analysis'].includes(excursionStatusRaw);
 
   const excursaoDecididoBanner = hideExcursaoReprovar
     ? (() => {
-        const meta = { bg: '#eeafaa', color: '#551611', border: '#b53838', label: 'Excursão reprovada' };
+        const meta = excursaoAprovada
+          ? { bg: '#b0e8d1', color: '#174f38', border: '#22c55e', label: 'Excursão aprovada' }
+          : { bg: '#eeafaa', color: '#551611', border: '#b53838', label: 'Excursão reprovada' };
         return React.createElement('div', {
           style: { marginTop: 8, padding: '14px 18px', borderRadius: 12, background: meta.bg, border: `1px solid ${meta.border}`, display: 'flex', alignItems: 'center', gap: 10, ...font },
         },

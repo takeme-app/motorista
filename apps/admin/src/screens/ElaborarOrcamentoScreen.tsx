@@ -221,6 +221,16 @@ export default function ElaborarOrcamentoScreen() {
 
   const canAutoCalcPreparer = typeof preparerDailyRateCents === 'number' && preparerDailyRateCents > 0 && (excursionDaysCount ?? 0) > 0;
 
+  const orcamentoEditavel = useMemo(() => {
+    const status = detail?.statusRaw ?? '';
+    return ['pending', 'contacted', 'quoted', 'in_analysis'].includes(status);
+  }, [detail?.statusRaw]);
+
+  const excursaoAprovada = useMemo(() => {
+    const status = detail?.statusRaw ?? '';
+    return ['approved', 'scheduled', 'in_progress', 'completed'].includes(status);
+  }, [detail?.statusRaw]);
+
   const handleAutoCalcPreparer = useCallback(() => {
     if (!canAutoCalcPreparer || typeof preparerDailyRateCents !== 'number' || !excursionDaysCount) return;
     setPreparerValueCents(preparerDailyRateCents * excursionDaysCount);
@@ -234,7 +244,7 @@ export default function ElaborarOrcamentoScreen() {
   }, [driverValueCents, preparerValueCents, basicItems, additionalServices, recreationItems]);
 
   const handleFinalizar = useCallback(async (finalize: boolean) => {
-    if (!excursionId) return;
+    if (!excursionId || !orcamentoEditavel) return;
     setBanner(null);
     if (totalCents <= 0) {
       setBanner({ type: 'err', text: 'Total deve ser maior que zero.' });
@@ -310,7 +320,7 @@ export default function ElaborarOrcamentoScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [excursionId, totalCents, driverName, selectedDriverId, selectedPreparerId, driverValueCents, preparerValueCents, basicItems, additionalServices, recreationItems, navigate]);
+  }, [excursionId, orcamentoEditavel, totalCents, driverName, selectedDriverId, selectedPreparerId, driverValueCents, preparerValueCents, basicItems, additionalServices, recreationItems, navigate]);
 
   const handleSelectDriver = useCallback((driverId: string) => {
     setSelectedDriverId(driverId);
@@ -338,14 +348,17 @@ export default function ElaborarOrcamentoScreen() {
         type: 'button', onClick: () => navigate(-1),
         style: { display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px', borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', fontSize: 14, fontWeight: 600, color: '#b53838', cursor: 'pointer', ...font },
       }, closeSvg, 'Cancelar'),
-      React.createElement('button', {
-        type: 'button', onClick: () => handleFinalizar(false), disabled: submitting,
-        style: { display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px', borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', fontSize: 14, fontWeight: 600, color: '#0d0d0d', cursor: submitting ? 'wait' : 'pointer', opacity: submitting ? 0.6 : 1, ...font },
-      }, 'Salvar rascunho'),
-      React.createElement('button', {
-        type: 'button', onClick: () => handleFinalizar(true), disabled: submitting,
-        style: { display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px', borderRadius: 999, border: 'none', background: '#0d0d0d', fontSize: 14, fontWeight: 600, color: '#fff', cursor: submitting ? 'wait' : 'pointer', opacity: submitting ? 0.6 : 1, ...font },
-      }, checkSvg, submitting ? 'Finalizando...' : 'Finalizar orçamento')));
+      orcamentoEditavel
+        ? React.createElement(React.Fragment, null,
+            React.createElement('button', {
+              type: 'button', onClick: () => handleFinalizar(false), disabled: submitting,
+              style: { display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px', borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', fontSize: 14, fontWeight: 600, color: '#0d0d0d', cursor: submitting ? 'wait' : 'pointer', opacity: submitting ? 0.6 : 1, ...font },
+            }, 'Salvar rascunho'),
+            React.createElement('button', {
+              type: 'button', onClick: () => handleFinalizar(true), disabled: submitting,
+              style: { display: 'flex', alignItems: 'center', gap: 6, height: 40, padding: '0 20px', borderRadius: 999, border: 'none', background: '#0d0d0d', fontSize: 14, fontWeight: 600, color: '#fff', cursor: submitting ? 'wait' : 'pointer', opacity: submitting ? 0.6 : 1, ...font },
+            }, checkSvg, submitting ? 'Finalizando...' : 'Finalizar orçamento'))
+        : null));
 
   const title = React.createElement('h1', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Orçamento de Excursão');
 
@@ -358,7 +371,15 @@ export default function ElaborarOrcamentoScreen() {
           fontSize: 13, fontWeight: 600, ...font,
         },
       }, banner.text)
-    : null;
+    : excursaoAprovada
+      ? React.createElement('div', {
+          style: {
+            padding: '10px 14px', borderRadius: 8,
+            background: '#dcfce7', color: '#166534',
+            fontSize: 13, fontWeight: 600, ...font,
+          },
+        }, 'Orçamento aprovado pelo cliente — somente leitura.')
+      : null;
 
   const fmtLocalDate = (iso: string | null | undefined) => {
     if (!iso) return '—';
@@ -390,7 +411,8 @@ export default function ElaborarOrcamentoScreen() {
         React.createElement('select', {
           value: selectedDriverId,
           onChange: (e: React.ChangeEvent<HTMLSelectElement>) => handleSelectDriver(e.target.value),
-          style: inputStyle,
+          disabled: !orcamentoEditavel,
+          style: { ...inputStyle, ...(orcamentoEditavel ? {} : { background: '#f6f6f6', color: '#767676' }) },
         },
           React.createElement('option', { value: '' }, '— Externo / não cadastrado —'),
           ...approvedDrivers.map((d) => React.createElement('option', { key: d.id, value: d.id }, d.isPartner ? `${d.nome} (parceiro)` : d.nome))),
@@ -400,8 +422,9 @@ export default function ElaborarOrcamentoScreen() {
         React.createElement('span', { style: labelStyle }, 'Valor motorista'),
         React.createElement('input', {
           type: 'text', value: formatCentsBRL(driverValueCents),
+          readOnly: !orcamentoEditavel,
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDriverValueCents(parseBRLInputToCents(e.target.value)),
-          style: inputStyle,
+          style: { ...inputStyle, ...(orcamentoEditavel ? {} : { background: '#f6f6f6', color: '#767676' }) },
         }))),
     !selectedDriverId
       ? React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
@@ -411,8 +434,9 @@ export default function ElaborarOrcamentoScreen() {
               type: 'text',
               value: driverName,
               placeholder: 'Nome do motorista (van/ônibus)',
+              readOnly: !orcamentoEditavel,
               onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDriverName(e.target.value),
-              style: inputStyle,
+              style: { ...inputStyle, ...(orcamentoEditavel ? {} : { background: '#f6f6f6', color: '#767676' }) },
             })))
       : null,
     React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
@@ -421,7 +445,8 @@ export default function ElaborarOrcamentoScreen() {
         React.createElement('select', {
           value: selectedPreparerId,
           onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedPreparerId(e.target.value),
-          style: inputStyle,
+          disabled: !orcamentoEditavel,
+          style: { ...inputStyle, ...(orcamentoEditavel ? {} : { background: '#f6f6f6', color: '#767676' }) },
         },
           React.createElement('option', { value: '' }, '— Selecione —'),
           ...preparerCandidates.map((p) => React.createElement('option', { key: p.id, value: p.id }, p.nome)))),
@@ -429,10 +454,11 @@ export default function ElaborarOrcamentoScreen() {
         React.createElement('span', { style: labelStyle }, 'Valor preparador'),
         React.createElement('input', {
           type: 'text', value: formatCentsBRL(preparerValueCents),
+          readOnly: !orcamentoEditavel,
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => setPreparerValueCents(parseBRLInputToCents(e.target.value)),
-          style: inputStyle,
+          style: { ...inputStyle, ...(orcamentoEditavel ? {} : { background: '#f6f6f6', color: '#767676' }) },
         }),
-        canAutoCalcPreparer
+        orcamentoEditavel && canAutoCalcPreparer
           ? React.createElement('button', {
               type: 'button',
               onClick: handleAutoCalcPreparer,
@@ -453,7 +479,7 @@ export default function ElaborarOrcamentoScreen() {
     catalog: Array<{ id: string; name: string; default_value_cents: number; description: string | null }>,
     setRows: React.Dispatch<React.SetStateAction<BudgetItemLine[]>>,
   ) => {
-    if (catalog.length === 0) return null;
+    if (catalog.length === 0 || !orcamentoEditavel) return null;
     return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
       React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Importar do catálogo:'),
       React.createElement('select', {
@@ -492,32 +518,39 @@ export default function ElaborarOrcamentoScreen() {
         React.createElement('div', { key: idx, style: { display: 'flex', gap: 16, alignItems: 'center' } },
           React.createElement('input', {
             type: 'text', value: row.label, placeholder: 'Descrição',
+            readOnly: !orcamentoEditavel,
             onChange: (e: React.ChangeEvent<HTMLInputElement>) =>
               setRows((prev) => prev.map((r, i) => i === idx ? { ...r, label: e.target.value } : r)),
-            style: { ...inputStyle, flex: '2 1 0' },
+            style: { ...inputStyle, flex: '2 1 0', ...(orcamentoEditavel ? {} : { background: '#f6f6f6', color: '#767676' }) },
           }),
           React.createElement('input', {
             type: 'number', value: row.qty, min: 0,
+            readOnly: !orcamentoEditavel,
             onChange: (e: React.ChangeEvent<HTMLInputElement>) =>
               setRows((prev) => prev.map((r, i) => i === idx ? { ...r, qty: Math.max(0, parseInt(e.target.value || '0', 10) || 0) } : r)),
-            style: { ...inputStyle, flex: '0 0 80px' },
+            style: { ...inputStyle, flex: '0 0 80px', ...(orcamentoEditavel ? {} : { background: '#f6f6f6', color: '#767676' }) },
           }),
           React.createElement('input', {
             type: 'text', value: formatCentsBRL(row.value_cents),
+            readOnly: !orcamentoEditavel,
             onChange: (e: React.ChangeEvent<HTMLInputElement>) =>
               setRows((prev) => prev.map((r, i) => i === idx ? { ...r, value_cents: parseBRLInputToCents(e.target.value) } : r)),
-            style: { ...inputStyle, flex: '1 1 0' },
+            style: { ...inputStyle, flex: '1 1 0', ...(orcamentoEditavel ? {} : { background: '#f6f6f6', color: '#767676' }) },
           }),
-          React.createElement('button', {
-            type: 'button',
-            onClick: () => setRows((prev) => prev.filter((_, i) => i !== idx)),
-            style: { flex: '0 0 40px', height: 40, borderRadius: 8, border: '1px solid #e2e2e2', background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-            'aria-label': 'Remover item',
-          }, trashSvg))),
-      React.createElement('button', {
-        type: 'button', style: addBtn,
-        onClick: () => setRows((prev) => [...prev, { label: '', qty: 1, value_cents: 0 }]),
-      }, plusSvg, ctaLabel));
+          orcamentoEditavel
+            ? React.createElement('button', {
+                type: 'button',
+                onClick: () => setRows((prev) => prev.filter((_, i) => i !== idx)),
+                style: { flex: '0 0 40px', height: 40, borderRadius: 8, border: '1px solid #e2e2e2', background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+                'aria-label': 'Remover item',
+              }, trashSvg)
+            : React.createElement('span', { style: { flex: '0 0 40px' } }))),
+      orcamentoEditavel
+        ? React.createElement('button', {
+            type: 'button', style: addBtn,
+            onClick: () => setRows((prev) => [...prev, { label: '', qty: 1, value_cents: 0 }]),
+          }, plusSvg, ctaLabel)
+        : null);
 
   const itensSection = renderItemsBlock('Itens básicos', basicItems, setBasicItems, 'Adicionar novo item', packageCatalog);
   const servicosSection = renderItemsBlock('Serviços adicionais', additionalServices, setAdditionalServices, 'Adicionar novo serviço', packageCatalog);
