@@ -143,7 +143,7 @@ export default function HomeScreen() {
       React.createElement('p', { style: webStyles.expenseCardDesc }, 'Total de pagamentos realizados para motoristas e preparadores no período selecionado.'),
       React.createElement('p', { style: webStyles.expenseCardLabel }, 'Total de despesas aprovadas no período'),
       React.createElement('p', { style: webStyles.expenseCardValue }, fmtExpenseBRL(approvedExpenseCents)),
-      React.createElement('button', { type: 'button', style: webStyles.expenseCardLink }, 'Ver detalhes em Pagamentos', React.createElement('span', null, arrowForwardSvg))));
+      React.createElement('button', { type: 'button', style: webStyles.expenseCardLink, onClick: () => navigate('/pagamentos') }, 'Ver detalhes em Pagamentos', React.createElement('span', null, arrowForwardSvg))));
 
   // Contagens filtradas — refletem os filtros aplicados (data, status, categoria)
   const vc = homeCounts?.viagens;
