@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useRealtimeMessages, RealtimeMessage } from '../hooks/useRealtimeMessages';
+import { supabase } from '../lib/supabase';
+import { resolveChatAttachmentUrl } from '../lib/storageDisplayUrl';
 import FileUpload from './FileUpload';
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -113,8 +115,62 @@ function formatTime(iso: string): string {
   } catch { return ''; }
 }
 
+// Placeholders gravados pelos apps quando o anexo não tem legenda — não devem
+// aparecer como texto, pois a própria mídia já é exibida.
+const PLACEHOLDERS = new Set(['📷 Foto', '🎤 Áudio', '🎥 Vídeo', '📎 Arquivo']);
+
+const VIDEO_EXTS = new Set(['mp4', 'mov', 'm4v', 'webm', '3gp', '3gpp', 'qt']);
+const AUDIO_EXTS = new Set(['m4a', 'mp3', 'mpeg', 'aac', 'wav', 'ogg', 'amr', 'opus', 'weba']);
+const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif', 'bmp']);
+
+function extFromPathOrUrl(value: string | null | undefined): string {
+  if (!value) return '';
+  const clean = value.split('?')[0] ?? value;
+  const last = clean.split('/').pop() ?? '';
+  const dot = last.lastIndexOf('.');
+  if (dot < 0) return '';
+  return last.slice(dot + 1).toLowerCase();
+}
+
+type EffectiveKind = 'image' | 'audio' | 'video' | 'pdf' | 'file' | 'text';
+
+function resolveKind(msg: RealtimeMessage): EffectiveKind {
+  const hasAttachment = Boolean(msg.attachment_path || msg.attachment_url);
+  if (!hasAttachment) return 'text';
+
+  const ext = extFromPathOrUrl(msg.attachment_path || msg.attachment_url);
+  const kind = msg.message_kind || msg.attachment_type;
+
+  if (VIDEO_EXTS.has(ext)) return 'video';
+  if (kind === 'image' || IMAGE_EXTS.has(ext)) return 'image';
+  if (kind === 'audio' || AUDIO_EXTS.has(ext)) return 'audio';
+  if (kind === 'pdf' || ext === 'pdf') return 'pdf';
+  return 'file';
+}
+
+function useChatAttachmentUrl(msg: RealtimeMessage, enabled: boolean) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(enabled);
+
+  useEffect(() => {
+    if (!enabled) { setUrl(null); setLoading(false); return undefined; }
+    let cancelled = false;
+    setLoading(true);
+    resolveChatAttachmentUrl(supabase as any, msg.attachment_path, msg.attachment_url)
+      .then((u) => { if (!cancelled) { setUrl(u); setLoading(false); } })
+      .catch(() => { if (!cancelled) { setUrl(null); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [enabled, msg.attachment_path, msg.attachment_url]);
+
+  return { url, loading };
+}
+
 function MessageBubble(props: { msg: RealtimeMessage; isOwn: boolean }) {
   const { msg, isOwn } = props;
+  const kind = resolveKind(msg);
+  const hasMedia = kind !== 'text';
+  const { url, loading } = useChatAttachmentUrl(msg, hasMedia);
+
   const bubbleStyle: React.CSSProperties = {
     maxWidth: '75%',
     padding: '8px 12px',
@@ -122,41 +178,82 @@ function MessageBubble(props: { msg: RealtimeMessage; isOwn: boolean }) {
     fontSize: 14,
     lineHeight: '1.4',
     alignSelf: isOwn ? 'flex-end' : 'flex-start',
-    background: isOwn ? '#F59E0B' : '#f1f1f1',
-    color: isOwn ? '#fff' : '#0d0d0d',
+    background: isOwn ? '#FFEFC2' : '#f1f1f1',
+    color: '#0d0d0d',
     borderBottomRightRadius: isOwn ? 4 : 12,
     borderBottomLeftRadius: isOwn ? 12 : 4,
+    minWidth: 0,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   };
 
+  const linkColor = '#3b82f6';
   const children: React.ReactNode[] = [];
 
-  // Attachment
-  if (msg.attachment_url) {
-    if (msg.attachment_type === 'image') {
+  // O content às vezes é só um placeholder ("📷 Foto" etc.); não exibir como texto.
+  const showText = Boolean(msg.content) && !(hasMedia && PLACEHOLDERS.has(msg.content.trim()));
+  const textMargin = showText ? 6 : 0;
+
+  if (hasMedia) {
+    if (loading) {
       children.push(
-        React.createElement('img', {
-          key: 'img',
-          src: msg.attachment_url,
-          alt: 'Imagem',
-          style: { maxWidth: '100%', borderRadius: 8, marginBottom: msg.content ? 6 : 0 },
-        }),
+        React.createElement('div', {
+          key: 'loading',
+          style: { fontSize: 13, opacity: 0.7, marginBottom: textMargin },
+        }, 'Carregando anexo…'),
       );
-    } else if (msg.attachment_type === 'pdf') {
+    } else if (!url) {
+      children.push(
+        React.createElement('div', {
+          key: 'media-error',
+          style: { fontSize: 13, opacity: 0.8, marginBottom: textMargin },
+        }, 'Não foi possível carregar o anexo.'),
+      );
+    } else if (kind === 'image') {
       children.push(
         React.createElement('a', {
-          key: 'pdf',
-          href: msg.attachment_url,
-          target: '_blank',
-          rel: 'noopener noreferrer',
-          style: { display: 'flex', alignItems: 'center', gap: 6, color: isOwn ? '#fff' : '#3b82f6', textDecoration: 'underline', fontSize: 13, marginBottom: msg.content ? 6 : 0 },
-        }, 'Arquivo PDF'),
+          key: 'img-link', href: url, target: '_blank', rel: 'noopener noreferrer',
+          style: { display: 'block', marginBottom: textMargin },
+        },
+          React.createElement('img', {
+            src: url,
+            alt: 'Imagem',
+            style: { maxWidth: '100%', maxHeight: 280, borderRadius: 8, display: 'block' },
+          }),
+        ),
+      );
+    } else if (kind === 'video') {
+      children.push(
+        React.createElement('video', {
+          key: 'video', src: url, controls: true,
+          style: { maxWidth: '100%', maxHeight: 280, borderRadius: 8, marginBottom: textMargin, display: 'block' },
+        }),
+      );
+    } else if (kind === 'audio') {
+      children.push(
+        React.createElement('audio', {
+          key: 'audio', src: url, controls: true,
+          style: { maxWidth: '100%', marginBottom: textMargin, display: 'block' },
+        }),
+      );
+    } else {
+      // pdf / file genérico
+      const label = showText ? msg.content : kind === 'pdf' ? 'Arquivo PDF' : 'Abrir arquivo';
+      children.push(
+        React.createElement('a', {
+          key: 'file', href: url, target: '_blank', rel: 'noopener noreferrer',
+          style: { display: 'flex', alignItems: 'center', gap: 6, color: linkColor, textDecoration: 'underline', fontSize: 13, marginBottom: 0, wordBreak: 'break-word' as const },
+        }, `📎 ${label}`),
       );
     }
   }
 
-  // Text
-  if (msg.content) {
-    children.push(React.createElement('div', { key: 'text' }, msg.content));
+  // Texto/legenda (oculto para arquivos genéricos, cujo nome já vira o label do link).
+  if (showText && !(hasMedia && (kind === 'file' || kind === 'pdf'))) {
+    children.push(React.createElement('div', {
+      key: 'text',
+      style: { overflowWrap: 'anywhere', wordBreak: 'break-word', whiteSpace: 'pre-wrap' as const },
+    }, msg.content));
   }
 
   // Time
@@ -206,8 +303,8 @@ export default function ChatPanel(props: ChatPanelProps) {
     }
   }, [handleSend]);
 
-  const handleFileUploaded = useCallback((url: string, type: 'pdf' | 'image') => {
-    sendMessage('', url, type);
+  const handleFileUploaded = useCallback((path: string, kind: 'image' | 'audio' | 'file') => {
+    sendMessage('', { path, kind });
     setShowUpload(false);
   }, [sendMessage]);
 

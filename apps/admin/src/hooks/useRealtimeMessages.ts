@@ -8,6 +8,10 @@ export interface RealtimeMessage {
   content: string;
   attachment_url: string | null;
   attachment_type: string | null;
+  /** text | image | audio | file (esquema novo usado por motorista/cliente) */
+  message_kind: string | null;
+  /** Caminho no bucket privado chat-attachments (conversation_id/arquivo) */
+  attachment_path: string | null;
   created_at: string;
   read_at: string | null;
 }
@@ -22,8 +26,8 @@ interface UseRealtimeMessagesReturn {
   messages: RealtimeMessage[];
   loading: boolean;
   error: string | null;
-  /** Envia uma mensagem de texto */
-  sendMessage: (content: string, attachmentUrl?: string, attachmentType?: string) => Promise<void>;
+  /** Envia uma mensagem de texto ou com anexo (path no bucket chat-attachments + kind) */
+  sendMessage: (content: string, attachment?: { path: string; kind: string }) => Promise<void>;
   /** Marca mensagens como lidas */
   markAsRead: () => Promise<void>;
   /** Recarrega mensagens */
@@ -49,7 +53,7 @@ export function useRealtimeMessages(opts: UseRealtimeMessagesOptions): UseRealti
     setLoading(true);
     (supabase as any)
       .from('messages')
-      .select('id, sender_id, content, attachment_url, attachment_type, created_at, read_at')
+      .select('id, sender_id, content, attachment_url, attachment_type, message_kind, attachment_path, created_at, read_at')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: true })
       .limit(initialLimit)
@@ -106,29 +110,36 @@ export function useRealtimeMessages(opts: UseRealtimeMessagesOptions): UseRealti
 
   // Enviar mensagem
   const sendMessage = useCallback(
-    async (content: string, attachmentUrl?: string, attachmentType?: string) => {
+    async (content: string, attachment?: { path: string; kind: string }) => {
       if (!conversationId) return;
 
       const { data: session } = await (supabase as any).auth.getSession();
       const userId = session?.session?.user?.id;
       if (!userId) return;
 
+      // message_kind aceita apenas text|image|audio|file (constraint). Vídeo é gravado como
+      // 'file' e identificado pela extensão na hora de exibir.
+      const kind = attachment?.kind ?? 'text';
+      const placeholder = kind === 'image' ? '📷 Foto' : kind === 'audio' ? '🎤 Áudio' : '📎 Arquivo';
+      const finalContent = content || (attachment ? placeholder : '');
+
       const insertData: any = {
         conversation_id: conversationId,
         sender_id: userId,
-        content,
+        content: finalContent,
+        message_kind: kind,
       };
-      if (attachmentUrl) insertData.attachment_url = attachmentUrl;
-      if (attachmentType) insertData.attachment_type = attachmentType;
+      if (attachment?.path) insertData.attachment_path = attachment.path;
 
       const { error: err } = await (supabase as any).from('messages').insert(insertData);
       if (err) setError(err.message);
 
-      // Atualizar last_message na conversa
+      // Atualizar last_message na conversa (o trigger handle_new_message também atualiza,
+      // mas mantemos para feedback imediato quando o trigger não estiver presente).
       await (supabase as any)
         .from('conversations')
         .update({
-          last_message: content || (attachmentType === 'pdf' ? 'Arquivo PDF' : 'Imagem'),
+          last_message: finalContent,
           last_message_at: new Date().toISOString(),
         })
         .eq('id', conversationId);

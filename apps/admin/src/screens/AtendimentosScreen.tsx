@@ -408,7 +408,7 @@ export default function AtendimentosScreen() {
                 },
               }, t.categoria)),
             // Description
-            React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, lineHeight: 1.5, ...font } }, t.descricao),
+            React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, lineHeight: 1.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, ...font } }, t.descricao),
             // Time
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
               clockSvg,

@@ -106,6 +106,12 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
       if (st === 'approved' || st === 'scheduled') {
         await supabase.from('excursion_requests').update({ status: 'in_progress' }).eq('id', excursionId);
       }
+      // Marca início do check-in de ida (uma única vez) para disparar push ao cliente.
+      await supabase
+        .from('excursion_requests')
+        .update({ check_in_ida_started_at: new Date().toISOString() } as never)
+        .eq('id', excursionId)
+        .is('check_in_ida_started_at', null);
     })();
     return () => {
       cancelled = true;

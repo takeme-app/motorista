@@ -69,6 +69,101 @@ const categoryLabelPt: Record<string, string> = {
   outros: 'Outros',
 };
 
+const excursionStatusLabelPt: Record<string, string> = {
+  pending: 'Pendente',
+  contacted: 'Contatado',
+  quoted: 'Orçamento enviado',
+  in_analysis: 'Em análise',
+  approved: 'Aprovada',
+  scheduled: 'Agendada',
+  in_progress: 'Em andamento',
+  completed: 'Concluída',
+  cancelled: 'Cancelada',
+};
+
+function viagemStatusLabelPt(status: string | null | undefined): string {
+  if (!status) return '—';
+  return excursionStatusLabelPt[status] ?? status;
+}
+
+const excursionFleetLabels: Record<string, string> = {
+  carro: 'Carro',
+  van: 'Van',
+  micro_onibus: 'Micro-ônibus',
+  onibus: 'Ônibus',
+};
+
+const excursionPaymentMethodLabelPt: Record<string, string> = {
+  card: 'Cartão de crédito',
+  credit_card: 'Cartão de crédito',
+  pix: 'Pix',
+  cash: 'Dinheiro',
+};
+
+const excursionPassengerStatusLabelPt: Record<string, string> = {
+  not_embarked: 'Não embarcou',
+  embarked: 'Embarcou',
+  disembarked: 'Desembarcou',
+};
+
+function excursionPassengerStatusLabel(status: string | null | undefined): string {
+  if (!status) return '—';
+  return excursionPassengerStatusLabelPt[status] ?? status;
+}
+
+type AtendimentoExcursionPassenger = {
+  id: string;
+  fullName: string;
+  statusDeparture: string | null;
+  statusReturn: string | null;
+  absenceJustified: boolean;
+};
+
+type AtendimentoExcursionDetail = {
+  destination: string;
+  excursionDate: string;
+  scheduledDepartureAt: string | null;
+  peopleCount: number;
+  fleetType: string;
+  firstAidTeam: boolean;
+  recreationTeam: boolean;
+  childrenTeam: boolean;
+  specialNeedsTeam: boolean;
+  recreationItems: Array<{ obj: string; qty: string }>;
+  observations: string | null;
+  totalAmountCents: number | null;
+  paymentMethod: string | null;
+  stripePaymentIntentId: string | null;
+  preparerId: string | null;
+  driverId: string | null;
+};
+
+function excursionFleetLabel(fleetType: string | null | undefined): string {
+  if (!fleetType) return '—';
+  return excursionFleetLabels[fleetType] ?? fleetType;
+}
+
+function parseExcursionRecreationItems(raw: unknown): Array<{ obj: string; qty: string }> {
+  if (!Array.isArray(raw)) return [];
+  const items: Array<{ obj: string; qty: string }> = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    const obj = String(o.itemType ?? o.item_type ?? o.name ?? '').trim();
+    if (!obj) continue;
+    const qty = String(o.quantity ?? o.qty ?? '').trim();
+    items.push({ obj, qty: qty || '—' });
+  }
+  return items;
+}
+
+function fmtExcursionDate(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('pt-BR');
+}
+
 export default function AtendimentoDetalheScreen() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -140,11 +235,14 @@ export default function AtendimentoDetalheScreen() {
   const [periodoLinha, setPeriodoLinha] = useState('—');
   const [viagemRefLinha, setViagemRefLinha] = useState('—');
   const [viagemStatusLinha, setViagemStatusLinha] = useState('—');
+  const [excursionStatusRaw, setExcursionStatusRaw] = useState<string>('');
   const [atendenteNome, setAtendenteNome] = useState('Não atribuído');
   const [solicitacaoShort, setSolicitacaoShort] = useState(conversationId ? String(conversationId).slice(0, 8).toUpperCase() : '—');
   const [subjectUserId, setSubjectUserId] = useState<string>('');
   const [ctxJson, setCtxJson] = useState<Record<string, unknown>>({});
   const [excursionRequestId, setExcursionRequestId] = useState<string | null>(null);
+  const [excursionDetail, setExcursionDetail] = useState<AtendimentoExcursionDetail | null>(null);
+  const [excursionPassengers, setExcursionPassengers] = useState<AtendimentoExcursionPassenger[]>([]);
   const [historicoReal, setHistoricoReal] = useState<Array<{ id: string; titulo: string; atendente: string; data: string; desc: string; desc2: string }>>([]);
   const [complaintBody, setComplaintBody] = useState('');
 
@@ -415,7 +513,11 @@ export default function AtendimentoDetalheScreen() {
       if (conv.category === 'excursao' && ctxExcursionId) {
         const { data: exc } = await (supabase as any)
           .from('excursion_requests')
-          .select('id, destination, excursion_date, scheduled_departure_at, status, total_amount_cents, budget_lines')
+          .select(`
+            id, destination, excursion_date, scheduled_departure_at, status, total_amount_cents, budget_lines,
+            people_count, fleet_type, observations, first_aid_team, recreation_team, children_team, special_needs_team,
+            recreation_items, payment_method, stripe_payment_intent_id, driver_id, preparer_id
+          `)
           .eq('id', ctxExcursionId)
           .maybeSingle();
         if (exc && !cancelled) {
@@ -427,12 +529,25 @@ export default function AtendimentoDetalheScreen() {
             status?: string | null;
             total_amount_cents?: number | null;
             budget_lines?: unknown;
+            people_count?: number | null;
+            fleet_type?: string | null;
+            observations?: string | null;
+            first_aid_team?: boolean | null;
+            recreation_team?: boolean | null;
+            children_team?: boolean | null;
+            special_needs_team?: boolean | null;
+            recreation_items?: unknown;
+            payment_method?: string | null;
+            stripe_payment_intent_id?: string | null;
+            driver_id?: string | null;
+            preparer_id?: string | null;
           };
           const dateIso = e.scheduled_departure_at ?? e.excursion_date ?? null;
           setTrechoLinha(e.destination ? `Destino: ${e.destination}` : 'Excursão');
           setPeriodoLinha(dateIso ? new Date(dateIso).toLocaleDateString('pt-BR') : 'Data a definir');
           setViagemRefLinha(e.id.slice(0, 8).toUpperCase());
-          setViagemStatusLinha(e.status ?? 'pending');
+          setExcursionStatusRaw(e.status ?? 'pending');
+          setViagemStatusLinha(viagemStatusLabelPt(e.status ?? 'pending'));
           const total = Number(e.total_amount_cents ?? 0);
           setOrcamentoCriado(total > 0 || (Array.isArray(e.budget_lines) && e.budget_lines.length > 0));
           setOrcamentoValor(
@@ -440,7 +555,47 @@ export default function AtendimentoDetalheScreen() {
               ? (total / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
               : 'Rascunho salvo',
           );
+          setExcursionDetail({
+            destination: e.destination ?? '',
+            excursionDate: e.excursion_date ?? '',
+            scheduledDepartureAt: e.scheduled_departure_at ?? null,
+            peopleCount: e.people_count ?? 0,
+            fleetType: e.fleet_type ?? '',
+            firstAidTeam: e.first_aid_team === true,
+            recreationTeam: e.recreation_team === true,
+            childrenTeam: e.children_team === true,
+            specialNeedsTeam: e.special_needs_team === true,
+            recreationItems: parseExcursionRecreationItems(e.recreation_items),
+            observations: e.observations ?? null,
+            totalAmountCents: e.total_amount_cents ?? null,
+            paymentMethod: e.payment_method ?? null,
+            stripePaymentIntentId: e.stripe_payment_intent_id ?? null,
+            preparerId: e.preparer_id ?? null,
+            driverId: e.driver_id ?? null,
+          });
+          // Passageiros + status de embarque/desembarque (acompanhamento operacional)
+          const { data: paxRows } = await (supabase as any)
+            .from('excursion_passengers')
+            .select('id, full_name, status_departure, status_return, absence_justified')
+            .eq('excursion_request_id', ctxExcursionId)
+            .order('full_name', { ascending: true });
+          if (!cancelled) {
+            const pax = Array.isArray(paxRows) ? paxRows : [];
+            setExcursionPassengers(pax.map((p: any) => ({
+              id: String(p.id),
+              fullName: p.full_name ?? '—',
+              statusDeparture: p.status_departure ?? null,
+              statusReturn: p.status_return ?? null,
+              absenceJustified: p.absence_justified === true,
+            })));
+          }
+        } else if (!cancelled) {
+          setExcursionDetail(null);
+          setExcursionPassengers([]);
         }
+      } else if (!cancelled) {
+        setExcursionDetail(null);
+        setExcursionPassengers([]);
       }
       if (conv.category === 'reembolso' && bid) {
         setRefundEntityId(bid);
@@ -521,6 +676,21 @@ export default function AtendimentoDetalheScreen() {
 
   const encomendaDecidido = encomendaShipmentStatus === 'confirmed' || encomendaShipmentStatus === 'cancelled';
   const hideEncomendaAprovarReprovar = isEncomenda && encomendaDecidido;
+
+  const excursaoDecidido = excursionStatusRaw === 'cancelled' || excursionStatusRaw === 'rejected';
+  const hideExcursaoReprovar = isExcursao && excursaoDecidido;
+  const orcamentoEditavel = ['pending', 'contacted', 'quoted', 'in_analysis'].includes(excursionStatusRaw);
+
+  const excursaoDecididoBanner = hideExcursaoReprovar
+    ? (() => {
+        const meta = { bg: '#eeafaa', color: '#551611', border: '#b53838', label: 'Excursão reprovada' };
+        return React.createElement('div', {
+          style: { marginTop: 8, padding: '14px 18px', borderRadius: 12, background: meta.bg, border: `1px solid ${meta.border}`, display: 'flex', alignItems: 'center', gap: 10, ...font },
+        },
+          React.createElement('span', { style: { width: 10, height: 10, borderRadius: '50%', background: meta.border, flexShrink: 0 } }),
+          React.createElement('span', { style: { fontSize: 15, fontWeight: 600, color: meta.color } }, meta.label));
+      })()
+    : null;
 
   const encomendaDecididoBanner = hideEncomendaAprovarReprovar
     ? (() => {
@@ -685,14 +855,21 @@ export default function AtendimentoDetalheScreen() {
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
           React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Orçamento'),
           React.createElement('span', { style: { fontSize: 16, fontWeight: 700, color: '#0d0d0d', ...font } }, orcamentoValor)),
-        React.createElement('button', {
+        orcamentoEditavel ? React.createElement('button', {
           type: 'button',
+          onClick: () => {
+            if (!excursionRequestId) {
+              showToast('Excursão não encontrada neste atendimento.');
+              return;
+            }
+            navigate(`/atendimentos/${excursionRequestId}/orcamento`);
+          },
           style: {
             display: 'flex', alignItems: 'center', gap: 6, height: 36, padding: '0 16px',
             borderRadius: 999, background: '#767676', color: '#fff', border: 'none',
             fontSize: 13, fontWeight: 500, cursor: 'pointer', ...font,
           },
-        }, pencilSvg, 'Editar orçamento'))) : null,
+        }, pencilSvg, 'Editar orçamento') : null)) : null,
 
     complaintBody
       ? React.createElement('div', {
@@ -706,7 +883,7 @@ export default function AtendimentoDetalheScreen() {
 
     // Action chips (grid of 3 per row, Figma style)
     ...(() => {
-      const chips = supportActionChipsForCategory(rawCategory, workerSubtype);
+      const chips = supportActionChipsForCategory(rawCategory, workerSubtype).filter((label) => label !== 'Pagamentos');
       const rows: string[][] = [];
       for (let i = 0; i < chips.length; i += 3) rows.push(chips.slice(i, i + 3));
       const chipClickHandler = (label: string) =>
@@ -757,7 +934,9 @@ export default function AtendimentoDetalheScreen() {
 
     // Bottom action buttons (pinned to bottom, Figma style)
     isExcursao
-      ? React.createElement('div', { style: { display: 'flex', gap: 16, padding: 16 } },
+      ? (hideExcursaoReprovar
+        ? React.createElement('div', { style: { padding: 16 } }, excursaoDecididoBanner)
+        : React.createElement('div', { style: { display: 'flex', gap: 16, padding: 16 } },
           React.createElement('button', {
             type: 'button', onClick: () => setReprovarOpen(true),
             style: {
@@ -767,7 +946,9 @@ export default function AtendimentoDetalheScreen() {
           }, 'Reprovar excursão'),
           React.createElement('button', {
             type: 'button',
+            disabled: orcamentoCriado && !orcamentoEditavel,
             onClick: () => {
+              if (orcamentoCriado && !orcamentoEditavel) return;
               if (!excursionRequestId) {
                 showToast('Excursão não encontrada neste atendimento.');
                 return;
@@ -776,9 +957,11 @@ export default function AtendimentoDetalheScreen() {
             },
             style: {
               flex: 1, height: 47, borderRadius: 999, border: 'none',
-              background: '#0d8344', color: '#fff8e6', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
+              background: orcamentoCriado && !orcamentoEditavel ? '#b7d7c2' : '#0d8344',
+              color: '#fff8e6', fontSize: 14, fontWeight: 500,
+              cursor: orcamentoCriado && !orcamentoEditavel ? 'not-allowed' : 'pointer', ...font,
             },
-          }, orcamentoCriado ? 'Editar orçamento' : 'Elaborar orçamento'))
+          }, orcamentoCriado ? (orcamentoEditavel ? 'Editar orçamento' : 'Orçamento aprovado') : 'Elaborar orçamento')))
       : isEncomenda
         ? (hideEncomendaAprovarReprovar
           ? React.createElement('div', { style: { padding: 16 } }, encomendaDecididoBanner)
@@ -1299,30 +1482,71 @@ export default function AtendimentoDetalheScreen() {
     },
       // Header
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Viagem'),
+        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, isExcursao ? 'Excursão' : 'Viagem'),
         React.createElement('button', {
           type: 'button', onClick: () => setViagemOpen(false),
           style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
         }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
           React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
       React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
-      // Fields grid (real data from booking)
+      // Fields grid (real data from booking or excursion)
       React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: '20px 16px' } },
-        viagemIconField('M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z', 'ID da viagem', viagemRefLinha || '—'),
-        viagemIconField('M17 1l4 4-4 4M3 11V9a4 4 0 014-4h14', 'Trecho', trechoLinha || '—'),
-        viagemIconField('M19 4H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2zM16 2v4M8 2v4M3 10h18', 'Período', periodoLinha || '—'),
+        viagemIconField('M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z', isExcursao ? 'ID da excursão' : 'ID da viagem', viagemRefLinha || '—'),
+        viagemIconField('M17 1l4 4-4 4M3 11V9a4 4 0 014-4h14', isExcursao ? 'Destino' : 'Trecho', trechoLinha || '—'),
+        viagemIconField('M19 4H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2zM16 2v4M8 2v4M3 10h18', isExcursao ? 'Data da excursão' : 'Período', periodoLinha || '—'),
         viagemIconField('M22 11.08V12a10 10 0 11-5.93-9.14M22 4L12 14.01l-3-3', 'Status', viagemStatusLinha || '—')),
+      // Passageiros + acompanhamento de check-in (somente excursão)
+      isExcursao
+        ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', ...font } }, 'Passageiros'),
+              React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } },
+                `${excursionPassengers.filter((p) => p.statusDeparture === 'embarked' || p.statusDeparture === 'disembarked').length}/${excursionPassengers.length} embarcaram`)),
+            excursionPassengers.length === 0
+              ? React.createElement('p', { style: { fontSize: 13, color: '#767676', margin: 0, ...font } }, 'Nenhum passageiro cadastrado ainda.')
+              : React.createElement('div', {
+                  style: { display: 'flex', flexDirection: 'column' as const, gap: 6, maxHeight: 220, overflowY: 'auto' as const, border: '1px solid #e2e2e2', borderRadius: 12, padding: 12 },
+                },
+                  ...excursionPassengers.map((p) =>
+                    React.createElement('div', {
+                      key: p.id,
+                      style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingBottom: 6, borderBottom: '1px solid #f1f1f1' },
+                    },
+                      React.createElement('span', { style: { fontSize: 13, color: '#0d0d0d', flex: 1, ...font } },
+                        p.fullName + (p.absenceJustified ? ' • ausência justificada' : '')),
+                      React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, `Ida: ${excursionPassengerStatusLabel(p.statusDeparture)}`),
+                      React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, `Volta: ${excursionPassengerStatusLabel(p.statusReturn)}`)))))
+        : null,
       // Buttons
       React.createElement('div', { style: { display: 'flex', gap: 12 } },
         React.createElement('button', {
-          type: 'button', onClick: () => { setViagemOpen(false); navigate('/motoristas'); },
+          type: 'button',
+          onClick: () => {
+            setViagemOpen(false);
+            if (isExcursao) {
+              const driverId = excursionDetail?.driverId;
+              if (driverId) navigate(`/motoristas/${driverId}`);
+              else showToast('Motorista ainda não designado para esta excursão.');
+              return;
+            }
+            navigate('/motoristas');
+          },
           style: {
             flex: 1, height: 48, borderRadius: 999, border: '1px solid #e2e2e2',
             background: '#fff', color: '#0d0d0d', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
           },
-        }, 'Ver detalhes do motorista'),
+        }, isExcursao ? 'Ver motorista' : 'Ver detalhes do motorista'),
         React.createElement('button', {
-          type: 'button', onClick: () => { setViagemOpen(false); navigate('/viagens/0'); },
+          type: 'button',
+          onClick: () => {
+            setViagemOpen(false);
+            if (isExcursao) {
+              if (excursionRequestId) navigate(`/atendimentos/${excursionRequestId}/orcamento`);
+              else showToast('Excursão não encontrada neste atendimento.');
+              return;
+            }
+            navigate('/viagens/0');
+          },
           style: {
             flex: 1, height: 48, borderRadius: 999, border: 'none',
             background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
@@ -1490,37 +1714,56 @@ export default function AtendimentoDetalheScreen() {
               }, complaintBody))
           : React.createElement('p', { key: 'nc', style: { fontSize: 14, color: '#767676', ...font } }, 'Nenhuma mensagem registrada.'),
       ];
-    } else {
-      // Solicitação de excursão (default)
+    } else if (rawCategory === 'excursao') {
+      if (!excursionDetail) {
+        return [
+          React.createElement('p', { key: 'no-exc', style: { fontSize: 14, color: '#767676', ...font } },
+            excursionRequestId
+              ? 'Carregando detalhes da excursão…'
+              : 'Excursão não vinculada a este atendimento.'),
+        ];
+      }
+      const excDate = fmtExcursionDate(excursionDetail.scheduledDepartureAt || excursionDetail.excursionDate);
       const solServicos = [
-        { label: 'Equipe de primeiros socorros', checked: true },
-        { label: 'Equipe de recreação', checked: true },
-        { label: 'Equipe especializada em crianças', checked: false },
-        { label: 'Equipe para pessoas com necessidades especiais', checked: false },
+        { label: 'Equipe de primeiros socorros', checked: excursionDetail.firstAidTeam },
+        { label: 'Equipe de recreação', checked: excursionDetail.recreationTeam },
+        { label: 'Equipe especializada em crianças', checked: excursionDetail.childrenTeam },
+        { label: 'Equipe para pessoas com necessidades especiais', checked: excursionDetail.specialNeedsTeam },
       ];
-      const solItens = [{ obj: 'Bolas de futebol', qty: '8' }, { obj: 'Bóias', qty: '5' }, { obj: 'Bolas de basquete', qty: '3' }];
+      const solItens = excursionDetail.recreationItems;
       return [
         solRF('Tipo da solicitação', 'Solicitação de excursão', '1 1 100%'),
-        React.createElement('div', { key: 'dest', style: { display: 'flex', gap: 16 } }, solRF('Destino da excursão', 'Viana - MA'), solRF('Data da excursão', '10/11/2025')),
-        React.createElement('div', { key: 'qty', style: { display: 'flex', gap: 16 } }, solRF('Quantidade de pessoas', '25'), solRF('Tipo de frota', 'Micro-ônibus')),
+        React.createElement('div', { key: 'dest', style: { display: 'flex', gap: 16 } },
+          solRF('Destino da excursão', excursionDetail.destination || '—'),
+          solRF('Data da excursão', excDate)),
+        React.createElement('div', { key: 'qty', style: { display: 'flex', gap: 16 } },
+          solRF('Quantidade de pessoas', String(excursionDetail.peopleCount || '—')),
+          solRF('Tipo de frota', excursionFleetLabel(excursionDetail.fleetType))),
         React.createElement('span', { key: 'sa', style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Serviços adicionais'),
         React.createElement('div', { key: 'sac' }, ...solServicos.map((s) => solCheckbox(s.checked, s.label))),
         React.createElement('span', { key: 'ir', style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Itens de Recreação'),
-        React.createElement('div', { key: 'irt', style: { border: '1px solid #e2e2e2', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column' as const, gap: 8 } },
-          React.createElement('div', { style: { display: 'flex', gap: 16 } },
-            React.createElement('span', { style: { flex: 1, fontSize: 12, fontWeight: 500, color: '#767676', ...font } }, 'Objetos de recreação'),
-            React.createElement('span', { style: { flex: '0 0 80px', fontSize: 12, fontWeight: 500, color: '#767676', ...font } }, 'Quantidade')),
-          ...solItens.map((item, i) =>
-            React.createElement('div', { key: i, style: { display: 'flex', gap: 16 } },
-              React.createElement('div', { style: { flex: 1, height: 40, borderRadius: 8, background: '#f1f1f1', padding: '0 12px', display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font } }, item.obj),
-              React.createElement('div', { style: { flex: '0 0 80px', height: 40, borderRadius: 8, background: '#f1f1f1', padding: '0 12px', display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font } }, item.qty)))),
+        solItens.length > 0
+          ? React.createElement('div', { key: 'irt', style: { border: '1px solid #e2e2e2', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+              React.createElement('div', { style: { display: 'flex', gap: 16 } },
+                React.createElement('span', { style: { flex: 1, fontSize: 12, fontWeight: 500, color: '#767676', ...font } }, 'Objetos de recreação'),
+                React.createElement('span', { style: { flex: '0 0 80px', fontSize: 12, fontWeight: 500, color: '#767676', ...font } }, 'Quantidade')),
+              ...solItens.map((item, i) =>
+                React.createElement('div', { key: i, style: { display: 'flex', gap: 16 } },
+                  React.createElement('div', { style: { flex: 1, height: 40, borderRadius: 8, background: '#f1f1f1', padding: '0 12px', display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font } }, item.obj),
+                  React.createElement('div', { style: { flex: '0 0 80px', height: 40, borderRadius: 8, background: '#f1f1f1', padding: '0 12px', display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font } }, item.qty))))
+          : React.createElement('p', { key: 'no-rec', style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, 'Nenhum item de recreação informado.'),
         React.createElement('span', { key: 'da', style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Detalhes adicionais'),
         React.createElement('div', { key: 'obs', style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
           React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: '#767676', ...font } }, 'Observações'),
           React.createElement('textarea', {
-            readOnly: true, defaultValue: 'Inclua detalhes adicionais sobre a excursão.',
-            style: { width: '100%', minHeight: 80, borderRadius: 8, border: '1px solid #e2e2e2', padding: 12, fontSize: 14, color: '#767676', resize: 'vertical' as const, outline: 'none', boxSizing: 'border-box' as const, ...font },
+            readOnly: true,
+            value: excursionDetail.observations?.trim() || '—',
+            style: { width: '100%', minHeight: 80, borderRadius: 8, border: '1px solid #e2e2e2', padding: 12, fontSize: 14, color: excursionDetail.observations?.trim() ? '#0d0d0d' : '#767676', resize: 'vertical' as const, outline: 'none', boxSizing: 'border-box' as const, ...font },
           })),
+      ];
+    } else {
+      return [
+        React.createElement('p', { key: 'fallback', style: { fontSize: 14, color: '#767676', ...font } }, 'Detalhes da solicitação não disponíveis para esta categoria.'),
       ];
     }
   })();
@@ -1558,57 +1801,76 @@ export default function AtendimentoDetalheScreen() {
         style: { height: 44, borderRadius: 8, background: '#f1f1f1', padding: '0 16px', display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', ...font },
       }, value));
 
-  const pagamentoModal = pagamentoOpen ? React.createElement('div', {
-    style: {
-      position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0,
-      background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
-    },
-    onClick: () => setPagamentoOpen(false),
-  },
-    React.createElement('div', {
+  const pagamentoModal = pagamentoOpen ? (() => {
+    const excTotal = excursionDetail?.totalAmountCents;
+    const excValor = excTotal != null && excTotal > 0
+      ? (excTotal / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+      : '—';
+    const excMetodo = excursionDetail?.paymentMethod
+      ? (excursionPaymentMethodLabelPt[excursionDetail.paymentMethod] ?? excursionDetail.paymentMethod)
+      : 'Não informado';
+    const excStripeId = excursionDetail?.stripePaymentIntentId?.trim() || '—';
+
+    return React.createElement('div', {
       style: {
-        background: '#fff', borderRadius: 16, width: '100%', maxWidth: 560, padding: '28px 32px',
-        display: 'flex', flexDirection: 'column' as const, gap: 20,
-        boxShadow: '0 20px 60px rgba(0,0,0,.15)',
+        position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0,
+        background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
       },
-      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      onClick: () => setPagamentoOpen(false),
     },
-      // Header
-      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Pagamento'),
-        React.createElement('button', {
-          type: 'button', onClick: () => setPagamentoOpen(false),
-          style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
-          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
-      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
-      // Fields
-      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
-        pagField('Valor total', 'R$ 154,00'),
-        pagField('Método de pagamento', 'Cartão de crédito')),
-      pagField('Nome do cartão', 'Matheus Rodrigues Silva', '1 1 100%'),
-      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
-        pagField('Número do cartão', '0110 1624 2432 6472'),
-        pagField('Validade', '06/28')),
-      React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
-        pagField('Validade', '06/28'),
-        pagField('CVV', '465')),
-      // Buttons
-      React.createElement('div', { style: { display: 'flex', gap: 12 } },
-        React.createElement('button', {
-          type: 'button', onClick: () => { setPagamentoOpen(false); setCadastrarPagOpen(true); },
-          style: {
-            flex: 1, height: 48, borderRadius: 999, border: '1px solid #e2e2e2',
-            background: '#fff', color: '#0d0d0d', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
-          },
-        }, 'Cadastrar pagamento'),
-        React.createElement('button', {
-          type: 'button', onClick: () => { setPagamentoOpen(false); navigate('/pagamentos'); },
-          style: {
-            flex: 1, height: 48, borderRadius: 999, border: 'none',
-            background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
-          },
-        }, 'Ver detalhes completos')))) : null;
+      React.createElement('div', {
+        style: {
+          background: '#fff', borderRadius: 16, width: '100%', maxWidth: 560, padding: '28px 32px',
+          display: 'flex', flexDirection: 'column' as const, gap: 20,
+          boxShadow: '0 20px 60px rgba(0,0,0,.15)',
+        },
+        onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+          React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Pagamento'),
+          React.createElement('button', {
+            type: 'button', onClick: () => setPagamentoOpen(false),
+            style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+          }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none' },
+            React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+        React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+        isExcursao
+          ? (excursionDetail
+            ? React.createElement(React.Fragment, null,
+                React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+                  pagField('Valor total', excValor),
+                  pagField('Método de pagamento', excMetodo)),
+                pagField('ID Stripe (PaymentIntent)', excStripeId, '1 1 100%'))
+            : React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } },
+                excursionRequestId ? 'Carregando dados de pagamento…' : 'Excursão não vinculada a este atendimento.'))
+          : React.createElement(React.Fragment, null,
+              React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+                pagField('Valor total', 'R$ 154,00'),
+                pagField('Método de pagamento', 'Cartão de crédito')),
+              pagField('Nome do cartão', 'Matheus Rodrigues Silva', '1 1 100%'),
+              React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+                pagField('Número do cartão', '0110 1624 2432 6472'),
+                pagField('Validade', '06/28')),
+              React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+                pagField('Validade', '06/28'),
+                pagField('CVV', '465'))),
+        React.createElement('div', { style: { display: 'flex', gap: 12 } },
+          isExcursao ? null : React.createElement('button', {
+            type: 'button', onClick: () => { setPagamentoOpen(false); setCadastrarPagOpen(true); },
+            style: {
+              flex: 1, height: 48, borderRadius: 999, border: '1px solid #e2e2e2',
+              background: '#fff', color: '#0d0d0d', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
+            },
+          }, 'Cadastrar pagamento'),
+          React.createElement('button', {
+            type: 'button',
+            onClick: () => { setPagamentoOpen(false); navigate('/pagamentos'); },
+            style: {
+              flex: isExcursao ? undefined : 1, width: isExcursao ? '100%' : undefined, height: 48, borderRadius: 999, border: 'none',
+              background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
+            },
+          }, 'Ver detalhes completos'))));
+  })() : null;
 
   // ── Cadastrar Pagamento modal ──────────────────────────────────────────
   const cadastrarPagModal = cadastrarPagOpen ? React.createElement('div', {
@@ -1790,7 +2052,8 @@ export default function AtendimentoDetalheScreen() {
                 .eq('id', id);
               setReprovarSubmitting(false);
               if (error) { showToast(`Erro ao reprovar: ${error.message || error}`); return; }
-              setViagemStatusLinha('cancelled');
+              setExcursionStatusRaw('cancelled');
+              setViagemStatusLinha(viagemStatusLabelPt('cancelled'));
               if (conversationId) {
                 await (supabase as any).rpc('close_support_conversation', { p_conversation_id: conversationId, p_finish_note: 'Excursão reprovada' });
               }

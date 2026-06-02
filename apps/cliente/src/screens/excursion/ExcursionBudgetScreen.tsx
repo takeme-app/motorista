@@ -193,6 +193,38 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
     return () => { cancelled = true; };
   }, [excursionRequestId]);
 
+  // Após gerar o Pix, o pagamento é assíncrono: o stripe-webhook muda o status
+  // para `approved`. Faz polling do status enquanto o Pix está pendente para
+  // atualizar a tela sem o usuário precisar sair e voltar.
+  useEffect(() => {
+    if (!pixPaymentInfo || !detail || detail.status === 'approved') return;
+    let cancelled = false;
+    const excId = detail.id;
+    const interval = setInterval(async () => {
+      const { data } = await supabase
+        .from('excursion_requests')
+        .select('status')
+        .eq('id', excId)
+        .maybeSingle();
+      if (cancelled) return;
+      const st = (data as { status?: string } | null)?.status;
+      if (st === 'approved') {
+        clearInterval(interval);
+        setDetail((prev) => (prev ? { ...prev, status: 'approved' } : prev));
+        setPixPaymentInfo(null);
+        Alert.alert('Pagamento confirmado', 'Recebemos o seu Pix e sua excursão foi confirmada.', [
+          { text: 'OK', onPress: () => navigation.goBack() },
+        ]);
+      } else if (st && st !== 'quoted') {
+        clearInterval(interval);
+      }
+    }, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [pixPaymentInfo, detail, navigation]);
+
   const handlePaymentSelect = async (method: string) => {
     if (!excursionRequestId || savingPayment) return;
     setSavingPayment(true);
@@ -499,6 +531,10 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
             {pixPaymentInfo.paymentIntentId ? (
               <Text style={styles.mutedText}>Pagamento: {pixPaymentInfo.paymentIntentId}</Text>
             ) : null}
+            <View style={styles.pixWaitingRow}>
+              <ActivityIndicator size="small" color={COLORS.neutral700} />
+              <Text style={styles.mutedText}>Aguardando confirmação do pagamento…</Text>
+            </View>
           </View>
         ) : null}
 
@@ -575,6 +611,7 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   downloadButtonText: { fontSize: 16, fontWeight: '600', color: COLORS.black },
+  pixWaitingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
   paymentRow: {
     flexDirection: 'row',
     alignItems: 'center',

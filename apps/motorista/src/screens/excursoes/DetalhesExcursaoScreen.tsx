@@ -465,8 +465,23 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
         return;
       }
       setPassengers((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+      // Marca início do check-in de ida/volta (uma única vez) para disparar push ao cliente.
+      if (patch.status_departure) {
+        void supabase
+          .from('excursion_requests')
+          .update({ check_in_ida_started_at: new Date().toISOString() } as never)
+          .eq('id', excursionId)
+          .is('check_in_ida_started_at', null);
+      }
+      if (patch.status_return) {
+        void supabase
+          .from('excursion_requests')
+          .update({ check_in_volta_started_at: new Date().toISOString() } as never)
+          .eq('id', excursionId)
+          .is('check_in_volta_started_at', null);
+      }
     },
-    [],
+    [excursionId],
   );
 
   const handleStartExcursion = useCallback(async () => {

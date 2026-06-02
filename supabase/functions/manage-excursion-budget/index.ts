@@ -251,6 +251,25 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Só permite criar/editar orçamento antes do cliente aceitar/pagar.
+    // 'approved' já significa pago; demais status posteriores (scheduled,
+    // in_progress, completed) ou encerrados (cancelled, rejected) bloqueiam.
+    const EDITABLE_STATUSES = ["pending", "contacted", "quoted", "in_analysis"];
+    const currentStatus = String(excursion.status ?? "");
+    const wasQuoted = currentStatus === "quoted";
+    if (!EDITABLE_STATUSES.includes(currentStatus)) {
+      const message = currentStatus === "approved"
+        ? "Orçamento já aceito/pago; não pode ser editado."
+        : `Status atual (${currentStatus}) não permite editar o orçamento.`;
+      return new Response(
+        JSON.stringify({ error: message }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
     if (!budget_lines || typeof budget_lines !== "object") {
       return new Response(
         JSON.stringify({ error: "budget_lines é obrigatório" }),
@@ -351,10 +370,15 @@ Deno.serve(async (req) => {
     }
 
     if (action === "finalize" && excursion.user_id) {
+      const totalFmt = `R$ ${(totalCents / 100).toFixed(2).replace(".", ",")}`;
       await admin.from("notifications").insert({
         user_id: excursion.user_id,
-        title: "Orçamento da excursão pronto",
-        message: `O orçamento da sua excursão foi elaborado. Valor total: R$ ${(totalCents / 100).toFixed(2).replace(".", ",")}. Acesse o app para aceitar.`,
+        title: wasQuoted
+          ? "Orçamento da excursão atualizado"
+          : "Orçamento da excursão pronto",
+        message: wasQuoted
+          ? `O orçamento da sua excursão foi revisado. Novo valor total: ${totalFmt}. Acesse o app para conferir e aceitar.`
+          : `O orçamento da sua excursão foi elaborado. Valor total: ${totalFmt}. Acesse o app para aceitar.`,
         category: "excursion",
       });
     }
