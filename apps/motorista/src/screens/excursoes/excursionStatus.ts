@@ -48,6 +48,29 @@ export const BOARDING_STATUSES = new Set([
   'approved', 'scheduled', 'in_progress', 'payment_done', 'paid', 'active',
 ]);
 
+/**
+ * Estado do botão de embarque (ida → volta) a partir dos timestamps da excursão.
+ * check_in_*_started_at = fase aberta; boarding_*_done_at = fase finalizada.
+ * Fluxo: Iniciar embarque (ida) → Continuar embarque (ida) → Iniciar embarque de
+ * volta → Continuar embarque de volta → Embarque concluído (desabilitado).
+ */
+export type BoardingFlags = {
+  check_in_ida_started_at?: string | null;
+  check_in_volta_started_at?: string | null;
+  boarding_ida_done_at?: string | null;
+  boarding_volta_done_at?: string | null;
+};
+
+export type BoardingCta = { phase: 'ida' | 'volta'; label: string; done: boolean };
+
+export function boardingCta(x: BoardingFlags): BoardingCta {
+  if (x.boarding_volta_done_at) return { phase: 'volta', label: 'Embarque concluído', done: true };
+  if (x.check_in_volta_started_at) return { phase: 'volta', label: 'Continuar embarque de volta', done: false };
+  if (x.boarding_ida_done_at) return { phase: 'volta', label: 'Iniciar embarque de volta', done: false };
+  if (x.check_in_ida_started_at) return { phase: 'ida', label: 'Continuar embarque', done: false };
+  return { phase: 'ida', label: 'Iniciar embarque', done: false };
+}
+
 export function fleetTypeLabel(v: string | null | undefined): string {
   if (!v) return 'Van';
   const m: Record<string, string> = {

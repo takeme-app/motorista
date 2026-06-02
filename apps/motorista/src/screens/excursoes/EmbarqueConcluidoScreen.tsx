@@ -5,9 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ColetasExcursoesStackParamList } from '../../navigation/ColetasExcursoesStack';
-import { Linking, Alert } from 'react-native';
-import { useCallback, useEffect, useState } from 'react';
-import { supabase } from '../../lib/supabase';
+import { useCallback } from 'react';
 
 type Props = NativeStackScreenProps<ColetasExcursoesStackParamList, 'EmbarqueConcluido'>;
 
@@ -19,34 +17,10 @@ function formatBRL(cents: number | null | undefined): string {
 export function EmbarqueConcluidoScreen({ navigation, route }: Props) {
   const { boarded, justified, totalExcursion, excursionId, totalAmountCents } = route.params;
   const isVolta = (route.params.phase ?? 'ida') === 'volta';
-  const [destinationQuery, setDestinationQuery] = useState<string | null>(null);
 
-  useEffect(() => {
-    let c = true;
-    (async () => {
-      const { data } = await supabase
-        .from('excursion_requests')
-        .select('destination')
-        .eq('id', excursionId)
-        .maybeSingle();
-      if (!c || !data) return;
-      const dest = String((data as { destination?: string | null }).destination ?? '').trim();
-      if (dest) setDestinationQuery(dest);
-    })();
-    return () => {
-      c = false;
-    };
-  }, [excursionId]);
-
-  const openMaps = useCallback(() => {
-    if (!destinationQuery) {
-      Alert.alert('Mapa', 'Destino não cadastrado para abrir no mapa.');
-      return;
-    }
-    const q = encodeURIComponent(`${destinationQuery}, Brasil`);
-    const url = `https://www.google.com/maps/search/?api=1&query=${q}`;
-    void Linking.openURL(url);
-  }, [destinationQuery]);
+  const openDetalhes = useCallback(() => {
+    navigation.navigate('DetalhesExcursao', { excursionId });
+  }, [navigation, excursionId]);
 
   const goHome = useCallback(() => {
     navigation.popToTop();
@@ -94,7 +68,7 @@ export function EmbarqueConcluidoScreen({ navigation, route }: Props) {
         )}
         <TouchableOpacity
           style={isVolta ? styles.btnBlack : styles.btnOutline}
-          onPress={openMaps}
+          onPress={openDetalhes}
           activeOpacity={0.88}
         >
           <Text style={isVolta ? styles.btnBlackText : styles.btnOutlineText}>Acompanhar excursão</Text>

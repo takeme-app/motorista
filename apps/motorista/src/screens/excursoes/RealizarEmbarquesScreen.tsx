@@ -155,10 +155,16 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
   );
 
   const navigateSuccess = useCallback(
-    (list: Passenger[]) => {
+    async (list: Passenger[]) => {
       const boarded = list.filter((p) => statusOf(p) === 'embarked').length;
       const justified = list.filter((p) => statusOf(p) === 'not_embarked' && p.absence_justified).length;
       const totalExcursion = list.length;
+      // Marca a fase atual como finalizada (controla o próximo passo na lista).
+      const doneCol = isVolta ? 'boarding_volta_done_at' : 'boarding_ida_done_at';
+      await supabase
+        .from('excursion_requests')
+        .update({ [doneCol]: new Date().toISOString() } as never)
+        .eq('id', excursionId);
       navigation.navigate('EmbarqueConcluido', {
         excursionId,
         boarded,
@@ -168,7 +174,7 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
         phase,
       });
     },
-    [excursionId, navigation, totalAmountCents, statusOf, phase],
+    [excursionId, navigation, totalAmountCents, statusOf, phase, isVolta],
   );
 
   const tryFinalize = useCallback(() => {
@@ -176,7 +182,7 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
       setModal('pending');
       return;
     }
-    navigateSuccess(passengers);
+    void navigateSuccess(passengers);
   }, [notEmbarkedUnjustified.length, navigateSuccess, passengers]);
 
   const embarkOrUndo = useCallback(
@@ -327,12 +333,12 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
       );
       return;
     }
-    navigateSuccess(list);
+    void navigateSuccess(list);
   }, [excursionId, justifySelected, navigateSuccess, isVolta, statusOf]);
 
   const finishAnyway = useCallback(() => {
     setModal('none');
-    navigateSuccess(passengers);
+    void navigateSuccess(passengers);
   }, [navigateSuccess, passengers]);
 
   return (
