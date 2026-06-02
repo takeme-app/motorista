@@ -19,6 +19,18 @@ import { supabase } from '../../lib/supabase';
 import { PaymentMethodSection, type CardPaymentConfirmParams, type PaymentMethodType } from '../../components/PaymentMethodSection';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
+import * as FileSystem from 'expo-file-system/legacy';
+import { shareLocalFile } from '../../utils/shareLocalFile';
+
+// expo-print é módulo nativo: dev clients antigos podem não tê-lo embutido.
+// Carregamos de forma resiliente para a tela não quebrar sem o módulo.
+let Print: typeof import('expo-print') | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  Print = require('expo-print') as typeof import('expo-print');
+} catch {
+  Print = null;
+}
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ExcursionBudget'>;
 
@@ -78,6 +90,70 @@ function formatCents(cents: number): string {
   return `R$ ${(cents / 100).toFixed(2).replace('.', ',')}`;
 }
 
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** Monta o HTML do orçamento que o expo-print converte em PDF. */
+function buildBudgetHtml(args: {
+  destination: string;
+  dateLabel: string;
+  peopleCount: number;
+  lines: BudgetLine[];
+  total: number;
+  generatedAt: string;
+}): string {
+  const { destination, dateLabel, peopleCount, lines, total, generatedAt } = args;
+  const rows = lines.length
+    ? lines
+        .map(
+          (l) => `
+        <tr>
+          <td class="label">${escapeHtml(l.label)}</td>
+          <td class="value">${escapeHtml(formatCents(l.amount_cents))}</td>
+        </tr>`,
+        )
+        .join('')
+    : `<tr><td class="label" colspan="2">Orçamento em preparação.</td></tr>`;
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, Roboto, 'Segoe UI', sans-serif; color: #0d0d0d; margin: 0; padding: 32px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .subtitle { color: #767676; font-size: 13px; margin: 0 0 24px; }
+  .summary { background: #f1f1f1; border-radius: 12px; padding: 16px; margin-bottom: 20px; }
+  .summary-row { font-size: 14px; margin: 4px 0; }
+  .summary-row b { font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+  td { padding: 10px 0; border-bottom: 1px solid #e2e2e2; font-size: 14px; }
+  td.value { text-align: right; }
+  .total { display: flex; justify-content: space-between; padding-top: 12px; border-top: 2px solid #0d0d0d; font-size: 18px; font-weight: 700; }
+  .footer { margin-top: 32px; color: #767676; font-size: 11px; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <h1>Orçamento da excursão</h1>
+  <p class="subtitle">Take Me — gerado em ${escapeHtml(generatedAt)}</p>
+  <div class="summary">
+    <div class="summary-row"><b>Destino:</b> ${escapeHtml(destination)}</div>
+    <div class="summary-row"><b>Data:</b> ${escapeHtml(dateLabel)}</div>
+    <div class="summary-row"><b>Pessoas:</b> ${peopleCount}</div>
+  </div>
+  <table>${rows}</table>
+  <div class="total"><span>Total</span><span>${escapeHtml(formatCents(total))}</span></div>
+  <p class="footer">Documento gerado pelo app Take Me. Os valores podem sofrer ajustes até a confirmação da excursão.</p>
+</body>
+</html>`;
+}
+
 export function ExcursionBudgetScreen({ navigation, route }: Props) {
   const excursionRequestId = route.params?.excursionRequestId ?? '';
   const [detail, setDetail] = useState<ExcursionBudgetDetail | null>(null);
@@ -85,6 +161,7 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
   const [savingPayment, setSavingPayment] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('pix');
   const [pixPaymentInfo, setPixPaymentInfo] = useState<PixPaymentInfo | null>(null);
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,6 +187,7 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
       if (savedMethod === 'credit_card') setSelectedPaymentMethod('credito');
       else if (savedMethod === 'debit_card') setSelectedPaymentMethod('debito');
       else if (savedMethod === 'pix') setSelectedPaymentMethod('pix');
+      else if (savedMethod === 'cash') setSelectedPaymentMethod('dinheiro');
       setLoading(false);
     })();
     return () => { cancelled = true; };
@@ -137,6 +215,44 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
       Alert.alert('Orçamento', 'Este orçamento ainda não tem valor para pagamento.');
       return;
     }
+
+    // Dinheiro: não passa pelo Stripe. Confirma direto via confirm-excursion-cash,
+    // que aprova o orçamento e cria os payouts (espelha o stripe-webhook).
+    if (params.method === 'dinheiro') {
+      setSavingPayment(true);
+      setPixPaymentInfo(null);
+      try {
+        const { data: refreshData } = await supabase.auth.refreshSession();
+        const { data: { session } } = await supabase.auth.getSession();
+        const accessToken = refreshData.session?.access_token ?? session?.access_token;
+        if (!accessToken) {
+          Alert.alert('Pagamento', 'Faça login novamente para concluir o pagamento.');
+          return;
+        }
+        const { data, error } = await supabase.functions.invoke('confirm-excursion-cash', {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          body: { excursion_request_id: detail.id },
+        });
+        const payload = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+        const edgeError =
+          error || (typeof payload.error === 'string' && payload.error.trim() ? { message: payload.error.trim() } : null);
+        if (edgeError) {
+          const message = await describeInvokeFailure(data, edgeError);
+          Alert.alert('Pagamento', message || 'Não foi possível confirmar o pagamento em dinheiro.');
+          return;
+        }
+        setDetail((prev) => prev ? { ...prev, payment_method: 'cash', status: 'approved' } : prev);
+        Alert.alert(
+          'Pagamento em dinheiro',
+          'Orçamento confirmado. O valor total será pago em mãos ao motorista. Sua excursão será preparada.',
+          [{ text: 'OK', onPress: () => navigation.goBack() }],
+        );
+      } finally {
+        setSavingPayment(false);
+      }
+      return;
+    }
+
     const payment_method =
       params.method === 'credito'
         ? 'credit_card'
@@ -197,24 +313,50 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
     }
   };
 
-  const handleDownloadBudget = () => {
-    if (!detail) return;
-    const lines = normalizeBudgetLines(detail.budget_lines);
-    const total = detail.total_amount_cents ?? 0;
-    const text = [
-      'Resumo da excursão',
-      `Destino: ${detail.destination}`,
-      `Data: ${formatDate(detail.excursion_date)}`,
-      `Pessoas: ${detail.people_count}`,
-      '',
-      'Orçamento',
-      ...lines.map((l) => `${l.label}: ${formatCents(l.amount_cents)}`),
-      '',
-      `Total: ${formatCents(total)}`,
-    ].join('\n');
-    Alert.alert('Orçamento', 'Conteúdo do orçamento gerado. Em produção você pode compartilhar ou salvar como arquivo.', [
-      { text: 'OK' },
-    ]);
+  const handleDownloadBudget = async () => {
+    if (!detail || downloading) return;
+    if (!Print) {
+      Alert.alert('Baixar orçamento', 'Atualize o app para baixar o orçamento em PDF.');
+      return;
+    }
+    setDownloading(true);
+    try {
+      const lines = normalizeBudgetLines(detail.budget_lines);
+      const total = detail.total_amount_cents ?? 0;
+      const html = buildBudgetHtml({
+        destination: detail.destination,
+        dateLabel: formatDate(detail.excursion_date),
+        peopleCount: detail.people_count,
+        lines,
+        total,
+        generatedAt: new Date().toLocaleDateString('pt-BR'),
+      });
+      const { uri } = await Print.printToFileAsync({ html });
+      // expo-print gera nome aleatório; renomeia para um nome amigável.
+      let fileUri = uri;
+      const stamp = new Date().toISOString().slice(0, 10);
+      const dest = `${FileSystem.cacheDirectory}orcamento-excursao-takeme-${stamp}.pdf`;
+      try {
+        await FileSystem.deleteAsync(dest, { idempotent: true });
+        await FileSystem.moveAsync({ from: uri, to: dest });
+        fileUri = dest;
+      } catch {
+        /* mantém o uri original se o rename falhar */
+      }
+      const shared = await shareLocalFile(fileUri, {
+        mimeType: 'application/pdf',
+        uti: 'com.adobe.pdf',
+        dialogTitle: 'Baixar orçamento da excursão',
+        fallbackTitle: 'Orçamento da excursão — Take Me',
+      });
+      if (!shared.shared) {
+        Alert.alert('Baixar orçamento', 'Atualize o app para baixar o orçamento em PDF neste dispositivo.');
+      }
+    } catch {
+      Alert.alert('Erro', 'Não foi possível gerar o PDF. Tente novamente.');
+    } finally {
+      setDownloading(false);
+    }
   };
 
   if (loading) {
@@ -304,9 +446,13 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
               </View>
             </View>
 
-            <TouchableOpacity style={styles.downloadButton} onPress={handleDownloadBudget}>
-              <MaterialIcons name="download" size={20} color={COLORS.black} />
-              <Text style={styles.downloadButtonText}>Baixar orçamento</Text>
+            <TouchableOpacity style={styles.downloadButton} onPress={handleDownloadBudget} disabled={downloading}>
+              {downloading ? (
+                <ActivityIndicator size="small" color={COLORS.black} />
+              ) : (
+                <MaterialIcons name="download" size={20} color={COLORS.black} />
+              )}
+              <Text style={styles.downloadButtonText}>{downloading ? 'Gerando PDF…' : 'Baixar orçamento'}</Text>
             </TouchableOpacity>
           </>
         ) : (
@@ -367,14 +513,16 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
                   ? 'credit_card'
                   : method === 'debito'
                     ? 'debit_card'
-                    : method,
+                    : method === 'dinheiro'
+                      ? 'cash'
+                      : method,
               );
             }}
             onConfirmPayment={handleConfirmPayment}
             confirmLabel="Pagar orçamento"
             cancellationPolicyVariant="trip"
             loading={savingPayment}
-            allowedMethods={['credito', 'debito', 'pix']}
+            allowedMethods={['credito', 'debito', 'pix', 'dinheiro']}
           />
         ) : null}
       </ScrollView>

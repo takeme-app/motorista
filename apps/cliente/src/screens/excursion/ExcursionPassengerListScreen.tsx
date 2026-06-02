@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -10,6 +10,7 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
@@ -90,9 +91,13 @@ export function ExcursionPassengerListScreen({ navigation, route }: Props) {
     setLoading(false);
   }, [excursionRequestId]);
 
-  useEffect(() => {
-    loadPassengers();
-  }, [loadPassengers]);
+  // Recarrega sempre que a tela ganha foco (ex.: ao voltar do cadastro de
+  // passageiro), garantindo que a lista reflita o passageiro recém-adicionado.
+  useFocusEffect(
+    useCallback(() => {
+      loadPassengers();
+    }, [loadPassengers]),
+  );
 
   const statusForSegment = (p: Passenger) => segment === 'ida' ? p.status_departure : p.status_return;
 

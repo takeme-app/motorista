@@ -5,7 +5,6 @@ import {
   TextInput,
   StyleSheet,
   FlatList,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   Image,
@@ -14,7 +13,8 @@ import {
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -147,7 +147,7 @@ const cameraPickerOptions: ImagePicker.ImagePickerOptions = {
 
 export function ChatScreen({ navigation, route }: Props) {
   const { conversationId, participantName, participantAvatar } = route.params;
-  const insets = useSafeAreaInsets();
+  const composerBottom = useBottomSafeInset({ extra: 6 });
   const { showAlert } = useAppAlert();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
@@ -534,11 +534,10 @@ export function ChatScreen({ navigation, route }: Props) {
         <View style={styles.headerSpacer} />
       </View>
 
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior="padding"
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : insets.top + 56}
-      >
+      {/* Sem KeyboardAvoidingView: o app usa ADJUST_PAN global (App.tsx) para
+          trazer o composer acima do teclado. Um KAV aqui conflitava com o pan
+          e escondia o campo de texto. */}
+      <View style={styles.flex}>
         {loading ? (
           <View style={styles.center}>
             <ActivityIndicator size="large" color={GOLD} />
@@ -565,7 +564,7 @@ export function ChatScreen({ navigation, route }: Props) {
           <View
             style={[
               styles.composer,
-              { paddingBottom: Math.max(insets.bottom, 10) + 6 },
+              { paddingBottom: composerBottom },
             ]}
           >
             {isRecording ? (
@@ -638,7 +637,7 @@ export function ChatScreen({ navigation, route }: Props) {
             </View>
           </View>
         )}
-      </KeyboardAvoidingView>
+      </View>
     </SafeAreaView>
   );
 }
