@@ -19,6 +19,7 @@ import { supabase } from '../../lib/supabase';
 import { ensureExcursionClientConversation } from '../../lib/excursionClientConversation';
 import { navigateExcursionTabToChatThread } from '../../navigation/excursionNavigateToChat';
 import { passengerTotalLabel } from './excursionFormat';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 import {
   statusCfg,
   statusOrder,
@@ -76,6 +77,7 @@ function DateLine({ iso, direction }: { iso: string | null; direction: string })
 }
 
 export function HomeExcursoesScreen({ navigation }: Props) {
+  const { showConfirm, showAlert } = useAppAlert();
   const [loading, setLoading] = useState(true);
   const [excursions, setExcursions] = useState<Excursion[]>([]);
   const [openingChatExcursionId, setOpeningChatExcursionId] = useState<string | null>(null);
@@ -174,25 +176,23 @@ export function HomeExcursoesScreen({ navigation }: Props) {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const confirmComplete = useCallback((id: string) => {
-    Alert.alert('Concluir excursão', 'Deseja realmente concluir a excursão?', [
-      { text: 'Não', style: 'cancel' },
-      {
-        text: 'Sim',
-        style: 'destructive',
-        onPress: async () => {
-          const { error } = await supabase
-            .from('excursion_requests')
-            .update({ status: 'completed', updated_at: new Date().toISOString() } as never)
-            .eq('id', id);
-          if (error) {
-            Alert.alert('Erro', 'Não foi possível concluir a excursão.');
-            return;
-          }
-          await load();
-        },
+    showConfirm('Concluir excursão', 'Deseja realmente concluir a excursão?', {
+      confirmLabel: 'Sim',
+      cancelLabel: 'Não',
+      destructive: true,
+      onConfirm: async () => {
+        const { error } = await supabase
+          .from('excursion_requests')
+          .update({ status: 'completed', updated_at: new Date().toISOString() } as never)
+          .eq('id', id);
+        if (error) {
+          showAlert('Erro', 'Não foi possível concluir a excursão.');
+          return;
+        }
+        await load();
       },
-    ]);
-  }, [load]);
+    });
+  }, [load, showConfirm, showAlert]);
 
   const toggleExpand = useCallback((id: string) => {
     setExcursions((prev) => prev.map((e) => e.id === id ? { ...e, expanded: !e.expanded } : e));
