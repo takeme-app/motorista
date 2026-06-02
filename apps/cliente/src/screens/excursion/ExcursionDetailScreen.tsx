@@ -354,17 +354,6 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
         <StatusTimeline status={detail.status} />
 
         <Text style={styles.sectionTitle}>Detalhes</Text>
-        {detail.driver_id ? (
-          <TouchableOpacity style={styles.linkRow} onPress={() => setShowDriverSheet(true)}>
-            <Text style={styles.linkLabel}>Ver motorista</Text>
-            <Text style={styles.linkAction}>Ver detalhes</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.linkRow}>
-            <Text style={styles.linkLabelMuted}>Motorista</Text>
-            <Text style={styles.linkMuted}>Ainda não designado</Text>
-          </View>
-        )}
         {detail.preparer_id ? (
           <TouchableOpacity style={styles.linkRow} onPress={() => setShowPreparerSheet(true)}>
             <Text style={styles.linkLabel}>Ver preparador</Text>
