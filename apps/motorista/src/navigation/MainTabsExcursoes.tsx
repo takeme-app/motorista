@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { ProfileStackParamList, ChatExcStackParamList } from './types';
 import type { PagamentosExcStackParamList } from './PagamentosExcursoesStack';
 import { ColetasExcursoesStack } from './ColetasExcursoesStack';
+import { HomeExcursoesStack } from './HomeExcursoesStack';
 import { ChatExcursoesStack } from './ChatExcursoesStack';
 import { PagamentosExcursoesStack } from './PagamentosExcursoesStack';
 import { PerfilExcursoesStack } from './PerfilExcursoesStack';
@@ -52,7 +53,7 @@ export function MainTabsExcursoes() {
     >
       <Tab.Screen
         name="HomeExc"
-        component={ColetasExcursoesStack}
+        component={HomeExcursoesStack}
         options={({ route }) => {
           const focused = getFocusedRouteNameFromRoute(route) ?? 'ColetasMain';
           const hideTab =

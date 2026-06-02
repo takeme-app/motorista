@@ -19,15 +19,6 @@ import { supabase } from '../../lib/supabase';
 import { ensureExcursionClientConversation } from '../../lib/excursionClientConversation';
 import { navigateExcursionTabToChatThread } from '../../navigation/excursionNavigateToChat';
 import { passengerTotalLabel } from './excursionFormat';
-import {
-  statusCfg,
-  statusOrder,
-  fleetTypeLabel,
-  BOARDING_STATUSES,
-  TIMELINE_LABELS,
-  timelineSteps,
-  formatTimelineSubtitle,
-} from './excursionStatus';
 
 type Props = NativeStackScreenProps<ColetasExcursoesStackParamList, 'ColetasMain'>;
 
@@ -50,7 +41,94 @@ type Excursion = {
   registeredPassengerCount: number;
 };
 
+type StatusConfig = { label: string; bg: string; text: string; border: string };
+
+const STATUS_MAP: Record<string, StatusConfig> = {
+  contacted:       { label: 'Em andamento',       bg: '#FEF3C7', text: '#92400E', border: '#C9A227' },
+  in_progress:     { label: 'Em andamento',       bg: '#FEF3C7', text: '#92400E', border: '#C9A227' },
+  scheduled:       { label: 'Em andamento',       bg: '#FEF3C7', text: '#92400E', border: '#C9A227' },
+  active:          { label: 'Em andamento',       bg: '#FEF3C7', text: '#92400E', border: '#C9A227' },
+  payment_done:    { label: 'Pagamento realizado', bg: '#DBEAFE', text: '#1E40AF', border: '#E5E7EB' },
+  paid:            { label: 'Pagamento realizado', bg: '#DBEAFE', text: '#1E40AF', border: '#E5E7EB' },
+  approved:        { label: 'Pagamento realizado', bg: '#DBEAFE', text: '#1E40AF', border: '#E5E7EB' },
+  quoted:          { label: 'Orçamento enviado',  bg: '#E0E7FF', text: '#3730A3', border: '#E5E7EB' },
+  in_analysis:     { label: 'Em análise',         bg: '#F3F4F6', text: '#374151', border: '#E5E7EB' },
+  pending:         { label: 'Pendente',           bg: '#F3F4F6', text: '#374151', border: '#E5E7EB' },
+  pending_rating:  { label: 'Avaliação Pendente', bg: '#E8EEF9', text: '#1E3A5F', border: '#E5E7EB' },
+  confirmed:       { label: 'Concluído',          bg: '#D1FAE5', text: '#065F46', border: '#E5E7EB' },
+  completed:       { label: 'Concluído',          bg: '#D1FAE5', text: '#065F46', border: '#E5E7EB' },
+  cancelled:       { label: 'Cancelado',          bg: '#FEE2E2', text: '#991B1B', border: '#E5E7EB' },
+};
+
+const DEFAULT_STATUS: StatusConfig = { label: 'Pendente', bg: '#F3F4F6', text: '#374151', border: '#E5E7EB' };
+
+type ListTab = 'progress' | 'upcoming' | 'history';
+
+const TAB_DEFS: { key: ListTab; label: string }[] = [
+  { key: 'progress', label: 'Em andamento' },
+  { key: 'upcoming', label: 'Próximas excursões' },
+  { key: 'history', label: 'Histórico' },
+];
+
+const TAB_PROGRESS = new Set(['in_progress', 'scheduled', 'contacted', 'active', 'payment_done', 'paid']);
+const TAB_UPCOMING = new Set(['pending', 'quoted', 'in_analysis', 'approved']);
+const TAB_HISTORY = new Set(['completed', 'cancelled', 'pending_rating', 'confirmed']);
+
 const CARD_GOLD = '#C9A227';
+const LIST_BOARDING_STATUSES = new Set([
+  'approved', 'scheduled', 'in_progress', 'payment_done', 'paid', 'active',
+]);
+
+const LIST_TIMELINE_LABELS = ['Pedido feito', 'Pagamento aprovado', 'Embarque confirmado', 'Ônibus partiu'];
+
+function listTimelineSteps(status: string): boolean[] {
+  const afterPayment = [
+    'approved', 'scheduled', 'in_progress', 'completed',
+    'payment_done', 'paid', 'pending_rating', 'confirmed',
+  ];
+  const afterBoarding = ['scheduled', 'in_progress', 'completed', 'confirmed'];
+  const afterDeparted = ['in_progress', 'completed'];
+  return [
+    true,
+    afterPayment.includes(status),
+    afterBoarding.includes(status),
+    afterDeparted.includes(status),
+  ];
+}
+
+function formatTimelineSubtitle(iso: string | null): string {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const day = d.getDate().toString().padStart(2, '0');
+    const mon = months[d.getMonth()] ?? '';
+    const time = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    return `${day} ${mon}, ${time}`;
+  } catch { return '—'; }
+}
+
+function excursionMatchesTab(status: string, tab: ListTab): boolean {
+  const s = status || 'pending';
+  if (tab === 'history') return TAB_HISTORY.has(s);
+  if (tab === 'progress') return TAB_PROGRESS.has(s);
+  return TAB_UPCOMING.has(s) || (!TAB_PROGRESS.has(s) && !TAB_HISTORY.has(s));
+}
+
+function fleetTypeLabel(v: string | null | undefined): string {
+  if (!v) return 'Van';
+  const m: Record<string, string> = {
+    carro: 'Carro',
+    van: 'Van',
+    micro_onibus: 'Micro-ônibus',
+    onibus: 'Ônibus Executivo',
+  };
+  return m[v] ?? v;
+}
+
+function statusCfg(status: string): StatusConfig {
+  return STATUS_MAP[status] ?? DEFAULT_STATUS;
+}
 
 function DateLine({ iso, direction }: { iso: string | null; direction: string }) {
   if (!iso) {
@@ -74,6 +152,7 @@ function DateLine({ iso, direction }: { iso: string | null; direction: string })
 
 export function ColetasExcursoesScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true);
+  const [listTab, setListTab] = useState<ListTab>('progress');
   const [excursions, setExcursions] = useState<Excursion[]>([]);
   const [openingChatExcursionId, setOpeningChatExcursionId] = useState<string | null>(null);
 
@@ -85,7 +164,7 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
     const { data, error } = await supabase
       .from('excursion_requests')
       .select(
-        'id, destination, excursion_date, scheduled_departure_at, scheduled_return_at, excursion_time, check_in_volta_started_at, fleet_type, status, user_id, created_at, confirmed_at',
+        'id, destination, excursion_date, scheduled_departure_at, fleet_type, status, user_id, created_at, confirmed_at',
       )
       .eq('preparer_id', user.id)
       .order('created_at', { ascending: false })
@@ -140,20 +219,19 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
       const clientAvatarUrl = pr?.avatar_url?.trim() ? pr.avatar_url.trim() : null;
 
       const depIso = r.scheduled_departure_at ?? r.excursion_date ?? null;
-      const retIso = r.scheduled_return_at ?? null;
-      const originText = (typeof r.origin === 'string' && r.origin.trim()) ? r.origin.trim() : 'Origem a definir';
+      const retIso = null;
 
       list.push({
         id: r.id,
-        origin: originText,
+        origin: 'Origem a definir',
         destination: r.destination ?? 'Destino',
         departureTime: depIso,
         returnTime: retIso,
         transportType: fleetTypeLabel(r.fleet_type),
         responsible,
-        direction: r.check_in_volta_started_at ? 'Retorno' : 'Ida',
+        direction: 'Ida',
         status: r.status ?? 'pending',
-        expanded: false,
+        expanded: true,
         createdAt: r.created_at ?? null,
         confirmedAt: r.confirmed_at ?? null,
         clientPhone,
@@ -199,13 +277,7 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
     [navigation],
   );
 
-  const filtered = [...excursions].sort((a, b) => {
-    const so = statusOrder(a.status) - statusOrder(b.status);
-    if (so !== 0) return so;
-    const ta = a.departureTime ? new Date(a.departureTime).getTime() : 0;
-    const tb = b.departureTime ? new Date(b.departureTime).getTime() : 0;
-    return ta - tb;
-  });
+  const filtered = excursions.filter((e) => excursionMatchesTab(e.status, listTab));
   const showBack = navigation.canGoBack();
 
   return (
@@ -232,20 +304,43 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
         </View>
       </View>
 
+      <View style={styles.tabsRow}>
+        {TAB_DEFS.map((t) => {
+          const active = listTab === t.key;
+          return (
+            <TouchableOpacity
+              key={t.key}
+              style={styles.tabBtn}
+              onPress={() => setListTab(t.key)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.tabLabel, active && styles.tabLabelActive]} numberOfLines={1}>
+                {t.label}
+              </Text>
+              {active ? <View style={styles.tabUnderline} /> : <View style={styles.tabUnderlinePlaceholder} />}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
       {loading ? (
         <ActivityIndicator size="large" color="#111827" style={{ marginTop: 48 }} />
       ) : filtered.length === 0 ? (
         <View style={styles.emptyState}>
           <MaterialIcons name="directions-bus" size={48} color="#D1D5DB" />
-          <Text style={styles.emptyText}>Nenhuma excursão ainda</Text>
+          <Text style={styles.emptyText}>
+            {excursions.length === 0 ? 'Nenhuma excursão ainda' : 'Nada nesta aba'}
+          </Text>
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
           {filtered.map((exc) => {
             const cfg = statusCfg(exc.status);
-            const prominent = ['in_progress', 'scheduled', 'contacted', 'active'].includes(exc.status);
-            const showBoardingBlock = BOARDING_STATUSES.has(exc.status);
-            const tlSteps = timelineSteps(exc.status);
+            const prominent =
+              listTab === 'progress' &&
+              ['in_progress', 'scheduled', 'contacted'].includes(exc.status);
+            const showBoardingBlock = listTab === 'progress' && LIST_BOARDING_STATUSES.has(exc.status);
+            const tlSteps = listTimelineSteps(exc.status);
             const tlSubs = [
               formatTimelineSubtitle(exc.createdAt),
               formatTimelineSubtitle(exc.confirmedAt),
@@ -297,41 +392,17 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
                     ) : null}
                   </View>
 
-                  <View style={styles.detailsSection}>
-                    <DetailRow
-                      label="Passageiros totais"
-                      value={passengerTotalLabel(exc.registeredPassengerCount)}
-                    />
-                    <DetailRow label="Tipo de transporte" value={exc.transportType} />
-                    <DetailRow label="Responsável" value={exc.responsible} />
-                    <DetailRow label="Navegação" value={exc.direction} />
-                  </View>
-
                   {exc.expanded && (
                     <>
-                      <Text style={styles.inlineHistoricoTitle}>Histórico</Text>
-                      {TIMELINE_LABELS.map((label, idx) => (
-                        <View key={label} style={styles.tlRow}>
-                          <View style={styles.tlDotCol}>
-                            <View
-                              style={[styles.tlDot, tlSteps[idx] ? styles.tlDotDone : styles.tlDotPending]}
-                            />
-                            {idx < TIMELINE_LABELS.length - 1 ? (
-                              <View
-                                style={[styles.tlLine, tlSteps[idx] ? styles.tlLineDone : styles.tlLinePending]}
-                              />
-                            ) : null}
-                          </View>
-                          <View style={styles.tlContent}>
-                            <Text style={[styles.tlLabel, tlSteps[idx] ? styles.tlLabelDone : styles.tlLabelPending]}>
-                              {label}
-                            </Text>
-                            <Text style={[styles.tlSub, tlSteps[idx] ? styles.tlSubDone : styles.tlSubPending]}>
-                              {tlSubs[idx]}
-                            </Text>
-                          </View>
-                        </View>
-                      ))}
+                      <View style={styles.detailsSection}>
+                        <DetailRow
+                          label="Passageiros totais"
+                          value={passengerTotalLabel(exc.registeredPassengerCount)}
+                        />
+                        <DetailRow label="Tipo de transporte" value={exc.transportType} />
+                        <DetailRow label="Responsável" value={exc.responsible} />
+                        <DetailRow label="Navegação" value={exc.direction} />
+                      </View>
                       {showBoardingBlock ? (
                         <>
                           <TouchableOpacity
@@ -347,6 +418,45 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
                             )}
                             <Text style={styles.whatsappText}>Contato do responsável</Text>
                           </TouchableOpacity>
+                          <Text style={styles.inlineHistoricoTitle}>Histórico</Text>
+                          {LIST_TIMELINE_LABELS.map((label, idx) => (
+                            <View key={label} style={styles.tlRow}>
+                              <View style={styles.tlDotCol}>
+                                <View
+                                  style={[
+                                    styles.tlDot,
+                                    tlSteps[idx] ? styles.tlDotDone : styles.tlDotPending,
+                                  ]}
+                                />
+                                {idx < LIST_TIMELINE_LABELS.length - 1 ? (
+                                  <View
+                                    style={[
+                                      styles.tlLine,
+                                      tlSteps[idx] ? styles.tlLineDone : styles.tlLinePending,
+                                    ]}
+                                  />
+                                ) : null}
+                              </View>
+                              <View style={styles.tlContent}>
+                                <Text
+                                  style={[
+                                    styles.tlLabel,
+                                    tlSteps[idx] ? styles.tlLabelDone : styles.tlLabelPending,
+                                  ]}
+                                >
+                                  {label}
+                                </Text>
+                                <Text
+                                  style={[
+                                    styles.tlSub,
+                                    tlSteps[idx] ? styles.tlSubDone : styles.tlSubPending,
+                                  ]}
+                                >
+                                  {tlSubs[idx]}
+                                </Text>
+                              </View>
+                            </View>
+                          ))}
                           <TouchableOpacity
                             style={styles.cardBtnBlack}
                             onPress={() => navigation.navigate('RealizarEmbarques', { excursionId: exc.id })}
