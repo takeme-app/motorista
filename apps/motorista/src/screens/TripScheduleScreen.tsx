@@ -101,7 +101,8 @@ export function TripScheduleScreen({ navigation, route }: Props) {
           worker_routes ( origin_address, destination_address )`,
         )
         .eq('driver_id', user.id)
-        .neq('status', 'cancelled')
+        .eq('is_active', true)
+        .in('status', ['active', 'scheduled'])
         .order('departure_at', { ascending: true });
 
       if (res.error) {
@@ -109,7 +110,8 @@ export function TripScheduleScreen({ navigation, route }: Props) {
           .from('scheduled_trips')
           .select(baseSelect)
           .eq('driver_id', user.id)
-          .neq('status', 'cancelled')
+          .eq('is_active', true)
+          .in('status', ['active', 'scheduled'])
           .order('departure_at', { ascending: true });
       }
 
@@ -182,6 +184,29 @@ export function TripScheduleScreen({ navigation, route }: Props) {
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Realtime: status muda (active → completed/cancelled) ou is_active flipa
+  // → recarrega para refletir sem precisar pull-to-refresh.
+  useFocusEffect(
+    useCallback(() => {
+      let userId: string | null = null;
+      let channel: ReturnType<typeof supabase.channel> | null = null;
+      void (async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user?.id) return;
+        userId = user.id;
+        channel = supabase
+          .channel(`trip-schedule-${userId}`)
+          .on(
+            'postgres_changes' as never,
+            { event: '*', schema: 'public', table: 'scheduled_trips', filter: `driver_id=eq.${userId}` } as never,
+            () => { void load(); },
+          )
+          .subscribe();
+      })();
+      return () => { if (channel) void supabase.removeChannel(channel); };
+    }, [load]),
+  );
 
   const toggle = (dayIdx: number) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);

@@ -61,6 +61,7 @@ export function ProfileOverviewScreen({ navigation }: Props) {
   const [pixModal, setPixModal] = useState(false);
   const [deleteModal1, setDeleteModal1] = useState(false);
   const [deleteModal2, setDeleteModal2] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -145,10 +146,58 @@ export function ProfileOverviewScreen({ navigation }: Props) {
 
   const confirmDeleteAccount = () => { resetDel1(); setDeleteModal1(true); };
 
-  const handleFinalDelete = async () => {
+  // Após a exclusão a sessão fica inválida: confirma se o usuário realmente sumiu
+  // antes de tratar um erro de rede como falha (mesmo padrão do app cliente).
+  const checkUserGone = async (): Promise<boolean> => {
+    try {
+      const {
+        data: { user },
+        error,
+      } = await supabase.auth.getUser();
+      return Boolean(error) || !user;
+    } catch {
+      return true;
+    }
+  };
+
+  const finishDeletion = async () => {
     setDeleteModal2(false);
     await handleLogout();
-    showAlert('Conta', 'Para concluir a exclusão definitiva, fale com o suporte TakeMe.');
+    showAlert('Conta excluída', 'Sua conta foi excluída com sucesso.');
+  };
+
+  const handleFinalDelete = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('delete-account', {
+        body: { confirm: 'EXCLUIR' },
+      });
+      if (error || data?.error || !data?.ok) {
+        if (await checkUserGone()) {
+          await finishDeletion();
+          return;
+        }
+        const backendMsg = typeof data?.error === 'string' ? data.error : '';
+        showAlert(
+          'Erro',
+          getUserErrorMessage(
+            error ?? { message: data?.error },
+            backendMsg || 'Não foi possível excluir a conta. Tente novamente.'
+          )
+        );
+        return;
+      }
+      await finishDeletion();
+    } catch (e: unknown) {
+      if (await checkUserGone()) {
+        await finishDeletion();
+        return;
+      }
+      showAlert('Erro', getUserErrorMessage(e, 'A requisição demorou ou falhou. Tente novamente.'));
+    } finally {
+      setDeleting(false);
+    }
   };
 
   if (loading || !data) {
@@ -300,11 +349,25 @@ export function ProfileOverviewScreen({ navigation }: Props) {
             <Text style={delStyles.body}>
               Você também perderá acesso aos seus métodos de pagamento, histórico de atividades e dados de dependentes vinculados à conta.
             </Text>
-            <TouchableOpacity style={delStyles.keepBtn} onPress={() => setDeleteModal2(false)} activeOpacity={0.85}>
+            <TouchableOpacity
+              style={delStyles.keepBtn}
+              onPress={() => setDeleteModal2(false)}
+              activeOpacity={0.85}
+              disabled={deleting}
+            >
               <Text style={delStyles.keepBtnText}>Manter conta</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={delStyles.deleteBtn} onPress={handleFinalDelete} activeOpacity={0.85}>
-              <Text style={delStyles.deleteBtnText}>Prosseguir com a exclusão</Text>
+            <TouchableOpacity
+              style={[delStyles.deleteBtn, deleting && delStyles.deleteBtnDisabled]}
+              onPress={handleFinalDelete}
+              activeOpacity={0.85}
+              disabled={deleting}
+            >
+              {deleting ? (
+                <ActivityIndicator color="#EF4444" />
+              ) : (
+                <Text style={delStyles.deleteBtnText}>Prosseguir com a exclusão</Text>
+              )}
             </TouchableOpacity>
           </Animated.View>
         </View>
@@ -436,5 +499,6 @@ const delStyles = StyleSheet.create({
     backgroundColor: '#F3F4F6', borderRadius: 14, paddingVertical: 18,
     alignItems: 'center',
   },
+  deleteBtnDisabled: { opacity: 0.7 },
   deleteBtnText: { color: '#EF4444', fontSize: 16, fontWeight: '600' },
 });

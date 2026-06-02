@@ -13,6 +13,7 @@ import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { AddressAutocomplete } from './AddressAutocomplete';
 import { WhenTimeSheets } from './WhenTimeSheets';
 import { MapboxMap, MapboxMarker, MapboxPolyline } from './mapbox';
@@ -91,6 +92,7 @@ export function AddressSelectionScreen({
   laterSubtitle,
 }: Props) {
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset();
   const { showAlert } = useAppAlert();
   const origin = useOriginLocation({ extractCity: extractOriginCity });
   const when = useWhenTimeSelection();
@@ -287,12 +289,12 @@ export function AddressSelectionScreen({
 
       {/* Content card overlapping map */}
       <View style={styles.cardContainer}>
-        <KeyboardAvoidingView style={styles.flex} behavior="padding">
+        <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <ScrollView
             style={styles.flex}
             contentContainerStyle={[
               styles.scrollContent,
-              continueBottomHidden && { paddingBottom: Math.max(insets.bottom, 24) },
+              continueBottomHidden && { paddingBottom: bottomInset },
             ]}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
@@ -412,7 +414,7 @@ export function AddressSelectionScreen({
 
           {/* Continue button */}
           {!continueBottomHidden && (
-            <View style={[styles.bottomButtonWrap, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+            <View style={[styles.bottomButtonWrap, { paddingBottom: bottomInset }]}>
               <TouchableOpacity
                 style={[styles.continueButton, !destinationConfirmed && styles.continueButtonDisabled]}
                 onPress={handleBottomPress}

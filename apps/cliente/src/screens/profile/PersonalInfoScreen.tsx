@@ -16,6 +16,7 @@ import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { displayCpf as formatCpfDisplay } from '../../utils/formatCpf';
+import { displayEmail as computeDisplayEmail } from '../../utils/loginMethod';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'PersonalInfo'>;
 
@@ -63,7 +64,7 @@ export function PersonalInfoScreen({ navigation }: Props) {
       setLoading(false);
       return;
     }
-    setEmail(user.email ?? '');
+    setEmail(computeDisplayEmail(user));
     const nameFromAuth = (user.user_metadata?.full_name ?? user.user_metadata?.name ?? '').trim();
     const phoneFromAuth = (user.user_metadata?.phone ?? '').trim();
     setAuthFallback({ full_name: nameFromAuth, phone: phoneFromAuth });

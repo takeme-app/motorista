@@ -7,8 +7,9 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -68,7 +69,7 @@ export function CadastrarPassageiroExcursaoScreen({ navigation, route }: Props) 
       <StatusBar style="dark" />
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior="padding"
+        behavior="height"
       >
         <View style={styles.handle} />
         <View style={styles.header}>

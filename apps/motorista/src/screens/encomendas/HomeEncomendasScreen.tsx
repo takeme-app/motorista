@@ -13,6 +13,7 @@ let Location: any = null;
 try { Location = require('expo-location'); } catch { /* expo-location not available */ }
 import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -69,6 +70,7 @@ type Promotion = {
 
 export function HomeEncomendasScreen() {
   const { showAlert } = useAppAlert();
+  const modalBottom = useBottomSafeInset({ extra: 16 });
   const [preparadorName, setPreparadorName] = useState('Preparador');
   const [gpsEnabled, setGpsEnabled] = useState(false);
   const [notifEnabled, setNotifEnabled] = useState(false);
@@ -238,6 +240,18 @@ export function HomeEncomendasScreen() {
         return;
       }
 
+      // Abre/realinha a conversa preparador ↔ cliente. Sem essa chamada o chat
+      // do shipment fica vinculado apenas ao motorista e o preparador não vê
+      // a conversa. Não bloqueia o aceite se falhar.
+      const { data: convData, error: convErr } = await supabase.rpc(
+        'create_or_get_shipment_preparer_conversation' as never,
+        { p_shipment_id: modal.id } as never,
+      );
+      const conv = convData as { ok?: boolean; conversation_id?: string; error?: string } | null;
+      if (convErr || conv?.ok !== true) {
+        console.warn('[preparer] create_or_get_shipment_preparer_conversation falhou', convErr?.message ?? conv?.error);
+      }
+
       setAccepted((prev) => [...prev, modal.id]);
       setSolicitacoes((prev) => prev.filter((s) => s.id !== modal.id));
     } catch (e: unknown) {
@@ -363,7 +377,7 @@ export function HomeEncomendasScreen() {
 
       <Modal visible={!!acceptModal} transparent animationType="fade">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
+          <View style={[styles.modalBox, { paddingBottom: modalBottom }]}>
             <Text style={styles.modalTitle}>Aceitar coleta?</Text>
             <Text style={styles.modalDesc}>Confirma a coleta de {acceptModal?.clientName}?</Text>
             <View style={styles.modalRow}>
@@ -447,7 +461,7 @@ const styles = StyleSheet.create({
   acceptedBadge: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, marginTop: 12, backgroundColor: '#D1FAE5', borderRadius: 12 },
   acceptedText: { fontSize: 14, fontWeight: '600', color: '#065F46' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalBox: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 28, paddingBottom: 40 },
+  modalBox: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 28 },
   modalTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 10 },
   modalDesc: { fontSize: 15, color: '#6B7280', lineHeight: 22, marginBottom: 24 },
   modalRow: { flexDirection: 'row', gap: 12 },

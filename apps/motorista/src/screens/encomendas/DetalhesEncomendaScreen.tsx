@@ -36,7 +36,8 @@ import { getCachedRoute, setCachedRoute, hashWaypoints } from '../../lib/routeCa
 import { useNetworkStatus } from '../../hooks/useNetworkStatus';
 import { useRouteOfflinePack } from '../../hooks/useRouteOfflinePack';
 import { MapNetworkBadge } from '../../components/MapNetworkBadge';
-import { formatShipmentCode } from '@take-me/shared';
+import { formatShipmentCode, getOrCreateActiveSupportConversationId } from '@take-me/shared';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 let Location: any = null;
 try {
@@ -116,10 +117,11 @@ function regionFocusedOnPickup(origin: LatLng | null, dest: LatLng | null): MapR
   return regionFromLatLngPoints([]);
 }
 
-const SUPPORT_PHONE = '+5500000000000';
-const SUPPORT_WHATSAPP = '+5500000000000';
+const SUPPORT_PHONE = 'tel:+5583999999999';
+const SUPPORT_WHATSAPP = 'https://wa.me/5583999999999';
 
 export function DetalhesEncomendaScreen({ navigation, route }: Props) {
+  const { showAlert } = useAppAlert();
   const { shipmentId } = route.params;
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<ShipmentDetail | null>(null);
@@ -302,13 +304,31 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
   );
 
   const handleCall = () => {
-    Linking.openURL(`tel:${SUPPORT_PHONE}`);
     setSupportVisible(false);
+    void Linking.openURL(SUPPORT_PHONE);
   };
 
   const handleWhatsApp = () => {
-    Linking.openURL(`https://wa.me/${SUPPORT_WHATSAPP.replace('+', '')}`);
     setSupportVisible(false);
+    void Linking.openURL(SUPPORT_WHATSAPP);
+  };
+
+  const handleChatSupport = () => {
+    setSupportVisible(false);
+    void (async () => {
+      const { conversationId, error } = await getOrCreateActiveSupportConversationId(supabase);
+      if (error || !conversationId) {
+        showAlert('Suporte', error ?? 'Não foi possível abrir o chat.');
+        return;
+      }
+      const parent = navigation.getParent() as
+        | { navigate: (screen: string, params?: unknown) => void }
+        | undefined;
+      parent?.navigate('ChatEnc', {
+        screen: 'ChatEncThread',
+        params: { conversationId, participantName: 'Suporte Take Me' },
+      });
+    })();
   };
 
   return (
@@ -320,7 +340,7 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
           <MaterialIcons name="arrow-back" size={22} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Detalhes do pedido</Text>
-        <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7} onPress={() => navigation.navigate('Notifications')}>
           <MaterialIcons name="notifications-none" size={22} color="#111827" />
         </TouchableOpacity>
       </View>
@@ -527,7 +547,7 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
             </View>
             <Text style={styles.supportOptionText}>WhatsApp do Take Me</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.supportOption} onPress={() => setSupportVisible(false)} activeOpacity={0.85}>
+          <TouchableOpacity style={styles.supportOption} onPress={handleChatSupport} activeOpacity={0.85}>
             <View style={styles.supportOptionIcon}>
               <MaterialIcons name="headset-mic" size={24} color="#92400E" />
             </View>

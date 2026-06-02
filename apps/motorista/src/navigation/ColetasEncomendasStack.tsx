@@ -3,12 +3,14 @@ import { ColetasEncomendasScreen } from '../screens/encomendas/ColetasEncomendas
 import { HistoricoEncomendasScreen } from '../screens/encomendas/HistoricoEncomendasScreen';
 import { DetalhesEncomendaScreen } from '../screens/encomendas/DetalhesEncomendaScreen';
 import { ActiveShipmentScreen } from '../screens/encomendas/ActiveShipmentScreen';
+import { NotificationsScreen } from '../screens/NotificationsScreen';
 
 export type ColetasEncomendasStackParamList = {
   ColetasMain: undefined;
   HistoricoEncomendas: undefined;
   DetalhesEncomenda: { shipmentId: string };
   ActiveShipment: { shipmentId: string };
+  Notifications: undefined;
 };
 
 const Stack = createNativeStackNavigator<ColetasEncomendasStackParamList>();
@@ -26,6 +28,7 @@ export function ColetasEncomendasStack() {
       <Stack.Screen name="HistoricoEncomendas" component={HistoricoEncomendasScreen} />
       <Stack.Screen name="DetalhesEncomenda" component={DetalhesEncomendaScreen} />
       <Stack.Screen name="ActiveShipment" component={ActiveShipmentScreen} />
+      <Stack.Screen name="Notifications" component={NotificationsScreen} />
     </Stack.Navigator>
   );
 }

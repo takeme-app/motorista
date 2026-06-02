@@ -1,6 +1,7 @@
 import { View, TouchableOpacity, StyleSheet } from 'react-native';
 import { Text } from '../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -11,8 +12,9 @@ type Props = NativeStackScreenProps<RootStackParamList, 'RegistrationSuccess'>;
 export function RegistrationSuccessScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
 
+  const bottomInset = useBottomSafeInset();
   return (
-    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom + 24 }]}>
+    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: bottomInset + 24 }]}>
       <StatusBar style="dark" />
       <View style={styles.iconWrap}>
         <View style={styles.successIconCircle} accessibilityRole="image" accessibilityLabel="Sucesso">

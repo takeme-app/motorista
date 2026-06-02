@@ -4,12 +4,12 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   Keyboard,
   TouchableWithoutFeedback,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../components/Text';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
@@ -262,7 +262,7 @@ export function LoginScreen({ navigation }: Props) {
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <KeyboardAvoidingView
         style={styles.container}
-        behavior="padding"
+        behavior="height"
       >
         <View style={styles.containerInner}>
           <StatusBar style="dark" />

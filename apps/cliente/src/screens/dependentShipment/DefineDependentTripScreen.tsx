@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { DependentShipmentStackParamList } from '../../navigation/types';
@@ -37,6 +38,7 @@ const DEFAULT_DEST_COORDS = { latitude: -7.3305, longitude: -35.3335 };
 
 export function DefineDependentTripScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset();
   const { showAlert } = useAppAlert();
   const { currentPlace, refreshLocation } = useCurrentLocation();
   const { fullName, contactPhone, bagsCount, instructions, dependentId, photoUri, extraPassengers } = route.params;
@@ -203,7 +205,7 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
   );
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) }]}>
+    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: bottomInset }]}>
       <StatusBar style="dark" />
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()} hitSlop={12}>

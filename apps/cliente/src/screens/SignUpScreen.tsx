@@ -12,6 +12,7 @@ import {
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -41,6 +42,7 @@ type EmailCheckStatus = 'idle' | 'checking' | EmailAvailability | 'format';
 
 export function SignUpScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset();
   const { showAlert } = useAppAlert();
   const [fullName, setFullName] = useState('');
   const [identifier, setIdentifier] = useState('');
@@ -260,7 +262,7 @@ export function SignUpScreen({ navigation }: Props) {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(48, insets.bottom + 24) }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomInset + 24 }]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >

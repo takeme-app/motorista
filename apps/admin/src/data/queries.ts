@@ -3623,26 +3623,51 @@ export async function fetchAllNotifications(): Promise<NotificationAdminRow[]> {
   }));
 }
 
-export async function createNotificationForUser(userId: string, title: string, message: string, category?: string): Promise<{ error: string | null }> {
+export type NotificationTargetApp = 'cliente' | 'motorista';
+
+export async function createNotificationForUser(
+  userId: string,
+  title: string,
+  message: string,
+  category?: string,
+  targetAppSlug: NotificationTargetApp = 'cliente',
+): Promise<{ error: string | null }> {
   const { error } = await (supabase as any).from('notifications').insert({
     user_id: userId,
     title,
     message,
     category: category || null,
+    target_app_slug: targetAppSlug,
   });
   return { error: error?.message ?? null };
 }
 
-export async function createNotificationBroadcast(title: string, message: string, category?: string): Promise<{ count: number; error: string | null }> {
-  // Fetch all active user IDs (non-workers — passengers)
-  const { data: profiles } = await supabase.from('profiles').select('id').limit(1000);
-  if (!profiles || profiles.length === 0) return { count: 0, error: null };
+export async function createNotificationBroadcast(
+  title: string,
+  message: string,
+  category?: string,
+  targetAppSlug: NotificationTargetApp = 'cliente',
+): Promise<{ count: number; error: string | null }> {
+  let userIds: string[] = [];
+  if (targetAppSlug === 'motorista') {
+    const { data } = await supabase
+      .from('worker_profiles')
+      .select('id')
+      .eq('status', 'approved')
+      .limit(2000);
+    userIds = (data ?? []).map((r: any) => r.id);
+  } else {
+    const { data } = await supabase.from('profiles').select('id').limit(2000);
+    userIds = (data ?? []).map((p: any) => p.id);
+  }
+  if (userIds.length === 0) return { count: 0, error: null };
 
-  const rows = profiles.map((p: any) => ({
-    user_id: p.id,
+  const rows = userIds.map((id) => ({
+    user_id: id,
     title,
     message,
     category: category || 'broadcast',
+    target_app_slug: targetAppSlug,
   }));
 
   const { error } = await (supabase as any).from('notifications').insert(rows);

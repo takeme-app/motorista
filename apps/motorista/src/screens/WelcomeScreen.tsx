@@ -2,6 +2,7 @@ import { View, TouchableOpacity, Image, StyleSheet } from 'react-native';
 import { Text } from '../components/Text';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -10,6 +11,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Welcome'>;
 
 export function WelcomeScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset();
   return (
     <View style={styles.container}>
       <StatusBar style="light" />
@@ -21,7 +23,7 @@ export function WelcomeScreen({ navigation }: Props) {
       <LinearGradient
         colors={['transparent', 'rgba(0,0,0,0.35)', 'rgba(0,0,0,0.7)']}
         locations={[0.35, 0.6, 1]}
-        style={[styles.gradientOverlay, { paddingBottom: Math.max(48, insets.bottom + 24) }]}
+        style={[styles.gradientOverlay, { paddingBottom: bottomInset + 24 }]}
       >
         <Text style={styles.heading}>Comece sua jornada</Text>
         <Text style={styles.subheading}>com segurança</Text>

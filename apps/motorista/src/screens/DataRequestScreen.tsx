@@ -5,8 +5,8 @@ import {
   StyleSheet,
   ScrollView,
   ActivityIndicator,
-  Share,
 } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Text } from '../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -16,10 +16,83 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
+import { shareLocalFile } from '../utils/shareLocalFile';
+import { useAppAlert } from '../contexts/AppAlertContext';
+import { displayEmail as computeDisplayEmail } from '../utils/loginMethod';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'DataRequest'>;
 
+// expo-print é módulo nativo: dev clients antigos podem não tê-lo embutido.
+// Carregamos de forma resiliente para a tela não quebrar ao abrir sem o módulo.
+let Print: typeof import('expo-print') | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  Print = require('expo-print') as typeof import('expo-print');
+} catch {
+  Print = null;
+}
+
 const GOLD = '#C9A227';
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** Monta o HTML da cópia de dados que será convertido em PDF pelo expo-print. */
+function buildDataHtml(data: DriverData, generatedAt: string): string {
+  const fields: Array<[string, string]> = [
+    ['Nome', data.nome],
+    ['E-mail', data.email ?? '—'],
+    ['Idade', data.idade],
+    ['CPF', data.cpf],
+    ['Cidade', data.cidade],
+    ['Tipo de conta', data.subtipo],
+    ['Avaliação', data.rating],
+    ['Membro desde', data.dataCriacao],
+  ];
+  const rows = fields
+    .map(
+      ([label, value]) => `
+        <tr>
+          <td class="label">${escapeHtml(label)}</td>
+          <td class="value">${escapeHtml(value)}</td>
+        </tr>`,
+    )
+    .join('');
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, Helvetica, Arial, sans-serif; color: #111827; margin: 0; padding: 40px; }
+    .title { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
+    .subtitle { font-size: 12px; color: #6B7280; margin: 0 0 24px; }
+    .brand { color: ${GOLD}; }
+    table { width: 100%; border-collapse: collapse; border: 1px solid #E5E7EB; border-radius: 12px; overflow: hidden; }
+    td { padding: 12px 16px; border-bottom: 1px solid #F3F4F6; vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    .label { width: 38%; font-size: 12px; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.4px; }
+    .value { font-size: 15px; font-weight: 600; }
+    .footer { margin-top: 28px; font-size: 11px; color: #9CA3AF; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <h1 class="title">Cópia dos meus dados — <span class="brand">Take Me</span></h1>
+  <p class="subtitle">Gerado em ${escapeHtml(generatedAt)} • conforme a LGPD</p>
+  <table>${rows}</table>
+  <p class="footer">
+    Plataforma: Take Me<br/>
+    Solicitações de correção, exclusão ou portabilidade: privacidade@takeme.app.br
+  </p>
+</body>
+</html>`;
+}
 
 type DriverData = {
   nome: string;
@@ -51,6 +124,7 @@ function formatDate(iso: string): string {
 }
 
 export function DataRequestScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<DriverData | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -78,7 +152,7 @@ export function DataRequestScreen({ navigation }: Props) {
 
     setData({
       nome: prof?.full_name?.trim() || metaName || user.email?.split('@')[0] || '—',
-      email: user.email ?? null,
+      email: computeDisplayEmail(user),
       idade: worker?.age != null ? `${worker.age} anos` : '—',
       cpf: worker?.cpf?.trim() || '—',
       cidade: worker?.city?.trim() || '—',
@@ -92,32 +166,39 @@ export function DataRequestScreen({ navigation }: Props) {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const handleExport = async () => {
-    if (!data) return;
+    if (!data || exporting) return;
+    if (!Print) {
+      showAlert('Exportar', 'Atualize o app para exportar seus dados em PDF.');
+      return;
+    }
     setExporting(true);
-    const now = new Date().toLocaleDateString('pt-BR');
-    const message = [
-      `CÓPIA DOS MEUS DADOS — TAKE ME`,
-      `Gerado em ${now}`,
-      `${'─'.repeat(36)}`,
-      ``,
-      `Nome:            ${data.nome}`,
-      `E-mail:          ${data.email ?? '—'}`,
-      `Idade:           ${data.idade}`,
-      `CPF:             ${data.cpf}`,
-      `Cidade:          ${data.cidade}`,
-      `Tipo de conta:   ${data.subtipo}`,
-      `Avaliação:       ${data.rating}`,
-      `Membro desde:    ${data.dataCriacao}`,
-      ``,
-      `${'─'.repeat(36)}`,
-      `Plataforma: Take Me`,
-      `Contato: privacidade@takeme.app.br`,
-    ].join('\n');
-
     try {
-      await Share.share({ title: 'Meus dados — Take Me', message });
-    } catch { /* cancelado pelo usuário */ }
-    setExporting(false);
+      const now = new Date().toLocaleDateString('pt-BR');
+      const html = buildDataHtml(data, now);
+      const { uri } = await Print.printToFileAsync({ html });
+      // expo-print gera nome aleatório; renomeia para um nome amigável.
+      let fileUri = uri;
+      const stamp = new Date().toISOString().slice(0, 10);
+      const dest = `${FileSystem.cacheDirectory}meus-dados-takeme-${stamp}.pdf`;
+      try {
+        await FileSystem.deleteAsync(dest, { idempotent: true });
+        await FileSystem.moveAsync({ from: uri, to: dest });
+        fileUri = dest;
+      } catch { /* mantém o uri original se o rename falhar */ }
+      const shared = await shareLocalFile(fileUri, {
+        mimeType: 'application/pdf',
+        uti: 'com.adobe.pdf',
+        dialogTitle: 'Exportar cópia dos meus dados',
+        fallbackTitle: 'Meus dados — Take Me',
+      });
+      if (!shared.shared) {
+        showAlert('Exportar', 'Atualize o app para exportar seus dados em PDF neste dispositivo.');
+      }
+    } catch {
+      showAlert('Erro', 'Não foi possível gerar o PDF. Tente novamente.');
+    } finally {
+      setExporting(false);
+    }
   };
 
   const Field = ({ label, value }: { label: string; value: string }) => (

@@ -398,11 +398,17 @@ export function ActivitiesScreen({ navigation }: Props) {
     let cancelled = false;
     let channel: ReturnType<typeof supabase.channel> | null = null;
     (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
       if (!user || cancelled) return;
+      // Em RN, sem `setAuth` o WS pode inscrever sem JWT — Postgres Changes falha
+      // com CHANNEL_ERROR (RLS rejeita anon). Reforça o token antes do subscribe.
+      if (session?.access_token) {
+        supabase.realtime.setAuth(session.access_token);
+      }
       const uid = user.id;
       channel = supabase
-        .channel(`client-activities-${uid}`)
+        .channel(`client-activities-${uid}-${Date.now()}`)
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'bookings', filter: `user_id=eq.${uid}` },
@@ -431,7 +437,19 @@ export function ActivitiesScreen({ navigation }: Props) {
             void loadActivities({ silent: true });
           },
         )
-        .subscribe();
+        // O badge depende de scheduled_trips.status (motorista marca completed/cancelled).
+        // Sem filter porque a tabela não tem user_id; loadActivities + RLS filtram o que retorna.
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'scheduled_trips' },
+          (payload) => {
+            console.log('[realtime] scheduled_trips UPDATE', payload?.new && typeof payload.new === 'object' ? (payload.new as { id?: string; status?: string }).status : '?');
+            void loadActivities({ silent: true });
+          },
+        )
+        .subscribe((status, err) => {
+          console.log('[realtime] client-activities status:', status, 'err:', err?.message ?? err);
+        });
     })();
     return () => {
       cancelled = true;

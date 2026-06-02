@@ -51,3 +51,4 @@ export {
   formatShipmentCode,
   formatTripCode,
 } from './orderCodes';
+export { useBottomSafeInset } from './useBottomSafeInset';

@@ -401,7 +401,7 @@ const styles = StyleSheet.create({
   stepperWrap: { marginBottom: 20 },
   stepperRow: {
     flexDirection: 'row',
-    width: 358,
+    width: '100%',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 8,

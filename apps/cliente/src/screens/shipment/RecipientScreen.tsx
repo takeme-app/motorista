@@ -7,10 +7,12 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Image,
+  Platform,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ShipmentStackParamList } from '../../navigation/types';
@@ -39,6 +41,7 @@ function formatPhone(value: string): string {
 
 export function RecipientScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const { showAlert } = useAppAlert();
   const {
     origin,
@@ -136,8 +139,8 @@ export function RecipientScreen({ navigation, route }: Props) {
 
   return (
     <KeyboardAvoidingView
-      style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) }]}
-      behavior="padding"
+      style={[styles.container, { paddingTop: insets.top, paddingBottom: bottomInset }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={0}
     >
       <StatusBar style="dark" />

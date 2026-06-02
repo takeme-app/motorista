@@ -9,8 +9,8 @@ import {
   TextInput,
   Platform,
   Linking,
-  KeyboardAvoidingView,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -479,10 +479,21 @@ export function ActivitiesScreen({ navigation }: Props) {
       );
     }
 
+    // Apply category filter: cada viagem pode carregar passageiros, encomendas
+    // e dependentes ao mesmo tempo; a categoria restringe às viagens que
+    // contêm aquele tipo de atividade.
+    if (appliedCategory === 'Viagens') {
+      filtered = filtered.filter((t) => t.passengerCount > 0);
+    } else if (appliedCategory === 'Envios') {
+      filtered = filtered.filter((t) => t.shipmentCount > 0);
+    } else if (appliedCategory === 'Dependentes') {
+      filtered = filtered.filter((t) => t.dependentCount > 0);
+    }
+
     setConfirmedTrips(filtered.filter((t) => t.isConfirmed));
     setPlannedTrips(filtered.filter((t) => !t.isConfirmed));
     setLoading(false);
-  }, [appliedDateStart, appliedDateEnd]);
+  }, [appliedDateStart, appliedDateEnd, appliedCategory]);
 
   useFocusEffect(
     useCallback(() => {
@@ -575,6 +586,27 @@ export function ActivitiesScreen({ navigation }: Props) {
         showAlert('Erro', 'Sessão inválida. Faça login novamente.');
         return;
       }
+      // Defense-in-depth: status no banco pode ter mudado desde o último load (Realtime stale,
+      // outra aba etc). Se a viagem já foi finalizada/cancelada, aborta antes do UPDATE.
+      const { data: currentTrip } = await supabase
+        .from('scheduled_trips')
+        .select('status')
+        .eq('id', tripId)
+        .maybeSingle<{ status: string }>();
+      if (currentTrip?.status === 'completed') {
+        setStartingTripId(null);
+        showAlert(
+          'Viagem já finalizada',
+          'Esta viagem já foi finalizada. Crie uma nova viagem para receber novas reservas.',
+        );
+        return;
+      }
+      if (currentTrip?.status === 'cancelled') {
+        setStartingTripId(null);
+        showAlert('Viagem cancelada', 'Esta viagem foi cancelada e não pode ser reativada.');
+        return;
+      }
+
       const { data: otherInProgress } = await supabase
         .from('scheduled_trips')
         .select('id')
@@ -605,7 +637,23 @@ export function ActivitiesScreen({ navigation }: Props) {
         .eq('id', tripId);
       setStartingTripId(null);
       if (error) {
-        showAlert('Erro', 'Não foi possível iniciar a viagem. Tente novamente.');
+        const msg = (error as { message?: string }).message ?? '';
+        if (msg.includes('scheduled_trip_completed_is_final')) {
+          showAlert(
+            'Viagem já finalizada',
+            'Esta viagem já foi finalizada. Crie uma nova viagem para receber novas reservas.',
+          );
+          return;
+        }
+        if (msg.includes('scheduled_trip_cancelled_is_final')) {
+          showAlert(
+            'Viagem cancelada',
+            'Esta viagem foi cancelada e não pode ser reativada.',
+          );
+          return;
+        }
+        console.warn('[startTripJourney] supabase update error', { tripId, error });
+        showAlert('Erro', `Não foi possível iniciar a viagem.\n\n${msg || 'Tente novamente.'}`);
         return;
       }
       void invokeRefundJourneyStartNotAccepted(tripId);
@@ -826,7 +874,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         animationType="slide"
         onRequestClose={() => setFilterVisible(false)}
       >
-        <KeyboardAvoidingView style={styles.filterModalRoot} behavior="padding">
+        <KeyboardAvoidingView style={styles.filterModalRoot} behavior="height">
         <TouchableOpacity
           style={styles.modalOverlay}
           activeOpacity={1}

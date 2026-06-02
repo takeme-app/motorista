@@ -18,7 +18,11 @@ import type { ColetasEncomendasStackParamList } from '../../navigation/ColetasEn
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 import { supabase } from '../../lib/supabase';
 import { fetchWorkerShipmentBaseId } from '../../lib/preparerEncomendasBase';
-import { formatShipmentCode } from '@take-me/shared';
+import { formatShipmentCode, getOrCreateActiveSupportConversationId } from '@take-me/shared';
+import { useAppAlert } from '../../contexts/AppAlertContext';
+
+const SUPPORT_PHONE = 'tel:+5583999999999';
+const SUPPORT_WHATSAPP = 'https://wa.me/5583999999999';
 
 type Props = NativeStackScreenProps<ColetasEncomendasStackParamList, 'ColetasMain'>;
 
@@ -80,6 +84,7 @@ function formatChatTime(iso?: string | null): string {
 }
 
 export function ColetasEncomendasScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [loading, setLoading] = useState(true);
   const [active, setActive] = useState<ActiveShipment | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -214,13 +219,31 @@ export function ColetasEncomendasScreen({ navigation }: Props) {
   }, [navigation]);
 
   const handleCall = () => {
-    Linking.openURL('tel:+5500000000000');
     setSupportVisible(false);
+    void Linking.openURL(SUPPORT_PHONE);
   };
 
   const handleWhatsApp = () => {
-    Linking.openURL('https://wa.me/5500000000000');
     setSupportVisible(false);
+    void Linking.openURL(SUPPORT_WHATSAPP);
+  };
+
+  const handleChatSupport = () => {
+    setSupportVisible(false);
+    void (async () => {
+      const { conversationId, error } = await getOrCreateActiveSupportConversationId(supabase);
+      if (error || !conversationId) {
+        showAlert('Suporte', error ?? 'Não foi possível abrir o chat.');
+        return;
+      }
+      const parent = navigation.getParent() as
+        | { navigate: (screen: string, params?: unknown) => void }
+        | undefined;
+      parent?.navigate('ChatEnc', {
+        screen: 'ChatEncThread',
+        params: { conversationId, participantName: 'Suporte Take Me' },
+      });
+    })();
   };
 
   return (
@@ -393,7 +416,7 @@ export function ColetasEncomendasScreen({ navigation }: Props) {
               </View>
               <Text style={styles.supportOptionText}>Ligar</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.supportOption} onPress={() => setSupportVisible(false)} activeOpacity={0.85}>
+            <TouchableOpacity style={styles.supportOption} onPress={handleChatSupport} activeOpacity={0.85}>
               <View style={styles.supportOptionIcon}>
                 <MaterialIcons name="chat-bubble-outline" size={22} color="#92400E" />
               </View>

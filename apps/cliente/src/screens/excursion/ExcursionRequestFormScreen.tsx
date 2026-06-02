@@ -12,7 +12,6 @@ import {
   Platform,
   ActivityIndicator,
 } from 'react-native';
-import { mapboxForwardGeocode } from '@take-me/shared';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -27,6 +26,9 @@ import {
   EXCURSION_PRESET_OTHER_ID,
   type ExcursionDestinationPreset,
 } from '../../data/excursionDestinationPresets';
+import { AddressAutocomplete } from '../../components/AddressAutocomplete';
+import type { AddressSuggestion } from '../../lib/location';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 
 type Props = NativeStackScreenProps<ExcursionStackParamList, 'ExcursionRequestForm'>;
 
@@ -67,6 +69,20 @@ function formatDisplayDate(iso: string): string {
   return `${day} ${months[d.getMonth()]} ${d.getFullYear()}`;
 }
 
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+/** Exibe HH:MM (24h). */
+function formatDisplayTime(d: Date): string {
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** Formato aceito pela coluna `time` do Postgres. */
+function toTimeString(d: Date): string {
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:00`;
+}
+
 export function ExcursionRequestFormScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
   const [destination, setDestination] = useState('');
@@ -75,6 +91,8 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
   const [destChipFocus, setDestChipFocus] = useState<string | null>(null);
   const [excursionDate, setExcursionDate] = useState<Date | null>(null);
   const [dateModalVisible, setDateModalVisible] = useState(false);
+  const [excursionTime, setExcursionTime] = useState<Date | null>(null);
+  const [timePickerVisible, setTimePickerVisible] = useState(false);
   const [peopleCount, setPeopleCount] = useState(2);
   const [fleetType, setFleetType] = useState<'carro' | 'van' | 'micro_onibus' | 'onibus' | null>(null);
   const [firstAidTeam, setFirstAidTeam] = useState(false);
@@ -104,6 +122,22 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
     setDropdownIndex(null);
   }, []);
 
+  const openTimePicker = useCallback(() => {
+    const base = excursionTime ?? new Date();
+    if (Platform.OS === 'android') {
+      DateTimePickerAndroid.open({
+        value: base,
+        mode: 'time',
+        is24Hour: true,
+        onChange: (event, date) => {
+          if (event.type === 'set' && date) setExcursionTime(date);
+        },
+      });
+    } else {
+      setTimePickerVisible(true);
+    }
+  }, [excursionTime]);
+
   const handleSubmit = useCallback(async () => {
     const dest = destination.trim();
     if (!dest) {
@@ -112,6 +146,10 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
     }
     if (!excursionDate) {
       showAlert('Atenção', 'Selecione a data da excursão.');
+      return;
+    }
+    if (!excursionTime) {
+      showAlert('Atenção', 'Selecione o horário da excursão.');
       return;
     }
     if (!fleetType) {
@@ -129,17 +167,16 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
     let destinationLat: number | null = presetDestCoords?.lat ?? null;
     let destinationLng: number | null = presetDestCoords?.lng ?? null;
     if (destinationLat == null || destinationLng == null) {
-      const token = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN?.trim();
-      if (!token) {
-        setSubmitting(false);
-        showAlert(
-          'Destino no mapa',
-          'Escolha um destino da lista ou configure EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN para localizar endereços digitados.',
-        );
-        return;
-      }
-      const geo = await mapboxForwardGeocode(`${dest}, Brasil`, token);
-      if (!geo) {
+      // Geocodifica o endereço digitado pela edge function `geocode` (server-side,
+      // via Nominatim/OSM). Evita depender de token de mapa no cliente.
+      const { data: geoData, error: geoErr } = await supabase.functions.invoke('geocode', {
+        body: { address: `${dest}, Brasil` },
+      });
+      const geo =
+        geoData && typeof geoData === 'object'
+          ? (geoData as { ok?: boolean; lat?: number; lng?: number })
+          : null;
+      if (geoErr || !geo?.ok || typeof geo.lat !== 'number' || typeof geo.lng !== 'number') {
         setSubmitting(false);
         showAlert(
           'Destino',
@@ -147,8 +184,8 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
         );
         return;
       }
-      destinationLat = geo.latitude;
-      destinationLng = geo.longitude;
+      destinationLat = geo.lat;
+      destinationLng = geo.lng;
     }
 
     const recreationItemsPayload = recreationItems
@@ -160,6 +197,7 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
       destination_lat: destinationLat,
       destination_lng: destinationLng,
       excursion_date: toISODate(excursionDate),
+      excursion_time: toTimeString(excursionTime),
       people_count: peopleCount,
       fleet_type: fleetType,
       first_aid_team: Boolean(firstAidTeam),
@@ -172,7 +210,9 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
     };
     const { data: row, error } = await supabase
       .from('excursion_requests')
-      .insert(payload)
+      // `excursion_time` é coluna nova; os tipos gerados do Supabase ainda não a
+      // conhecem, por isso o cast (consistente com o resto do projeto).
+      .insert(payload as never)
       .select('id')
       .single();
     setSubmitting(false);
@@ -186,6 +226,7 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
   }, [
     destination,
     excursionDate,
+    excursionTime,
     fleetType,
     peopleCount,
     firstAidTeam,
@@ -212,7 +253,7 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
         <Text style={styles.headerTitle}>Excursões</Text>
         <View style={styles.headerSpacer} />
       </View>
-      <KeyboardAvoidingView style={styles.keyboard} behavior="padding">
+      <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
@@ -274,16 +315,21 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
               </Text>
             </TouchableOpacity>
           </ScrollView>
-          <TextInput
-            style={styles.input}
+          <AddressAutocomplete
             value={destination}
             onChangeText={(t) => {
               setDestination(t);
               setPresetDestCoords(null);
               setDestChipFocus(EXCURSION_PRESET_OTHER_ID);
             }}
+            onSelectPlace={(place: AddressSuggestion) => {
+              setDestination(place.address);
+              setPresetDestCoords({ lat: place.latitude, lng: place.longitude });
+              setDestChipFocus(EXCURSION_PRESET_OTHER_ID);
+            }}
             placeholder="Ex.: Bacabal, MA ou nome do município"
-            placeholderTextColor={COLORS.neutral700}
+            style={styles.destAutocomplete}
+            inputStyle={styles.destAutocompleteInput}
           />
 
           <Text style={styles.label}>Data da excursão</Text>
@@ -293,6 +339,33 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
             </Text>
             <MaterialIcons name="keyboard-arrow-down" size={24} color={COLORS.black} />
           </TouchableOpacity>
+
+          <Text style={styles.label}>Horário da excursão</Text>
+          <TouchableOpacity style={styles.dateTouch} onPress={openTimePicker}>
+            <Text style={[styles.dateText, !excursionTime && styles.datePlaceholder]}>
+              {excursionTime ? formatDisplayTime(excursionTime) : 'Selecione o horário'}
+            </Text>
+            <MaterialIcons name="schedule" size={22} color={COLORS.black} />
+          </TouchableOpacity>
+
+          {timePickerVisible && Platform.OS === 'ios' && (
+            <Modal transparent animationType="fade" visible onRequestClose={() => setTimePickerVisible(false)}>
+              <Pressable style={styles.timeModalOverlay} onPress={() => setTimePickerVisible(false)}>
+                <Pressable style={styles.timeModalCard} onPress={() => {}}>
+                  <DateTimePicker
+                    value={excursionTime ?? new Date()}
+                    mode="time"
+                    is24Hour
+                    display="spinner"
+                    onChange={(_, date) => { if (date) setExcursionTime(date); }}
+                  />
+                  <TouchableOpacity style={styles.timeModalConfirm} onPress={() => setTimePickerVisible(false)}>
+                    <Text style={styles.timeModalConfirmText}>Confirmar</Text>
+                  </TouchableOpacity>
+                </Pressable>
+              </Pressable>
+            </Modal>
+          )}
 
           <View style={styles.separator}>
             <View style={styles.separatorLine} />
@@ -505,12 +578,18 @@ const styles = StyleSheet.create({
   },
   dateText: { fontSize: 16, color: COLORS.black },
   datePlaceholder: { color: COLORS.neutral700 },
+  destAutocomplete: { marginBottom: 20, zIndex: 5 },
+  destAutocompleteInput: { backgroundColor: COLORS.neutral300, borderWidth: 0 },
+  timeModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  timeModalCard: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 16 },
+  timeModalConfirm: { backgroundColor: COLORS.black, borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 8 },
+  timeModalConfirmText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
   separator: { paddingVertical: 40, marginHorizontal: -24 },
   separatorLine: { height: 1, backgroundColor: '#E2E2E2', width: '100%' },
   stepperWrap: { marginBottom: 20 },
   stepperRow: {
     flexDirection: 'row',
-    width: 358,
+    width: '100%',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 8,

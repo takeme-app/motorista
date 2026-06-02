@@ -36,6 +36,9 @@ verify_jwt = false
 [functions.charge-excursion-request]
 verify_jwt = false
 
+[functions.confirm-excursion-cash]
+verify_jwt = false
+
 [functions.charge-tip]
 verify_jwt = false
 

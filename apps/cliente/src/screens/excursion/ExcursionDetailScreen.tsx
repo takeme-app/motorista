@@ -13,7 +13,9 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { SupportSheet } from '../../components/SupportSheet';
+import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
@@ -162,6 +164,7 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
   const [showVehicleSheet, setShowVehicleSheet] = useState(false);
   const [supportSheetVisible, setSupportSheetVisible] = useState(false);
   const insets = useSafeAreaInsets();
+  const fabBottom = useBottomSafeInset({ extra: 16, androidMin: 24 });
   const [driverProfile, setDriverProfile] = useState<ProfileRow | null>(null);
   const [preparerProfile, setPreparerProfile] = useState<ProfileRow | null>(null);
 
@@ -190,9 +193,24 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
     setLoading(false);
   }, [excursionRequestId]);
 
-  useEffect(() => {
-    loadDetail();
-  }, [loadDetail]);
+  // Recarrega ao ganhar foco (ex.: voltar do pagamento) E assina Realtime na
+  // linha da excursão: qualquer mudança de status no servidor (admin avança,
+  // pagamento aprovado) reflete o tracking ao vivo, sem sair da tela.
+  useFocusEffect(
+    useCallback(() => {
+      loadDetail();
+      if (!excursionRequestId) return;
+      const channel = supabase
+        .channel(`client-excursion-detail-${excursionRequestId}`)
+        .on(
+          'postgres_changes' as never,
+          { event: '*', schema: 'public', table: 'excursion_requests', filter: `id=eq.${excursionRequestId}` } as never,
+          () => { loadDetail(); },
+        )
+        .subscribe();
+      return () => { void supabase.removeChannel(channel); };
+    }, [loadDetail, excursionRequestId]),
+  );
 
   const loadDriverProfile = useCallback(async (driverId: string) => {
     const { data } = await supabase
@@ -424,7 +442,7 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
         driverName={driverProfile?.full_name ?? null}
       />
 
-      <TouchableOpacity style={[styles.fab, { bottom: Math.max(24, insets.bottom + 16) }]} onPress={() => setSupportSheetVisible(true)} activeOpacity={0.8}>
+      <TouchableOpacity style={[styles.fab, { bottom: fabBottom }]} onPress={() => setSupportSheetVisible(true)} activeOpacity={0.8}>
         <Image source={require('../../../assets/icons/icon-chat.png')} style={styles.fabIcon} />
       </TouchableOpacity>
 

@@ -4,14 +4,15 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  KeyboardAvoidingView,
   Platform,
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -56,6 +57,7 @@ function detectChannel(raw: string): 'email' | 'phone' {
 export function SignUpScreen({ navigation, route }: Props) {
   const registrationType = route.params?.registrationType;
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset();
   const { showAlert } = useAppAlert();
   const { setDriverType } = useDeferredDriverSignup();
 
@@ -281,7 +283,7 @@ export function SignUpScreen({ navigation, route }: Props) {
   }, [confirmPassword, confirmTouched, passwordsMatch]);
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={styles.container} behavior="height">
       <StatusBar style="dark" />
       <View style={[styles.navbar, { paddingTop: Math.max(12, insets.top + 8) }]}>
         <TouchableOpacity
@@ -297,7 +299,7 @@ export function SignUpScreen({ navigation, route }: Props) {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(48, insets.bottom + 24) }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomInset + 24 }]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >

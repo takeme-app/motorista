@@ -1,6 +1,6 @@
 {
   "name": "motorista",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -9,6 +9,7 @@
     "motorista:ios": "npm run motorista:ios --prefix ../..",
     "motorista:android": "npm run motorista:android --prefix ../..",
     "build:apk": "node scripts/build-apk.js",
+    "android:release": "node scripts/build-release-apk.js",
     "motorista:apk": "npm run motorista:apk --prefix ../..",
     "start": "expo start --port 8081",
     "start:lan": "node -e \"const fs=require('fs'),path=require('path');const r=path.resolve(__dirname,'../../.env');const d=path.resolve(__dirname,'.env');if(fs.existsSync(r))fs.copyFileSync(r,d);\" && expo start --port 8081 --host lan",
@@ -50,14 +51,19 @@
     "expo-linking": "~8.0.12",
     "expo-location": "~19.0.8",
     "expo-network": "~8.0.8",
+    "expo-print": "~15.0.8",
+    "expo-sharing": "~14.0.8",
     "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
     "react": "19.1.0",
     "react-native": "0.81.5",
+    "react-native-keyboard-controller": "1.18.5",
     "react-native-notify-kit": "^10.1.0",
+    "react-native-reanimated": "~4.1.1",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
-    "react-native-svg": "15.12.1"
+    "react-native-svg": "15.12.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@babel/core": "^7.25.0",

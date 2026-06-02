@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { View, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { Text } from '../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -12,6 +13,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'MotoristaPendingApprova
 
 export function MotoristaPendingApprovalScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset();
   const [refreshing, setRefreshing] = useState(false);
   const [title, setTitle] = useState('Cadastro em análise');
   const [message, setMessage] = useState(
@@ -71,7 +73,7 @@ export function MotoristaPendingApprovalScreen({ navigation }: Props) {
   };
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24 }]}>
+    <View style={[styles.container, { paddingTop: insets.top + 24, paddingBottom: bottomInset + 24 }]}>
       <StatusBar style="dark" />
       <View style={styles.iconWrap}>
         <View style={styles.circle}>
