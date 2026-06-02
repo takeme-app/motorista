@@ -6,9 +6,11 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
+import * as FileSystem from 'expo-file-system/legacy';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { supabase } from '../../lib/supabase';
 import { getUserErrorMessage } from '../../utils/errorMessage';
+import { shareLocalFile } from '../../utils/shareLocalFile';
 
 /** Em respostas não-2xx o body vem em error.context (Response); retorna objeto parseado ou null. */
 async function parseErrorBody(error: unknown): Promise<Record<string, unknown> | null> {
@@ -73,7 +75,7 @@ const CARDS = [
   {
     id: 'data-export',
     title: 'Solicitar cópia dos meus dados',
-    description: 'Peça acesso aos dados obrigatórios já fornecidos à plataforma.',
+    description: 'Exporte em PDF os dados já fornecidos à plataforma.',
     icon: 'folder-open' as const,
     action: 'requestDataExport' as const,
   },
@@ -102,10 +104,6 @@ export function AboutScreen({ navigation }: Props) {
         // Em respostas não-2xx o Supabase coloca data = null; o body vem em error.context (Response)
         let body: Record<string, unknown> | null = data != null && typeof data === 'object' ? (data as Record<string, unknown>) : null;
         if (body == null && error) body = await parseErrorBody(error).catch(() => null);
-        if (body?.error === 'rate_limited' && typeof body.message === 'string') {
-          showFeedback('Solicitar cópia dos dados', body.message);
-          return;
-        }
         if (error) {
           // Preferir mensagem do body (retornada pela Edge Function) em vez da genérica do cliente
           const serverMsg =
@@ -119,10 +117,27 @@ export function AboutScreen({ navigation }: Props) {
           showFeedback('Erro', body.error);
           return;
         }
-        showFeedback(
-          'Solicitar cópia dos dados',
-          'Enviaremos por e-mail em breve. Verifique sua caixa de entrada (e spam).'
-        );
+
+        const pdfBase64 = typeof body?.pdf_base64 === 'string' ? body.pdf_base64 : null;
+        if (!pdfBase64) {
+          showFeedback('Erro', fallbackMsg);
+          return;
+        }
+        const filename =
+          typeof body?.filename === 'string' && body.filename ? body.filename : 'meus-dados-takeme.pdf';
+        const fileUri = `${FileSystem.cacheDirectory}${filename}`;
+        await FileSystem.writeAsStringAsync(fileUri, pdfBase64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const shared = await shareLocalFile(fileUri, {
+          mimeType: 'application/pdf',
+          uti: 'com.adobe.pdf',
+          dialogTitle: 'Exportar cópia dos meus dados',
+          fallbackTitle: 'Meus dados — Take Me',
+        });
+        if (!shared.shared) {
+          showFeedback('Exportar', 'Atualize o app para exportar seus dados em PDF neste dispositivo.');
+        }
       } catch (e) {
         const msg = safeGetUserErrorMessage(e, fallbackMsg);
         showFeedback('Erro', msg);

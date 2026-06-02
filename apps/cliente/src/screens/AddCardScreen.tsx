@@ -129,7 +129,7 @@ export function AddCardScreen({ navigation, route }: Props) {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior="padding"
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <StatusBar style="dark" />
       <TouchableOpacity

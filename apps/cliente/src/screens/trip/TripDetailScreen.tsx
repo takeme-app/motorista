@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -18,6 +18,7 @@ import { useRootNavigation } from '../../navigation/RootNavigationContext';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { SupportSheet } from '../../components/SupportSheet';
 import {
   MapboxMap,
@@ -27,9 +28,11 @@ import {
   sanitizeMapRegion,
 } from '../../components/mapbox';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useFocusEffect } from '@react-navigation/native';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
 import { tryOpenSupportTicket } from '../../lib/supportTickets';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getRouteWithDuration, formatDuration, type RoutePoint } from '../../lib/route';
 import { LiveDriverMapMarker } from '../../components/LiveDriverMapMarker';
 import { useScheduledTripLiveLocation } from '../../lib/useScheduledTripLiveLocation';
@@ -122,6 +125,8 @@ type BookingDetail = {
   tip_cents: number | null;
   tip_status: string | null;
   tip_paid_at: string | null;
+  /** Método de pagamento ('card' / 'cash' / ...). `cash` não tem estorno automático. */
+  payment_method: string | null;
 };
 
 type TripShipmentRow = {
@@ -149,8 +154,10 @@ function shipmentPackageLabelPt(size: string): string {
 
 export function TripDetailScreen({ navigation, route }: Props) {
   const { navigateToTripStack } = useRootNavigation();
+  const { showAlert } = useAppAlert();
   const bookingId = route.params?.bookingId ?? '';
   const [detail, setDetail] = useState<BookingDetail | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [tripShipments, setTripShipments] = useState<TripShipmentRow[]>([]);
   const [tripDependentShipments, setTripDependentShipments] = useState<TripDependentShipmentRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -168,11 +175,13 @@ export function TripDetailScreen({ navigation, route }: Props) {
     PassengerBookingRating | null | undefined
   >(undefined);
   const insets = useSafeAreaInsets();
+  const fabBottom = useBottomSafeInset({ extra: 16, androidMin: 24 });
 
   async function performBookingCancellation(): Promise<{
     ok: boolean;
     refunded: boolean;
     refundAmountCents: number;
+    insideWindow: boolean;
     error?: string;
   }> {
     setCancelLoading(true);
@@ -181,25 +190,28 @@ export function TripDetailScreen({ navigation, route }: Props) {
         body: { booking_id: bookingId },
       });
       if (error) {
-        return { ok: false, refunded: false, refundAmountCents: 0, error: error.message };
+        return { ok: false, refunded: false, refundAmountCents: 0, insideWindow: false, error: error.message };
       }
       const payload = (data ?? {}) as {
         cancelled?: boolean;
         refunded?: boolean;
         refund_amount_cents?: number;
+        inside_window?: boolean;
         error?: string;
       };
       if (payload.error) {
-        return { ok: false, refunded: false, refundAmountCents: 0, error: payload.error };
+        return { ok: false, refunded: false, refundAmountCents: 0, insideWindow: false, error: payload.error };
       }
       const refunded = Boolean(payload.refunded);
       const refundAmountCents = Math.max(0, Math.floor(Number(payload.refund_amount_cents ?? 0)));
-      return { ok: Boolean(payload.cancelled), refunded, refundAmountCents };
+      const insideWindow = Boolean(payload.inside_window);
+      return { ok: Boolean(payload.cancelled), refunded, refundAmountCents, insideWindow };
     } catch (e) {
       return {
         ok: false,
         refunded: false,
         refundAmountCents: 0,
+        insideWindow: false,
         error: e instanceof Error ? e.message : 'Erro desconhecido',
       };
     } finally {
@@ -209,28 +221,66 @@ export function TripDetailScreen({ navigation, route }: Props) {
 
   async function handleCancelTrip() {
     const result = await performBookingCancellation();
-    if (result.ok) {
-      setShowCancelTripModal(false);
-      if (result.refunded) {
-        Alert.alert(
-          'Viagem cancelada',
-          `Seu reembolso integral foi iniciado e retornará ao cartão em 5 a 10 dias.${
-            result.refundAmountCents > 0
-              ? `\n\nValor: R$ ${(result.refundAmountCents / 100).toFixed(2).replace('.', ',')}`
-              : ''
-          }`,
-        );
-      } else {
-        Alert.alert(
-          'Viagem cancelada',
-          'A viagem foi cancelada. Como o prazo para reembolso integral já passou, não há estorno automático. Se desejar solicitar uma análise, abra um chamado no suporte.',
-        );
-        void tryOpenSupportTicket('reembolso', { booking_id: bookingId });
-      }
-      navigation.goBack();
-    } else {
-      Alert.alert('Erro', result.error ?? 'Não foi possível cancelar a viagem. Tente novamente.');
+    if (!result.ok) {
+      showAlert('Erro', result.error ?? 'Não foi possível cancelar a viagem. Tente novamente.');
+      return;
     }
+    setShowCancelTripModal(false);
+
+    const supportButton = {
+      label: 'Falar com suporte',
+      onPress: () => {
+        navigation.navigate('Chat', {
+          contactName: 'Suporte Take Me',
+          supportBackoffice: true,
+        });
+      },
+    };
+
+    // 1) Refund automático no cartão — fluxo Stripe.
+    if (result.refunded) {
+      showAlert(
+        'Viagem cancelada',
+        `Seu reembolso integral foi iniciado e retornará ao cartão em 5 a 10 dias.${
+          result.refundAmountCents > 0
+            ? `\n\nValor: R$ ${(result.refundAmountCents / 100).toFixed(2).replace('.', ',')}`
+            : ''
+        }`,
+        { onClose: () => navigation.goBack() },
+      );
+      return;
+    }
+
+    // 2) Dentro da janela MAS sem refund automático → pagamento em dinheiro
+    //    ou outro método sem Payment Intent estornável.
+    if (result.insideWindow) {
+      void tryOpenSupportTicket('reembolso', { booking_id: bookingId });
+      const isCash = (detail?.payment_method ?? '').toLowerCase() === 'cash';
+      showAlert(
+        'Viagem cancelada',
+        isCash
+          ? 'A viagem foi cancelada. Como o pagamento foi em dinheiro, não há estorno automático — combine o reembolso diretamente com o motorista ou fale com o suporte.'
+          : 'A viagem foi cancelada. Este pagamento não tem estorno automático disponível. Fale com o suporte para solicitar análise.',
+        {
+          buttonLabel: 'OK',
+          secondaryButton: supportButton,
+          onClose: () => navigation.goBack(),
+        },
+      );
+      return;
+    }
+
+    // 3) Fora da janela de reembolso integral.
+    void tryOpenSupportTicket('reembolso', { booking_id: bookingId });
+    showAlert(
+      'Viagem cancelada',
+      'A viagem foi cancelada. Como o prazo para reembolso integral já passou, não há estorno automático. Se desejar solicitar uma análise, abra um chamado no suporte.',
+      {
+        buttonLabel: 'OK',
+        secondaryButton: supportButton,
+        onClose: () => navigation.goBack(),
+      },
+    );
   }
 
   async function handleRescheduleConfirm() {
@@ -277,7 +327,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
       const { data: booking, error: bookErr } = await supabase
         .from('bookings')
         .select(
-          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, scheduled_trip_id, passenger_count, bags_count, passenger_data, pickup_code, delivery_code, cancellation_reason, tip_cents, tip_status, tip_paid_at'
+          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, scheduled_trip_id, passenger_count, bags_count, passenger_data, pickup_code, delivery_code, cancellation_reason, tip_cents, tip_status, tip_paid_at, payment_method'
         )
         .eq('id', bookingId)
         .eq('user_id', user.id)
@@ -371,6 +421,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
         tip_cents: (booking as { tip_cents?: number | null }).tip_cents ?? null,
         tip_status: (booking as { tip_status?: string | null }).tip_status ?? null,
         tip_paid_at: (booking as { tip_paid_at?: string | null }).tip_paid_at ?? null,
+        payment_method: (booking as { payment_method?: string | null }).payment_method ?? null,
       });
       const tripId = b.scheduled_trip_id ?? null;
       if (tripId && !cancelled) {
@@ -411,7 +462,32 @@ export function TripDetailScreen({ navigation, route }: Props) {
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [bookingId]);
+  }, [bookingId, reloadKey]);
+
+  // Realtime: status do booking ou da viagem mudam (motorista inicia, conclui,
+  // cancela) → recarrega para refletir o badge e o estado da tela.
+  const tripIdForRealtime = detail?.scheduled_trip_id ?? null;
+  useFocusEffect(
+    useCallback(() => {
+      if (!bookingId) return;
+      const channel = supabase
+        .channel(`client-trip-detail-${bookingId}`)
+        .on(
+          'postgres_changes' as never,
+          { event: '*', schema: 'public', table: 'bookings', filter: `id=eq.${bookingId}` } as never,
+          () => { setReloadKey((k) => k + 1); },
+        );
+      if (tripIdForRealtime) {
+        channel.on(
+          'postgres_changes' as never,
+          { event: '*', schema: 'public', table: 'scheduled_trips', filter: `id=eq.${tripIdForRealtime}` } as never,
+          () => { setReloadKey((k) => k + 1); },
+        );
+      }
+      channel.subscribe();
+      return () => { void supabase.removeChannel(channel); };
+    }, [bookingId, tripIdForRealtime]),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -472,18 +548,22 @@ export function TripDetailScreen({ navigation, route }: Props) {
   const isInProgress = Boolean(detail && allowsClientTripActions);
   const isCompleted = Boolean(detail && isTripCompleted && !isBookingCancelled);
   /**
-   * Cancelamento/reagendamento pelo passageiro só fazem sentido antes do motorista iniciar.
-   * Com `scheduled_trips.status === 'active'` (embarque em curso) estes fluxos passam a pertencer
-   * ao motorista (cancelar embarque); esconder aqui evita duplicar ação e dar refund indevido.
+   * Cancelamento: o passageiro pode cancelar enquanto a viagem não estiver finalizada,
+   * inclusive depois que o motorista iniciar a jornada (penalty/refund regulados pela
+   * janela de freeWindowHours na própria edge function `cancel-booking`).
+   * Reagendamento: só faz sentido ANTES do motorista iniciar — depois disso, motorista
+   * já está rodando e reagendar provocaria conflito operacional.
+   * Importante: `trip_status` tem default `'active'` no schema desde a criação, então
+   * use `driver_journey_started_at IS NOT NULL` como sinal real de "motorista iniciou".
    */
-  const canPassengerCancelOrReschedule = isInProgress && t !== 'active';
+  const driverJourneyStarted = Boolean(detail?.driver_journey_started_at);
+  const canPassengerCancel = isInProgress;
+  const canPassengerReschedule = isInProgress && !driverJourneyStarted;
 
   useEffect(() => {
-    if (!canPassengerCancelOrReschedule) {
-      setShowCancelTripModal(false);
-      setShowRescheduleConsentModal(false);
-    }
-  }, [canPassengerCancelOrReschedule]);
+    if (!canPassengerCancel) setShowCancelTripModal(false);
+    if (!canPassengerReschedule) setShowRescheduleConsentModal(false);
+  }, [canPassengerCancel, canPassengerReschedule]);
   const driverOnWay = useMemo(() => {
     if (!detail) return false;
     const bs = (detail.status ?? '').toLowerCase();
@@ -1021,15 +1101,15 @@ export function TripDetailScreen({ navigation, route }: Props) {
           )}
         </View>
 
-        {canPassengerCancelOrReschedule && (
-          <>
-            <TouchableOpacity style={styles.secondaryActionButton} activeOpacity={0.8} onPress={() => setShowRescheduleConsentModal(true)}>
-              <Text style={styles.secondaryActionButtonText}>Reagendar viagem</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.cancelButton} activeOpacity={0.8} onPress={() => setShowCancelTripModal(true)}>
-              <Text style={styles.cancelButtonText}>Cancelar viagem</Text>
-            </TouchableOpacity>
-          </>
+        {canPassengerReschedule && (
+          <TouchableOpacity style={styles.secondaryActionButton} activeOpacity={0.8} onPress={() => setShowRescheduleConsentModal(true)}>
+            <Text style={styles.secondaryActionButtonText}>Reagendar viagem</Text>
+          </TouchableOpacity>
+        )}
+        {canPassengerCancel && (
+          <TouchableOpacity style={styles.cancelButton} activeOpacity={0.8} onPress={() => setShowCancelTripModal(true)}>
+            <Text style={styles.cancelButtonText}>Cancelar viagem</Text>
+          </TouchableOpacity>
         )}
       </ScrollView>
 
@@ -1048,10 +1128,15 @@ export function TripDetailScreen({ navigation, route }: Props) {
               const hoursLabel = Number.isInteger(freeWindowHours)
                 ? `${freeWindowHours}h`
                 : `${freeWindowHours.toFixed(1)}h`;
+              const isCashPayment = (detail?.payment_method ?? '').toLowerCase() === 'cash';
               return (
                 <>
                   <Text style={styles.confirmModalTitle}>Cancelar viagem?</Text>
-                  {insideWindow ? (
+                  {isCashPayment ? (
+                    <Text style={styles.confirmModalSubtitle}>
+                      O pagamento desta viagem foi em dinheiro com o motorista. Ao cancelar, combine o reembolso de {amountBrl} diretamente com o motorista ou abra um chamado no suporte.
+                    </Text>
+                  ) : insideWindow ? (
                     <Text style={styles.confirmModalSubtitle}>
                       Faltam mais de {hoursLabel} para a partida. Você receberá reembolso integral de {amountBrl} no cartão em 5 a 10 dias.
                     </Text>
@@ -1108,7 +1193,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
         </View>
       </Modal>
 
-      <TouchableOpacity style={[styles.fab, { bottom: Math.max(24, insets.bottom + 16) }]} onPress={() => setSupportSheetVisible(true)} activeOpacity={0.8}>
+      <TouchableOpacity style={[styles.fab, { bottom: fabBottom }]} onPress={() => setSupportSheetVisible(true)} activeOpacity={0.8}>
         <Image source={require('../../../assets/icons/icon-chat.png')} style={styles.fabIcon} />
       </TouchableOpacity>
 

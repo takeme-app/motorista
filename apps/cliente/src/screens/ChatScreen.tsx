@@ -17,9 +17,10 @@ import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ClientChatRouteParams } from '../navigation/ActivitiesStackTypes';
-import { getOrCreateActiveSupportConversationId } from '@take-me/shared';
+import { getOrCreateActiveSupportConversationId, useBottomSafeInset } from '@take-me/shared';
 import { supabase } from '../lib/supabase';
 import { ensureDriverClientConversation, markConversationReadByClient } from '../lib/chatConversations';
 import { storageUrl } from '../utils/storageUrl';
@@ -90,7 +91,22 @@ function getInitials(name: string): string {
 
 export function ChatScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
+  const composerBottom = useBottomSafeInset({ extra: 6 });
   const { showAlert } = useAppAlert();
+
+  // Esconde a bottom tab bar enquanto o chat está focado e restaura ao sair.
+  // O Chat aparece via ActivitiesStack/ProfileStack — o tab bar pertence ao
+  // navigator pai (MainTabs), por isso o `getParent()`. Setar como `undefined`
+  // ao desfocar faz o navigator voltar ao default herdado de `screenOptions`.
+  useFocusEffect(
+    useCallback(() => {
+      const parent = navigation.getParent();
+      parent?.setOptions({ tabBarStyle: { display: 'none' } });
+      return () => {
+        parent?.setOptions({ tabBarStyle: undefined });
+      };
+    }, [navigation]),
+  );
   const contactName = route.params?.contactName ?? 'Suporte Take Me';
   const routeConversationId = route.params?.conversationId;
   const driverId = route.params?.driverId;
@@ -519,8 +535,8 @@ export function ChatScreen({ navigation, route }: Props) {
 
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior="padding"
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : insets.top + 56}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 56 : 0}
       >
         {resolveError ? (
           <View style={styles.center}>
@@ -563,7 +579,7 @@ export function ChatScreen({ navigation, route }: Props) {
           <View
             style={[
               styles.composer,
-              { paddingBottom: Math.max(insets.bottom, 10) + 6 },
+              { paddingBottom: composerBottom },
             ]}
           >
             {isRecording ? (

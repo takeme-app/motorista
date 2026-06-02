@@ -4,7 +4,6 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   NativeSyntheticEvent,
@@ -13,10 +12,12 @@ import {
   TouchableWithoutFeedback,
   Keyboard,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList, RegistrationType } from '../navigation/types';
@@ -58,6 +59,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
   const isComplete = code.length === CODE_LENGTH;
   const insets = useSafeAreaInsets();
 
+  const bottomInset = useBottomSafeInset();
   useEffect(() => {
     const t = setTimeout(() => inputRefs.current[0]?.focus(), 400);
     return () => clearTimeout(t);
@@ -220,7 +222,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <KeyboardAvoidingView
         style={styles.container}
-        behavior="padding"
+        behavior="height"
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
       >
         <StatusBar style="dark" />
@@ -285,7 +287,7 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
           </View>
         </ScrollView>
 
-        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 8) + 8 }]}>
+        <View style={[styles.footer, { paddingBottom: bottomInset + 8 }]}>
           <TouchableOpacity
             style={styles.footerBackButton}
             onPress={() => navigation.goBack()}

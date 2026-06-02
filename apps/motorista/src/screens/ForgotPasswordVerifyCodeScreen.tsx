@@ -4,7 +4,6 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   NativeSyntheticEvent,
@@ -14,9 +13,11 @@ import {
   TouchableWithoutFeedback,
   Keyboard,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../components/Text';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -56,6 +57,7 @@ export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
   const isComplete = code.length === CODE_LENGTH;
   const otpBoxSize = getOtpBoxSize();
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset();
   const canResend = countdown <= 0 && !resendLoading;
 
   useEffect(() => {
@@ -197,7 +199,7 @@ export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <KeyboardAvoidingView
         style={styles.container}
-        behavior="padding"
+        behavior="height"
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
       >
         <StatusBar style="dark" />
@@ -264,7 +266,7 @@ export function ForgotPasswordVerifyCodeScreen({ navigation, route }: Props) {
           </View>
         </ScrollView>
 
-        <View style={[styles.footer, { paddingBottom: insets.bottom }]}>
+        <View style={[styles.footer, { paddingBottom: bottomInset }]}>
           <TouchableOpacity
             style={styles.footerBackButton}
             onPress={() => navigation.goBack()}

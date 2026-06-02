@@ -7,6 +7,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -17,6 +18,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
+import { isPhoneLoginAccount } from '../../utils/loginMethod';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'EditPhone'>;
 
@@ -39,6 +41,7 @@ export function EditPhoneScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
   const [phone, setPhone] = useState('');
   const [currentPhoneDigits, setCurrentPhoneDigits] = useState('');
+  const [isPhoneLogin, setIsPhoneLogin] = useState(false);
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
 
@@ -49,6 +52,7 @@ export function EditPhoneScreen({ navigation }: Props) {
         setInitialLoading(false);
         return;
       }
+      setIsPhoneLogin(isPhoneLoginAccount(user));
       const { data } = await supabase.from('profiles').select('phone').eq('id', user.id).single();
       const raw = (data?.phone ?? '').trim().replace(/\D/g, '') || '';
       setCurrentPhoneDigits(raw);
@@ -57,16 +61,7 @@ export function EditPhoneScreen({ navigation }: Props) {
     })();
   }, []);
 
-  const handleUpdate = async () => {
-    const phoneDigits = phone.replace(/\D/g, '').trim() || null;
-    if (!phoneDigits) {
-      showAlert('Erro', 'Informe um telefone válido.');
-      return;
-    }
-    if (phoneDigits === currentPhoneDigits) {
-      showAlert('Atenção', 'O telefone informado é o mesmo da sua conta. Não é necessário atualizar.');
-      return;
-    }
+  const performUpdate = async (phoneDigits: string) => {
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -77,6 +72,10 @@ export function EditPhoneScreen({ navigation }: Props) {
       .from('profiles')
       .update({ phone: phoneDigits, updated_at: new Date().toISOString() })
       .eq('id', user.id);
+    // Conta por telefone: o número é o login → espelha em user_metadata.phone.
+    if (!error && isPhoneLogin) {
+      await supabase.auth.updateUser({ data: { phone: phoneDigits } });
+    }
     setLoading(false);
     if (error) {
       const isDuplicate = error.code === '23505' || /unique|already exists|duplicate|já.*uso/i.test(String(error.message ?? ''));
@@ -90,12 +89,38 @@ export function EditPhoneScreen({ navigation }: Props) {
     navigation.goBack();
   };
 
+  const handleUpdate = async () => {
+    const phoneDigits = phone.replace(/\D/g, '').trim() || null;
+    if (!phoneDigits) {
+      showAlert('Erro', 'Informe um telefone válido.');
+      return;
+    }
+    if (phoneDigits === currentPhoneDigits) {
+      showAlert('Atenção', 'O telefone informado é o mesmo da sua conta. Não é necessário atualizar.');
+      return;
+    }
+    // Conta por telefone: trocar o número troca o login → confirma antes.
+    if (isPhoneLogin) {
+      Alert.alert(
+        'Trocar telefone de login',
+        'Este número é o login da sua conta. Ao trocar, você passará a entrar com o novo número. Deseja continuar?',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Trocar', style: 'destructive', onPress: () => { void performUpdate(phoneDigits); } },
+        ],
+      );
+      return;
+    }
+    // Conta por e-mail: telefone é só registro → salva direto.
+    await performUpdate(phoneDigits);
+  };
+
   if (initialLoading) return null;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
-      <KeyboardAvoidingView style={styles.keyboard} behavior="padding">
+      <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={styles.dialog}>
           <View style={styles.headerRow}>
             <View style={styles.headerSpacer} />

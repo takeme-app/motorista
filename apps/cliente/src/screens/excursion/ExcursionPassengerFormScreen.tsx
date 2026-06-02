@@ -164,7 +164,7 @@ export function ExcursionPassengerFormScreen({ navigation, route }: Props) {
         <View style={styles.headerSpacer} />
       </View>
 
-      <KeyboardAvoidingView style={styles.flex} behavior="padding">
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
           <Text style={styles.label}>Nome completo</Text>
           <TextInput

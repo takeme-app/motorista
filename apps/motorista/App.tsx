@@ -20,6 +20,7 @@ import {
   Inter_700Bold,
 } from '@expo-google-fonts/inter';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { KeyboardProvider, KeyboardController, AndroidSoftInputModes } from 'react-native-keyboard-controller';
 import Mapbox from '@rnmapbox/maps';
 import { RootNavigator, type RootInitialRouteName } from './src/navigation/RootNavigator';
 import { AppAlertProvider } from './src/contexts/AppAlertContext';
@@ -72,6 +73,16 @@ export default function App() {
     Inter_600SemiBold,
     Inter_700Bold,
   });
+
+  // Faz a Activity Android "panar" para cima ao abrir o teclado — resolve
+  // TextInputs cobertos em modais/sheets/chats sem precisar wrappear cada um.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    KeyboardController.setInputMode(AndroidSoftInputModes.SOFT_INPUT_ADJUST_PAN);
+    return () => {
+      KeyboardController.setDefaultMode();
+    };
+  }, []);
 
   const [fontBypass, setFontBypass] = useState(false);
   useEffect(() => {
@@ -234,13 +245,15 @@ export default function App() {
   return (
     <View style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <AppAlertProvider>
-          <DeferredDriverSignupProvider>
-            <RegistrationFormProvider>
-              <RootNavigator initialRouteName={initialRoute.name} initialRouteParams={initialRoute.params} />
-            </RegistrationFormProvider>
-          </DeferredDriverSignupProvider>
-        </AppAlertProvider>
+        <KeyboardProvider>
+          <AppAlertProvider>
+            <DeferredDriverSignupProvider>
+              <RegistrationFormProvider>
+                <RootNavigator initialRouteName={initialRoute.name} initialRouteParams={initialRoute.params} />
+              </RegistrationFormProvider>
+            </DeferredDriverSignupProvider>
+          </AppAlertProvider>
+        </KeyboardProvider>
       </SafeAreaProvider>
     </View>
   );

@@ -285,7 +285,7 @@ export function LoginScreen({ navigation }: Props) {
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <KeyboardAvoidingView
         style={styles.container}
-        behavior="padding"
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.containerInner}>
           <StatusBar style="dark" />

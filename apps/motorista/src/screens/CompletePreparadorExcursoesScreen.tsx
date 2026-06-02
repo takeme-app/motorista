@@ -5,12 +5,14 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  KeyboardAvoidingView,
   Alert,
   Linking,
+  Platform,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -95,6 +97,7 @@ function RadioOption({
 
 export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset();
   const { showAlert } = useAppAlert();
 
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
@@ -324,7 +327,7 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
       : 'Valor padrão por período de trabalho.';
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior="padding">
+    <KeyboardAvoidingView style={styles.container} behavior="height">
       <StatusBar style="dark" />
       <View style={[styles.header, { paddingTop: insets.top }]}>
         <TouchableOpacity
@@ -364,7 +367,7 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 32 }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomInset + 32 }]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
@@ -549,7 +552,7 @@ export function CompletePreparadorExcursoesScreen({ navigation }: Props) {
           </View>
         </View>
 
-        <View style={[styles.footerInScroll, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+        <View style={[styles.footerInScroll, { paddingBottom: bottomInset }]}>
           <TouchableOpacity
             style={[styles.submitBtn, (!credentialsReady || !sessionReady || loading) && styles.submitBtnDisabled]}
             onPress={validateAndSubmit}

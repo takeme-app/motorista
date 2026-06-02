@@ -19,6 +19,7 @@ import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 import { supabase } from '../../lib/supabase';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import * as ImagePicker from 'expo-image-picker';
 
 type Props = NativeStackScreenProps<ColetasExcursoesStackParamList, 'RealizarEmbarques'>;
@@ -49,6 +50,7 @@ function metaLine(p: Passenger): string {
 
 export function RealizarEmbarquesScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset({ extra: 24 });
   const { excursionId } = route.params;
   const [loading, setLoading] = useState(true);
   const [passengers, setPassengers] = useState<Passenger[]>([]);
@@ -390,7 +392,7 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
             })}
           </ScrollView>
 
-          <View style={[styles.bottom, { paddingBottom: 24 + insets.bottom }]}>
+          <View style={[styles.bottom, { paddingBottom: bottomInset }]}>
             <TouchableOpacity
               style={styles.addLink}
               onPress={() => navigation.navigate('CadastrarPassageiroExcursao', { excursionId })}

@@ -25,6 +25,7 @@ export default function NotificacoesScreen() {
   // Send form state
   const [sendOpen, setSendOpen] = useState(false);
   const [sendType, setSendType] = useState<'individual' | 'broadcast'>('broadcast');
+  const [sendTargetApp, setSendTargetApp] = useState<'cliente' | 'motorista'>('cliente');
   const [sendUserId, setSendUserId] = useState('');
   const [sendTitle, setSendTitle] = useState('');
   const [sendMessage, setSendMessage] = useState('');
@@ -72,12 +73,12 @@ export default function NotificacoesScreen() {
     if (!sendTitle.trim() || !sendMessage.trim()) return;
     setSending(true);
     if (sendType === 'broadcast') {
-      const { count, error } = await createNotificationBroadcast(sendTitle.trim(), sendMessage.trim(), sendCategory.trim() || undefined);
+      const { count, error } = await createNotificationBroadcast(sendTitle.trim(), sendMessage.trim(), sendCategory.trim() || undefined, sendTargetApp);
       if (error) { showToast('Erro: ' + error); }
-      else { showToast(`Notificação enviada para ${count} usuários`); }
+      else { showToast(`Notificação enviada para ${count} ${sendTargetApp}s`); }
     } else {
       if (!sendUserId.trim()) { setSending(false); return; }
-      const { error } = await createNotificationForUser(sendUserId.trim(), sendTitle.trim(), sendMessage.trim(), sendCategory.trim() || undefined);
+      const { error } = await createNotificationForUser(sendUserId.trim(), sendTitle.trim(), sendMessage.trim(), sendCategory.trim() || undefined, sendTargetApp);
       if (error) { showToast('Erro: ' + error); }
       else { showToast('Notificação enviada com sucesso'); }
     }
@@ -87,9 +88,10 @@ export default function NotificacoesScreen() {
     setSendMessage('');
     setSendCategory('');
     setSendUserId('');
+    setSendTargetApp('cliente');
     // Reload
     fetchAllNotifications().then(setNotifications);
-  }, [sendType, sendUserId, sendTitle, sendMessage, sendCategory, showToast]);
+  }, [sendType, sendTargetApp, sendUserId, sendTitle, sendMessage, sendCategory, showToast]);
 
   const handleDelete = useCallback(async (id: string) => {
     if (!confirm('Remover esta notificação?')) return;
@@ -147,6 +149,12 @@ export default function NotificacoesScreen() {
       React.createElement('div', { style: { display: 'flex', gap: 8 } },
         chipFiltro('Broadcast', sendType === 'broadcast', () => setSendType('broadcast')),
         chipFiltro('Individual', sendType === 'individual', () => setSendType('individual'))),
+      // Target app selector
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+        React.createElement('label', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'App destinatário'),
+        React.createElement('div', { style: { display: 'flex', gap: 8 } },
+          chipFiltro('Cliente', sendTargetApp === 'cliente', () => setSendTargetApp('cliente')),
+          chipFiltro('Motorista', sendTargetApp === 'motorista', () => setSendTargetApp('motorista')))),
       // User ID (if individual)
       sendType === 'individual' ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
         React.createElement('label', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'User ID'),

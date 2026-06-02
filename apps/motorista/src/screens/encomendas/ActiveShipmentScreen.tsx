@@ -7,10 +7,10 @@ import {
   ScrollView,
   ActivityIndicator,
   Modal,
-  KeyboardAvoidingView,
   Platform,
   useWindowDimensions,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../../components/Text';
 import { DriverLocationFocusButton } from '../../components/DriverLocationFocusButton';
 import { MapNetworkBadge } from '../../components/MapNetworkBadge';
@@ -1417,7 +1417,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         animationType="slide"
         onRequestClose={() => !pickupLoading && setPickupVisible(false)}
       >
-        <KeyboardAvoidingView behavior="padding" style={styles.kbav}>
+        <KeyboardAvoidingView behavior="height" style={styles.kbav}>
           <View style={styles.modalOverlay}>
             <View style={styles.sheet}>
               <View style={styles.handle} />
@@ -1529,7 +1529,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         animationType="slide"
         onRequestClose={() => !deliveryLoading && setDeliveryVisible(false)}
       >
-        <KeyboardAvoidingView behavior="padding" style={styles.kbav}>
+        <KeyboardAvoidingView behavior="height" style={styles.kbav}>
           <View style={styles.modalOverlay}>
             <View style={styles.sheet}>
               <View style={styles.handle} />
@@ -1617,7 +1617,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         animationType="slide"
         onRequestClose={() => !summaryLoading && setSummaryVisible(false)}
       >
-        <KeyboardAvoidingView behavior="padding" style={styles.kbav}>
+        <KeyboardAvoidingView behavior="height" style={styles.kbav}>
           <View style={styles.modalOverlay}>
             <View style={styles.sheet}>
               <View style={styles.handle} />

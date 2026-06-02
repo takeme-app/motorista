@@ -8,17 +8,18 @@ import {
   Switch,
   Modal,
   TextInput,
-  KeyboardAvoidingView,
   Platform,
   Animated,
   Pressable,
   InteractionManager,
   Alert,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useBottomSheetDrag } from '../hooks/useBottomSheetDrag';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -102,6 +103,7 @@ function totalValue(
 export function RouteScheduleScreen({ navigation, route }: Props) {
   const { routeId, routeName } = route.params;
   const { showAlert } = useAppAlert();
+  const sheetBottom = useBottomSafeInset({ extra: 16 });
   const [trips, setTrips] = useState<TripRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [dayToggles, setDayToggles] = useState<DayToggle>({});
@@ -140,6 +142,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
         )
         .eq('route_id', routeId)
         .eq('driver_id', user.id)
+        .eq('is_active', true)
         .in('status', ['active', 'scheduled'])
         .order('day_of_week', { ascending: true }),
       (supabase as any)
@@ -190,11 +193,37 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
     void load({ silent: false });
   }, [load]));
 
-  const dayTrips = (dayIdx: number) =>
-    trips.filter((t) => {
+  // Realtime: status muda (active → completed/cancelled) ou is_active flipa
+  // → recarrega para retirar trip do cronograma sem precisar pull-to-refresh.
+  useFocusEffect(
+    useCallback(() => {
+      const channel = supabase
+        .channel(`route-schedule-${routeId}`)
+        .on(
+          'postgres_changes' as never,
+          { event: '*', schema: 'public', table: 'scheduled_trips', filter: `route_id=eq.${routeId}` } as never,
+          () => { void load({ silent: true }); },
+        )
+        .subscribe();
+      return () => { void supabase.removeChannel(channel); };
+    }, [routeId, load]),
+  );
+
+  // Deduplica trips idênticas (mesmo horário) na mesma rota+dia: o motorista
+  // pode ter criado a mesma trip várias vezes (sem unique constraint no banco).
+  // Mantém a mais recente por (departure_time, arrival_time).
+  const dayTrips = (dayIdx: number) => {
+    const list = trips.filter((t) => {
       const idx = t.day_of_week === 0 ? 6 : t.day_of_week - 1;
       return idx === dayIdx;
     });
+    const seen = new Map<string, TripRow>();
+    for (const t of list) {
+      const key = `${t.departure_time ?? ''}|${t.arrival_time ?? ''}`;
+      if (!seen.has(key)) seen.set(key, t);
+    }
+    return Array.from(seen.values());
+  };
 
   const toggleDay = async (dayIdx: number, value: boolean) => {
     setDayToggles((p) => ({ ...p, [dayIdx]: value }));
@@ -447,6 +476,23 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
         newArrive,
       );
 
+      // Evita duplicar trip ativa com mesma rota/dia/horário (não há unique no banco).
+      const { data: existing } = await supabase
+        .from('scheduled_trips')
+        .select('id')
+        .eq('driver_id', user.id)
+        .eq('route_id', routeId)
+        .eq('day_of_week', dayNum)
+        .eq('departure_time', newDepart)
+        .eq('arrival_time', newArrive)
+        .in('status', ['active', 'scheduled'])
+        .limit(1);
+      if (existing && existing.length > 0) {
+        closeModal();
+        setTimeout(() => showAlert('Atenção', 'Já existe uma viagem com esse horário neste dia.'), 0);
+        return;
+      }
+
       const { error } = await supabase.from('scheduled_trips').insert({
         driver_id: user.id,
         route_id: routeId,
@@ -665,10 +711,10 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
       <Modal visible={transferModalVisible} transparent animationType="none" onRequestClose={closeTransferModal}>
         <KeyboardAvoidingView
           style={styles.modalContainer}
-          behavior="padding"
+          behavior="height"
         >
           <Pressable style={StyleSheet.absoluteFillObject} onPress={closeTransferModal} />
-          <Animated.View style={[styles.sheet, { transform: [{ translateY: Animated.add(transferSlideAnim, transferDragY) }] }]}>
+          <Animated.View style={[styles.sheet, { paddingBottom: sheetBottom, transform: [{ translateY: Animated.add(transferSlideAnim, transferDragY) }] }]}>
             <View style={styles.handleArea} {...transferPanHandlers}>
               <View style={styles.sheetHandle} />
             </View>
@@ -714,10 +760,10 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
       <Modal visible={modalVisible} transparent animationType="none" onRequestClose={closeModal}>
         <KeyboardAvoidingView
           style={styles.modalContainer}
-          behavior="padding"
+          behavior="height"
         >
           <Pressable style={StyleSheet.absoluteFillObject} onPress={closeModal} />
-          <Animated.View style={[styles.sheet, { transform: [{ translateY: Animated.add(slideAnim, dragY) }] }]}>
+          <Animated.View style={[styles.sheet, { paddingBottom: sheetBottom, transform: [{ translateY: Animated.add(slideAnim, dragY) }] }]}>
             <View style={styles.handleArea} {...panHandlers}>
               <View style={styles.sheetHandle} />
             </View>
@@ -864,7 +910,7 @@ const styles = StyleSheet.create({
   },
   sheet: {
     backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    padding: 24, paddingBottom: 40,
+    padding: 24,
   },
   handleArea: { paddingTop: 14, paddingBottom: 6, alignItems: 'center', marginBottom: -6 },
   sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#D1D5DB' },

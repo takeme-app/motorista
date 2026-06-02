@@ -17,8 +17,17 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
+import { isPhoneLoginAccount, getRecordEmail } from '../../utils/loginMethod';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'EditEmail'>;
+
+/** Mascara o e-mail para a mensagem de confirmação (ex.: jo***@gmail.com). */
+function maskEmail(email: string): string {
+  const [local, domain] = email.split('@');
+  if (!domain) return email;
+  const head = local.slice(0, 2);
+  return `${head}${'*'.repeat(Math.max(1, local.length - 2))}@${domain}`;
+}
 
 const COLORS = {
   background: '#FFFFFF',
@@ -31,61 +40,67 @@ export function EditEmailScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
   const [email, setEmail] = useState('');
   const [currentEmail, setCurrentEmail] = useState('');
+  const [isPhoneLogin, setIsPhoneLogin] = useState(false);
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      const userEmail = user?.email ?? '';
-      setEmail(userEmail);
-      setCurrentEmail(userEmail);
+      const phoneLogin = isPhoneLoginAccount(user);
+      setIsPhoneLogin(phoneLogin);
+      // Conta por telefone: e-mail é só registro (user_metadata.email), nunca o sintético.
+      const initial = phoneLogin ? getRecordEmail(user) : (user?.email ?? '');
+      setEmail(initial);
+      setCurrentEmail(initial);
       setInitialLoading(false);
     })();
   }, []);
 
-  // Atualiza o e-mail exibido quando a sessão muda (ex.: confirmação pelo link abre o app)
-  useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      const userEmail = session?.user?.email ?? '';
-      if (userEmail) {
-        setEmail(userEmail);
-        setCurrentEmail(userEmail);
-      }
-    });
-    return () => subscription.unsubscribe();
-  }, []);
-
   const handleUpdate = async () => {
-    const trimmed = email.trim();
+    const trimmed = email.trim().toLowerCase();
+    if (trimmed === currentEmail.trim().toLowerCase()) {
+      showAlert('Atenção', 'O e-mail informado é o mesmo da sua conta. Não é necessário atualizar.');
+      return;
+    }
+
+    // Conta por telefone: e-mail é apenas um registro → salva direto, sem confirmação.
+    if (isPhoneLogin) {
+      if (trimmed && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+        showAlert('Erro', 'Informe um e-mail válido.');
+        return;
+      }
+      setLoading(true);
+      const { error } = await supabase.auth.updateUser({ data: { email: trimmed || null } });
+      setLoading(false);
+      if (error) {
+        showAlert('Erro', getUserErrorMessage(error, 'Não foi possível salvar o e-mail.'));
+        return;
+      }
+      navigation.goBack();
+      return;
+    }
+
+    // Conta por e-mail: trocar o e-mail é trocar o login → confirmação por link no e-mail atual.
     if (!trimmed) {
       showAlert('Erro', 'Informe um e-mail válido.');
       return;
     }
-    if (trimmed.toLowerCase() === currentEmail.toLowerCase()) {
-      showAlert('Atenção', 'O e-mail informado é o mesmo da sua conta. Não é necessário atualizar.');
-      return;
-    }
     setLoading(true);
-    const scheme = process.env.EXPO_PUBLIC_APP_SCHEME ?? 'take-me-cliente';
-    const emailRedirectTo = `${scheme}://auth/confirm`;
-    const { error } = await supabase.auth.updateUser(
-      { email: trimmed },
-      { emailRedirectTo }
-    );
+    const { data, error } = await supabase.functions.invoke('change-login-email', {
+      body: { newEmail: trimmed },
+    });
     setLoading(false);
-    if (error) {
-      const msg = getUserErrorMessage(error, 'Não foi possível atualizar o e-mail.');
-      const isEmailAlreadyUsed =
-        /already exists|already registered|user already registered|duplicate|23505|unique/i.test(String(error?.message ?? ''));
-      if (isEmailAlreadyUsed) {
-        showAlert('Atenção', 'Este e-mail já está cadastrado. Use outro e-mail.');
-      } else {
-        showAlert('Erro', msg);
-      }
+    if (error || (data && (data as { error?: string }).error)) {
+      const backendMsg = (data as { error?: string } | null)?.error;
+      showAlert('Erro', backendMsg || getUserErrorMessage(error, 'Não foi possível solicitar a troca de e-mail.'));
       return;
     }
-    navigation.goBack();
+    showAlert(
+      'Confirme pelo e-mail',
+      `Enviamos um link de confirmação para ${maskEmail(currentEmail)}. Abra-o para concluir a troca para ${trimmed}.`,
+      { onClose: () => navigation.goBack() },
+    );
   };
 
   if (initialLoading) return null;
@@ -93,7 +108,7 @@ export function EditEmailScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
-      <KeyboardAvoidingView style={styles.keyboard} behavior="padding">
+      <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={styles.dialog}>
           <View style={styles.headerRow}>
             <View style={styles.headerSpacer} />

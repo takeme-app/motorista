@@ -20,6 +20,8 @@ import { avatarStorageObjectPath, uploadImageFromUriToPublicBucket } from '../ut
 import type { ProfileRow, WorkerProfilePersonalRow } from '../types/dbRows';
 import { PersonalInfoFieldRow } from '../components/profile/PersonalInfoFieldRow';
 import { SingleFieldModal } from '../components/profile/SingleFieldModal';
+import { AppConfirmModal } from '../components/AppConfirmModal';
+import { isPhoneLoginAccount, getRecordEmail, displayEmail as computeDisplayEmail } from '../utils/loginMethod';
 import { NameFieldsModal } from '../components/profile/NameFieldsModal';
 import { CityStateModal } from '../components/profile/CityStateModal';
 import { EditPhotoModal } from '../components/profile/EditPhotoModal';
@@ -33,6 +35,12 @@ type ModalKey = 'name' | 'age' | 'email' | 'phone' | 'city' | 'experience' | nul
 type RowState = {
   userId: string;
   email: string | null;
+  /** Login é por telefone? (e-mail sintético `{digits}@takeme.com`) */
+  isPhoneLogin: boolean;
+  /** E-mail-registro (user_metadata.email) para contas por telefone. */
+  recordEmail: string;
+  /** E-mail a exibir (nunca o sintético). */
+  emailDisplay: string;
   fullName: string;
   phoneDigits: string;
   avatarUrl: string | null;
@@ -69,6 +77,8 @@ export function PersonalInfoScreen({ navigation }: Props) {
   const [row, setRow] = useState<RowState | null>(null);
   const [modal, setModal] = useState<ModalKey>(null);
   const [photoSheet, setPhotoSheet] = useState(false);
+  const [pendingPhone, setPendingPhone] = useState<string | null>(null);
+  const [phoneConfirmLoading, setPhoneConfirmLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -105,6 +115,9 @@ export function PersonalInfoScreen({ navigation }: Props) {
     setRow({
       userId: user.id,
       email: user.email ?? null,
+      isPhoneLogin: isPhoneLoginAccount(user),
+      recordEmail: getRecordEmail(user),
+      emailDisplay: computeDisplayEmail(user),
       fullName: prof?.full_name?.trim() || metaName || (user.email ? user.email.split('@')[0] : ''),
       phoneDigits: (prof?.phone ?? '').replace(/\D/g, ''),
       avatarUrl: prof?.avatar_url ?? null,
@@ -284,7 +297,7 @@ export function PersonalInfoScreen({ navigation }: Props) {
           verified={bgOk}
         />
         <View style={styles.sep} />
-        <PersonalInfoFieldRow label="Email" value={row.email ?? '—'} onPress={() => setModal('email')} />
+        <PersonalInfoFieldRow label="Email" value={row.emailDisplay} onPress={() => setModal('email')} />
         <View style={styles.sep} />
         <PersonalInfoFieldRow
           label="Telefone"
@@ -380,18 +393,45 @@ export function PersonalInfoScreen({ navigation }: Props) {
         visible={modal === 'email'}
         onClose={() => setModal(null)}
         title="Atualize seu e-mail"
-        subtitle="Use um e-mail válido. Ele será utilizado para notificações e recuperação de conta."
+        subtitle={
+          row.isPhoneLogin
+            ? 'Seu login é por telefone; o e-mail é apenas um registro para contato.'
+            : 'Trocar o e-mail troca seu login. Enviaremos um link de confirmação ao seu e-mail atual.'
+        }
         label="Email"
-        initialValue={row.email ?? ''}
+        initialValue={row.isPhoneLogin ? row.recordEmail : (row.email ?? '')}
         placeholder="seu@email.com"
         keyboardType="email-address"
         onSave={async (v) => {
+          const trimmed = v.trim().toLowerCase();
           try {
-            const { error } = await supabase.auth.updateUser({ email: v });
-            if (error) throw error;
-            showAlert('E-mail', 'Se necessário, confirme o novo e-mail pelo link enviado.');
-            await load();
+            if (row.isPhoneLogin) {
+              // E-mail é só registro → salva direto, sem confirmação.
+              if (trimmed && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+                showAlert('E-mail', 'Informe um e-mail válido.');
+                throw new Error('validation');
+              }
+              const { error } = await supabase.auth.updateUser({ data: { email: trimmed || null } });
+              if (error) throw error;
+              await load();
+              return;
+            }
+            // Conta por e-mail → confirmação por link no e-mail atual.
+            if (!trimmed) {
+              showAlert('E-mail', 'Informe um e-mail válido.');
+              throw new Error('validation');
+            }
+            const { data, error } = await supabase.functions.invoke('change-login-email', {
+              body: { newEmail: trimmed },
+            });
+            const backendMsg = (data as { error?: string } | null)?.error;
+            if (error || backendMsg) {
+              showAlert('Erro', backendMsg || getUserErrorMessage(error, 'Não foi possível solicitar a troca de e-mail.'));
+              throw new Error('backend');
+            }
+            showAlert('Confirme pelo e-mail', 'Enviamos um link de confirmação para seu e-mail atual. Abra-o para concluir a troca.');
           } catch (e: unknown) {
+            if (e instanceof Error && (e.message === 'validation' || e.message === 'backend')) throw e;
             onSaveError(e);
             throw e;
           }
@@ -410,6 +450,12 @@ export function PersonalInfoScreen({ navigation }: Props) {
         digitsOnly
         formatDisplay={formatPhoneBR}
         onSave={async (v) => {
+          // Conta por telefone: o número é o login → confirma antes de aplicar.
+          if (row.isPhoneLogin) {
+            setPendingPhone(v);
+            return;
+          }
+          // Conta por e-mail: telefone é só registro → salva direto.
           try {
             const { error } = await supabase
               .from('profiles')
@@ -460,6 +506,47 @@ export function PersonalInfoScreen({ navigation }: Props) {
         onTakePhoto={() => void pickImage(true)}
         onChoosePhoto={() => void pickImage(false)}
         onRemove={() => void removeAvatar().catch(onSaveError)}
+      />
+
+      <AppConfirmModal
+        visible={pendingPhone !== null}
+        title="Trocar telefone de login"
+        message="Este número é o login da sua conta. Ao trocar, você passará a entrar com o novo número. Deseja continuar?"
+        confirmLabel="Trocar"
+        cancelLabel="Cancelar"
+        loading={phoneConfirmLoading}
+        onConfirm={() => {
+          const novo = pendingPhone;
+          if (!novo) return;
+          void (async () => {
+            setPhoneConfirmLoading(true);
+            try {
+              const { error } = await supabase
+                .from('profiles')
+                .update({ phone: novo || null, updated_at: new Date().toISOString() } as never)
+                .eq('id', row.userId);
+              if (error) {
+                const dup =
+                  (error as { code?: string }).code === '23505' ||
+                  /unique|already exists|duplicate|já.*uso/i.test(String(error.message ?? ''));
+                showAlert('Atenção', dup
+                  ? 'Este telefone já está cadastrado em outra conta. Use outro número.'
+                  : getUserErrorMessage(error, 'Não foi possível atualizar o telefone.'));
+                return;
+              }
+              await supabase.auth.updateUser({ data: { phone: novo } });
+              setPendingPhone(null);
+              await load();
+            } catch (e: unknown) {
+              onSaveError(e);
+            } finally {
+              setPhoneConfirmLoading(false);
+            }
+          })();
+        }}
+        onCancel={() => {
+          if (!phoneConfirmLoading) setPendingPhone(null);
+        }}
       />
     </SafeAreaView>
   );

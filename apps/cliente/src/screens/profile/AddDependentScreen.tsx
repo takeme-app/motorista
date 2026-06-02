@@ -169,7 +169,7 @@ export function AddDependentScreen({ navigation }: Props) {
         </TouchableOpacity>
         <Text style={styles.navbarTitle} numberOfLines={1}>Cadastro de dependente</Text>
       </View>
-      <KeyboardAvoidingView style={styles.keyboard} behavior="padding">
+      <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}

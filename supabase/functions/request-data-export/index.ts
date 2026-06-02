@@ -7,8 +7,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const FIVE_MIN_MS = 5 * 60 * 1000;
-
 type ExportPayload = {
   auth: { email: string | undefined; phone: string | undefined };
   profile: unknown;
@@ -246,39 +244,6 @@ Deno.serve(async (req) => {
       global: { headers: { Authorization: `Bearer ${token}` } },
     });
 
-    const email = user.email?.trim();
-    if (!email) {
-      return new Response(
-        JSON.stringify({ error: "E-mail não cadastrado" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const { data: lastExport } = await admin
-      .from("data_export_requests")
-      .select("last_sent_at")
-      .eq("user_id", user.id)
-      .maybeSingle();
-
-    if (lastExport?.last_sent_at) {
-      const lastSent = new Date(lastExport.last_sent_at).getTime();
-      const elapsed = Date.now() - lastSent;
-      if (elapsed < FIVE_MIN_MS) {
-        const retryAfterMinutes = Math.ceil((FIVE_MIN_MS - elapsed) / 60000);
-        return new Response(
-          JSON.stringify({
-            error: "rate_limited",
-            message: `Você já solicitou uma cópia. Tente novamente em ${retryAfterMinutes} minuto(s).`,
-            retryAfterMinutes,
-          }),
-          {
-            status: 429,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          }
-        );
-      }
-    }
-
     const [
       { data: profile },
       { data: recent_destinations },
@@ -313,7 +278,6 @@ Deno.serve(async (req) => {
       exported_at,
     };
 
-    const jsonString = JSON.stringify(payload, null, 2);
     let pdfBytes: Uint8Array;
     try {
       pdfBytes = await createPdf(payload);
@@ -325,55 +289,25 @@ Deno.serve(async (req) => {
       );
     }
 
-    const resendKey = Deno.env.get("RESEND_API_KEY");
-    const fromEmail = Deno.env.get("RESEND_FROM_EMAIL") ?? "Take Me <onboarding@resend.dev>";
-    if (!resendKey) {
-      console.error("[request-data-export] RESEND_API_KEY não definida");
-      return new Response(
-        JSON.stringify({ error: "Configuração de e-mail indisponível" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const jsonBase64 = btoa(String.fromCharCode(...new TextEncoder().encode(jsonString)));
+    // Retorna o PDF em base64 para o app gravar e compartilhar in-app
+    // (folha de compartilhamento nativa / "Salvar em Arquivos").
     let pdfBinary = "";
     for (let i = 0; i < pdfBytes.length; i++) pdfBinary += String.fromCharCode(pdfBytes[i]);
     const pdfBase64 = btoa(pdfBinary);
+    const filename = `meus-dados-takeme-${exported_at.slice(0, 10)}.pdf`;
 
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${resendKey}`,
-      },
-      body: JSON.stringify({
-        from: fromEmail,
-        to: [email],
-        subject: "Cópia dos seus dados — Take Me",
-        text: "Segue em anexo a cópia dos seus dados: um arquivo JSON e um PDF para leitura. Se não solicitou, ignore este e-mail.",
-        attachments: [
-          { filename: "meus-dados-takeme.json", content: jsonBase64, content_type: "application/json" },
-          { filename: "meus-dados-takeme.pdf", content: pdfBase64, content_type: "application/pdf" },
-        ],
-      }),
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      console.error("[request-data-export] Resend error:", res.status, errText);
-      return new Response(
-        JSON.stringify({ error: "Não foi possível enviar o e-mail. Tente novamente." }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    // Registro de auditoria (LGPD) — não bloqueia a exportação se falhar.
+    try {
+      await admin.from("data_export_requests").upsert(
+        { user_id: user.id, last_sent_at: new Date().toISOString() },
+        { onConflict: "user_id" }
       );
+    } catch (auditErr) {
+      console.warn("[request-data-export] audit upsert:", auditErr);
     }
 
-    await admin.from("data_export_requests").upsert(
-      { user_id: user.id, last_sent_at: new Date().toISOString() },
-      { onConflict: "user_id" }
-    );
-
     return new Response(
-      JSON.stringify({ ok: true }),
+      JSON.stringify({ ok: true, pdf_base64: pdfBase64, filename }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {

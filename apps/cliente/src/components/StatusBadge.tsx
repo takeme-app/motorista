@@ -101,8 +101,10 @@ export function clientViagemStatusBadge(
     return 'cancelada';
   }
   if (t === 'completed') {
-    if (b === 'confirmed' || b === 'in_progress') return 'concluida';
-    if (b === 'paid' || b === 'pending') return 'reembolsada';
+    // 'paid' é o status terminal natural da reserva após `motorista_complete_scheduled_trip`
+    // (libera repasse). Não é refund.
+    if (b === 'confirmed' || b === 'in_progress' || b === 'paid') return 'concluida';
+    if (b === 'pending') return 'em_analise';
     return 'em_analise';
   }
   if (t === 'active') {

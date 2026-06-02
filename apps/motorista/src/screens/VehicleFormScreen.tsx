@@ -7,12 +7,13 @@ import {
   TextInput,
   ActivityIndicator,
   Image,
-  KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -59,6 +60,7 @@ const GOLD = '#C9A227';
 
 export function VehicleFormScreen({ navigation, route }: Props) {
   const { vehicleId } = route.params ?? {};
+  const scrollBottom = useBottomSafeInset({ extra: 24 });
   const isEdit = Boolean(vehicleId);
   const { showAlert } = useAppAlert();
 
@@ -281,8 +283,8 @@ export function VehicleFormScreen({ navigation, route }: Props) {
         <View style={styles.iconBtn} />
       </View>
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="height">
+        <ScrollView contentContainerStyle={[styles.scroll, { paddingBottom: scrollBottom }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
           {/* Modelo */}
           <Text style={styles.label}>Modelo</Text>
@@ -477,7 +479,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headerTitle: { fontSize: 16, fontWeight: '700', color: '#111827', flex: 1, textAlign: 'center' },
-  scroll: { paddingHorizontal: 20, paddingBottom: 48 },
+  scroll: { paddingHorizontal: 20 },
   label: { fontSize: 14, fontWeight: '600', color: '#111827', marginTop: 20, marginBottom: 8 },
   subLabel: { fontSize: 12, color: '#6B7280', marginTop: -6, marginBottom: 10 },
   input: {

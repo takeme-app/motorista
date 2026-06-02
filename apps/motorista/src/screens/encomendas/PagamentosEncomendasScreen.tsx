@@ -7,13 +7,14 @@ import {
   ActivityIndicator,
   Modal,
   TextInput,
-  KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { PagamentosEncStackParamList } from '../../navigation/types';
@@ -58,6 +59,7 @@ type Nav = NativeStackNavigationProp<PagamentosEncStackParamList, 'PagamentosMai
 
 export function PagamentosEncomendasScreen() {
   const navigation = useNavigation<Nav>();
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const [totalCents, setTotalCents] = useState(0);
   const [coletas, setColetas] = useState(0);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
@@ -208,10 +210,10 @@ export function PagamentosEncomendasScreen() {
       <Modal visible={editPixVisible} transparent animationType="slide">
         <KeyboardAvoidingView
           style={styles.modalOverlay}
-          behavior="padding"
+          behavior="height"
         >
           <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setEditPixVisible(false)} />
-          <View style={styles.sheet}>
+          <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
             <View style={styles.sheetHandleRow}>
               <View style={styles.sheetHandle} />
             </View>
@@ -330,7 +332,6 @@ const styles = StyleSheet.create({
   sheet: {
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    paddingBottom: 32,
   },
   sheetHandleRow: { alignItems: 'center', paddingTop: 12, paddingBottom: 4 },
   sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E5E7EB' },

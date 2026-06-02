@@ -22,6 +22,7 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import {
   MapboxMap,
   MapboxMarker,
@@ -144,6 +145,7 @@ function pinCharsForDisplay(code: string | null | undefined): string[] {
 export function DependentShipmentDetailScreen({ navigation, route }: Props) {
   const dependentShipmentId = route.params?.dependentShipmentId ?? '';
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset();
   const { showAlert } = useAppAlert();
   const [detail, setDetail] = useState<DetailRow | null>(null);
   const [senderName, setSenderName] = useState<string | null>(null);
@@ -511,7 +513,7 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(40, insets.bottom + 24) }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomInset + 24 }]}
         showsVerticalScrollIndicator={false}
       >
         {/* Mapa */}
@@ -768,7 +770,7 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
       </ScrollView>
 
       {chatAvailable && (
-        <TouchableOpacity style={[styles.fab, { bottom: Math.max(24, insets.bottom + 16) }]} onPress={() => setShowContactSheet(true)} activeOpacity={0.8}>
+        <TouchableOpacity style={[styles.fab, { bottom: bottomInset + 16 }]} onPress={() => setShowContactSheet(true)} activeOpacity={0.8}>
           <Image source={require('../../../assets/icons/icon-chat.png')} style={styles.fabIcon} />
         </TouchableOpacity>
       )}
@@ -852,7 +854,7 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
           <Pressable style={styles.sheetOverlayTouchable} onPress={closeRatingSheet} />
           <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
             <Animated.View
-              style={[styles.bottomSheet, { paddingBottom: insets.bottom + 24, transform: [{ translateY: ratingSheetTranslateY }] }]}
+              style={[styles.bottomSheet, { paddingBottom: bottomInset + 24, transform: [{ translateY: ratingSheetTranslateY }] }]}
             >
               <View style={styles.sheetHandle} />
               <TouchableOpacity style={styles.sheetClose} onPress={closeRatingSheet} hitSlop={12}>

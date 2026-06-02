@@ -16,6 +16,11 @@ import type { ProfileStackParamList } from '../../navigation/ProfileStackTypes';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { ConfigureNotificationsContent } from './ConfigureNotificationsContent';
+import {
+  parseNotificationDeeplink,
+  applyNotificationDeeplink,
+  type NotificationDeeplink,
+} from '../../lib/notificationDeeplink';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'Notifications'>;
 
@@ -32,6 +37,8 @@ type NotificationRow = {
   message: string | null;
   read_at: string | null;
   created_at: string;
+  data?: unknown;
+  deeplink?: NotificationDeeplink | null;
 };
 
 function formatDate(iso: string) {
@@ -57,21 +64,44 @@ export function NotificationsScreen({ navigation }: Props) {
           setLoading(false);
           return;
         }
-        const { data } = await supabase
-          .from('notifications')
-          .select('id, title, message, read_at, created_at')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false })
-          .limit(50);
-        setNotifications(data ?? []);
+        // Ordem correta do cliente Supabase: `.select()` logo após `.from()`.
+        // Se a coluna `data` ainda não existe no remoto, a primeira query falha;
+        // refazemos sem `data` (deeplink indisponível até a migration aplicar).
+        const fetchList = (columns: string) =>
+          supabase
+            .from('notifications')
+            .select(columns)
+            .eq('user_id', user.id)
+            .eq('target_app_slug', 'cliente')
+            .order('created_at', { ascending: false })
+            .limit(50);
+
+        let res = await fetchList('id, title, message, read_at, created_at, data');
+        if (res.error) {
+          res = await fetchList('id, title, message, read_at, created_at');
+        }
+        const rows = (res.data ?? []) as (Omit<NotificationRow, 'deeplink'>)[];
+        setNotifications(
+          rows.map((n) => ({
+            ...n,
+            deeplink: parseNotificationDeeplink((n as { data?: unknown }).data),
+          })),
+        );
         setLoading(false);
       })();
     }, [activeTab])
   );
 
-  const markRead = async (id: string) => {
-    await supabase.from('notifications').update({ read_at: new Date().toISOString() }).eq('id', id);
-    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read_at: new Date().toISOString() } : n)));
+  const handlePress = async (n: NotificationRow) => {
+    if (!n.read_at) {
+      await supabase.from('notifications').update({ read_at: new Date().toISOString() }).eq('id', n.id);
+      setNotifications((prev) =>
+        prev.map((x) => (x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x)),
+      );
+    }
+    if (n.deeplink) {
+      applyNotificationDeeplink(navigation, n.deeplink);
+    }
   };
 
   return (
@@ -116,7 +146,7 @@ export function NotificationsScreen({ navigation }: Props) {
           renderItem={({ item }) => (
             <TouchableOpacity
               style={styles.notifRow}
-              onPress={() => markRead(item.id)}
+              onPress={() => handlePress(item)}
               activeOpacity={0.7}
             >
               {!item.read_at && <View style={styles.unreadDot} />}

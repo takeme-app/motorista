@@ -7,7 +7,6 @@ import {
   ActivityIndicator,
   Modal,
   TextInput,
-  Platform,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -19,6 +18,7 @@ import type { ColetasEncomendasStackParamList } from '../../navigation/ColetasEn
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 import { supabase } from '../../lib/supabase';
 import { fetchWorkerShipmentBaseId } from '../../lib/preparerEncomendasBase';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<ColetasEncomendasStackParamList, 'HistoricoEncomendas'>;
 
@@ -78,17 +78,29 @@ function groupItems(items: HistoryItem[]): Group[] {
   return groups;
 }
 
+/** Aplica máscara DD/MM/AAAA conforme o usuário digita (aceita só dígitos). */
+function maskDate(input: string): string {
+  const digits = input.replace(/\D/g, '').slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
+
+/** Parsing estrito de DD/MM/AAAA. Rejeita overflows (ex.: 31/02/2026). */
 function parseDateInput(str: string): Date | null {
-  const parts = str.split('/');
-  if (parts.length !== 3) return null;
-  const [day, month, year] = parts;
-  if (!day || !month || !year) return null;
-  const d = new Date(Number(year), Number(month) - 1, Number(day));
-  if (isNaN(d.getTime())) return null;
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(str.trim());
+  if (!match) return null;
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+  if (year < 2000 || year > 2100) return null;
+  const d = new Date(year, month - 1, day);
+  if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) return null;
   return d;
 }
 
 export function HistoricoEncomendasScreen({ navigation }: Props) {
+  const { showAlert } = useAppAlert();
   const [loading, setLoading] = useState(true);
   const [groups, setGroups] = useState<Group[]>([]);
   const [allItems, setAllItems] = useState<HistoryItem[]>([]);
@@ -145,8 +157,24 @@ export function HistoricoEncomendasScreen({ navigation }: Props) {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const applyFilter = useCallback(() => {
-    const from = parseDateInput(dateFromInput);
-    const to = parseDateInput(dateToInput);
+    const fromRaw = dateFromInput.trim();
+    const toRaw = dateToInput.trim();
+    const from = fromRaw ? parseDateInput(fromRaw) : null;
+    const to = toRaw ? parseDateInput(toRaw) : null;
+
+    if (fromRaw && !from) {
+      showAlert('Filtro', 'Data inicial inválida. Use o formato DD/MM/AAAA.');
+      return;
+    }
+    if (toRaw && !to) {
+      showAlert('Filtro', 'Data final inválida. Use o formato DD/MM/AAAA.');
+      return;
+    }
+    if (from && to && from > to) {
+      showAlert('Filtro', 'A data inicial não pode ser maior que a data final.');
+      return;
+    }
+
     if (!from && !to) {
       setGroups(groupItems(allItems));
       setFilterActive(false);
@@ -164,7 +192,7 @@ export function HistoricoEncomendasScreen({ navigation }: Props) {
       setFilterActive(true);
     }
     setFilterVisible(false);
-  }, [allItems, dateFromInput, dateToInput]);
+  }, [allItems, dateFromInput, dateToInput, showAlert]);
 
   const clearFilter = useCallback(() => {
     setDateFromInput('');
@@ -183,7 +211,7 @@ export function HistoricoEncomendasScreen({ navigation }: Props) {
           <MaterialIcons name="close" size={20} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Histórico</Text>
-        <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7} onPress={() => navigation.navigate('Notifications')}>
           <MaterialIcons name="notifications-none" size={22} color="#111827" />
         </TouchableOpacity>
       </View>
@@ -251,8 +279,8 @@ export function HistoricoEncomendasScreen({ navigation }: Props) {
               placeholder="DD/MM/AAAA"
               placeholderTextColor="#9CA3AF"
               value={dateFromInput}
-              onChangeText={setDateFromInput}
-              keyboardType={Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'numeric'}
+              onChangeText={(t) => setDateFromInput(maskDate(t))}
+              keyboardType="numeric"
               maxLength={10}
             />
           </View>
@@ -264,8 +292,8 @@ export function HistoricoEncomendasScreen({ navigation }: Props) {
               placeholder="DD/MM/AAAA"
               placeholderTextColor="#9CA3AF"
               value={dateToInput}
-              onChangeText={setDateToInput}
-              keyboardType={Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'numeric'}
+              onChangeText={(t) => setDateToInput(maskDate(t))}
+              keyboardType="numeric"
               maxLength={10}
             />
           </View>

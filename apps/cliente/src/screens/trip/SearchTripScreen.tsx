@@ -5,6 +5,7 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { MapboxMap, MapboxMarker, MapboxPolyline, type MapboxMapRef } from '../../components/mapbox';
 import { getCurrentPlace, requestLocationPermission, getCurrentPosition } from '../../lib/location';
 import { useAppAlert } from '../../contexts/AppAlertContext';
@@ -114,6 +115,7 @@ const RECENT_LIST_SIZE_PLAN = 3;
 export function SearchTripScreen({ navigation, route }: Props) {
   const mapRef = useRef<MapboxMapRef>(null);
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset();
   const { showAlert } = useAppAlert();
   const { currentPlace, refreshLocation } = useCurrentLocation();
   const [sheetVisible, setSheetVisible] = useState(true);
@@ -453,7 +455,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
 
       {/* Página completa "Planeje sua corrida": sem mapa, sem bottom sheet — só header, pill, card e lista de endereços */}
       {isPlanPage && (
-        <View style={[styles.planPage, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) }]}>
+        <View style={[styles.planPage, { paddingTop: insets.top, paddingBottom: bottomInset }]}>
           <View style={styles.planPageHeader}>
             <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
               <Text style={styles.backArrow}>←</Text>
@@ -702,7 +704,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
       {/* Botão para abrir o sheet quando estiver fechado (fechar = puxar para baixo) — só quando não é a página completa */}
       {!isPlanPage && !sheetVisible && (
         <TouchableOpacity
-          style={[styles.expandButton, { bottom: Math.max(insets.bottom, 16) + 16 }]}
+          style={[styles.expandButton, { bottom: bottomInset + 16 }]}
           onPress={showSheet}
           activeOpacity={0.8}
         >
@@ -718,7 +720,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
           styles.sheet,
           {
             height: sheetHeightState,
-            paddingBottom: Math.max(insets.bottom, 16),
+            paddingBottom: bottomInset,
             transform: [{ translateY: sheetTranslateY }],
           },
         ]}
@@ -983,7 +985,7 @@ export function SearchTripScreen({ navigation, route }: Props) {
 
       {/* Modal: editar ponto de partida e destino — mesma animação do sheet da Home */}
       <Modal visible={editModalVisible} transparent animationType="none" onRequestClose={closeEditModal}>
-        <KeyboardAvoidingView style={styles.editModalOverlayContainer} behavior="padding">
+        <KeyboardAvoidingView style={styles.editModalOverlayContainer} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <Animated.View style={[styles.editModalOverlay, { opacity: editOverlayOpacity }]} />
           <Pressable style={StyleSheet.absoluteFill} onPress={closeEditModal} />
           <Animated.View
