@@ -292,7 +292,8 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
       .from('excursion_requests')
       .select(
         [
-          'id, destination, origin, excursion_date, scheduled_departure_at, fleet_type, status, user_id,',
+          'id, destination, origin, excursion_date, scheduled_departure_at, scheduled_return_at, excursion_time,',
+          'check_in_volta_started_at, fleet_type, status, user_id,',
           'created_at, confirmed_at, origin_lat, origin_lng, destination_lat, destination_lng',
         ].join(' '),
       )
@@ -331,7 +332,7 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
     if (!responsible) responsible = 'Cliente';
 
     const depIso = r.scheduled_departure_at ?? r.excursion_date ?? null;
-    const retIso = null;
+    const retIso = r.scheduled_return_at ?? null;
 
     setDetail({
       id: r.id,
@@ -341,7 +342,7 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
       returnTime: retIso,
       transportType: fleetTypeLabel(r.fleet_type),
       responsible,
-      direction: 'Ida',
+      direction: r.check_in_volta_started_at ? 'Retorno' : 'Ida',
       status: r.status ?? 'pending',
       originLat: toFiniteNumber(r.origin_lat),
       originLng: toFiniteNumber(r.origin_lng),
@@ -482,6 +483,25 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
       return;
     }
     setDetail((d) => (d ? { ...d, status: 'in_progress' } : d));
+  }, [detail]);
+
+  const handleAcceptExcursion = useCallback(async () => {
+    if (!detail) return;
+    setExcursionActionLoading(true);
+    const { error } = await supabase
+      .from('excursion_requests')
+      .update({
+        status: 'scheduled',
+        confirmed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as never)
+      .eq('id', detail.id);
+    setExcursionActionLoading(false);
+    if (error) {
+      Alert.alert('Erro', 'Não foi possível aceitar a excursão.');
+      return;
+    }
+    setDetail((d) => (d ? { ...d, status: 'scheduled' } : d));
   }, [detail]);
 
   const handleCompleteExcursion = useCallback(() => {
@@ -1004,6 +1024,20 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
                 })
               )}
 
+              {detail.status === 'approved' ? (
+                <TouchableOpacity
+                  style={[styles.excursionActionBtn, excursionActionLoading && { opacity: 0.7 }]}
+                  onPress={() => void handleAcceptExcursion()}
+                  disabled={excursionActionLoading}
+                  activeOpacity={0.85}
+                >
+                  {excursionActionLoading ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.excursionActionBtnText}>Aceitar excursão</Text>
+                  )}
+                </TouchableOpacity>
+              ) : null}
               {detail.status === 'scheduled' ? (
                 <TouchableOpacity
                   style={[styles.excursionActionBtn, excursionActionLoading && { opacity: 0.7 }]}
@@ -1028,6 +1062,13 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
                   <Text style={styles.excursionActionBtnSecondaryText}>Concluir excursão</Text>
                 </TouchableOpacity>
               ) : null}
+              <TouchableOpacity
+                style={styles.excursionActionBtnSecondary}
+                onPress={() => (navigation.canGoBack() ? navigation.goBack() : undefined)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.excursionActionBtnSecondaryText}>Voltar</Text>
+              </TouchableOpacity>
             </View>
           </ScrollView>
       )}
