@@ -383,8 +383,8 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         ) : (
           <View style={styles.linkRow}>
-            <Text style={styles.linkLabelMuted}>Veículo</Text>
-            <Text style={styles.linkMuted}>Ainda não designado</Text>
+            <Text style={styles.linkLabel}>Veículo</Text>
+            <Text style={styles.linkLabel}>{FLEET_LABELS[detail.fleet_type] ?? detail.fleet_type}</Text>
           </View>
         )}
 
