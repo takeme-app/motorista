@@ -390,21 +390,6 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
     });
   }, [detail, navigation]);
 
-  const handleStartExcursion = useCallback(async () => {
-    if (!detail) return;
-    setExcursionActionLoading(true);
-    const { error } = await supabase
-      .from('excursion_requests')
-      .update({ status: 'in_progress', updated_at: new Date().toISOString() } as never)
-      .eq('id', detail.id);
-    setExcursionActionLoading(false);
-    if (error) {
-      Alert.alert('Erro', 'Não foi possível iniciar a excursão.');
-      return;
-    }
-    setDetail((d) => (d ? { ...d, status: 'in_progress' } : d));
-  }, [detail]);
-
   const handleAcceptExcursion = useCallback(async () => {
     if (!detail) return;
     setExcursionActionLoading(true);
@@ -424,29 +409,34 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
     setDetail((d) => (d ? { ...d, status: 'scheduled' } : d));
   }, [detail]);
 
-  const handleCompleteExcursion = useCallback(() => {
+  const handleRejectExcursion = useCallback(() => {
     if (!detail) return;
-    Alert.alert('Concluir excursão', 'Confirma que a excursão foi finalizada?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Concluir',
-        style: 'destructive',
-        onPress: async () => {
-          setExcursionActionLoading(true);
-          const { error } = await supabase
-            .from('excursion_requests')
-            .update({ status: 'completed', updated_at: new Date().toISOString() } as never)
-            .eq('id', detail.id);
-          setExcursionActionLoading(false);
-          if (error) {
-            Alert.alert('Erro', 'Não foi possível concluir a excursão.');
-            return;
-          }
-          setDetail((d) => (d ? { ...d, status: 'completed' } : d));
+    Alert.alert(
+      'Recusar excursão',
+      'Tem certeza que deseja recusar esta excursão? O cliente já efetuou o pagamento — o estorno será tratado manualmente.',
+      [
+        { text: 'Voltar', style: 'cancel' },
+        {
+          text: 'Recusar',
+          style: 'destructive',
+          onPress: async () => {
+            setExcursionActionLoading(true);
+            const { error } = await supabase
+              .from('excursion_requests')
+              .update({ status: 'rejected', updated_at: new Date().toISOString() } as never)
+              .eq('id', detail.id);
+            setExcursionActionLoading(false);
+            if (error) {
+              Alert.alert('Erro', 'Não foi possível recusar a excursão.');
+              return;
+            }
+            setDetail((d) => (d ? { ...d, status: 'rejected' } : d));
+            if (navigation.canGoBack()) navigation.goBack();
+          },
         },
-      },
-    ]);
-  }, [detail]);
+      ],
+    );
+  }, [detail, navigation]);
 
   const destCoord = useMemo(() => {
     if (!detail || detail.destLat == null || detail.destLng == null) return null;
@@ -871,42 +861,28 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
 
             <View style={styles.card}>
               {detail.status === 'approved' ? (
-                <TouchableOpacity
-                  style={[styles.excursionActionBtn, excursionActionLoading && { opacity: 0.7 }]}
-                  onPress={() => void handleAcceptExcursion()}
-                  disabled={excursionActionLoading}
-                  activeOpacity={0.85}
-                >
-                  {excursionActionLoading ? (
-                    <ActivityIndicator color="#FFFFFF" />
-                  ) : (
-                    <Text style={styles.excursionActionBtnText}>Aceitar excursão</Text>
-                  )}
-                </TouchableOpacity>
-              ) : null}
-              {detail.status === 'scheduled' ? (
-                <TouchableOpacity
-                  style={[styles.excursionActionBtn, excursionActionLoading && { opacity: 0.7 }]}
-                  onPress={() => void handleStartExcursion()}
-                  disabled={excursionActionLoading}
-                  activeOpacity={0.85}
-                >
-                  {excursionActionLoading ? (
-                    <ActivityIndicator color="#FFFFFF" />
-                  ) : (
-                    <Text style={styles.excursionActionBtnText}>Iniciar excursão</Text>
-                  )}
-                </TouchableOpacity>
-              ) : null}
-              {detail.status === 'in_progress' ? (
-                <TouchableOpacity
-                  style={[styles.excursionActionBtnSecondary, excursionActionLoading && { opacity: 0.7 }]}
-                  onPress={handleCompleteExcursion}
-                  disabled={excursionActionLoading}
-                  activeOpacity={0.85}
-                >
-                  <Text style={styles.excursionActionBtnSecondaryText}>Concluir excursão</Text>
-                </TouchableOpacity>
+                <>
+                  <TouchableOpacity
+                    style={[styles.excursionActionBtn, excursionActionLoading && { opacity: 0.7 }]}
+                    onPress={() => void handleAcceptExcursion()}
+                    disabled={excursionActionLoading}
+                    activeOpacity={0.85}
+                  >
+                    {excursionActionLoading ? (
+                      <ActivityIndicator color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.excursionActionBtnText}>Aceitar excursão</Text>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.excursionRejectBtn, excursionActionLoading && { opacity: 0.7 }]}
+                    onPress={handleRejectExcursion}
+                    disabled={excursionActionLoading}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.excursionRejectBtnText}>Recusar excursão</Text>
+                  </TouchableOpacity>
+                </>
               ) : null}
               <TouchableOpacity
                 style={styles.excursionActionBtnSecondary}
@@ -1199,6 +1175,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   excursionActionBtnText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+  excursionRejectBtn: {
+    marginTop: 10,
+    borderWidth: 1.5,
+    borderColor: '#B24A44',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  excursionRejectBtnText: { fontSize: 15, fontWeight: '700', color: '#B24A44' },
   excursionActionBtnSecondary: {
     marginTop: 10,
     borderWidth: 1.5,
