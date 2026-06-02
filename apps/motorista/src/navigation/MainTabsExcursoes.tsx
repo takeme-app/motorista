@@ -5,7 +5,6 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { ProfileStackParamList, ChatExcStackParamList } from './types';
 import type { PagamentosExcStackParamList } from './PagamentosExcursoesStack';
-import { HomeExcursoesScreen } from '../screens/excursoes/HomeExcursoesScreen';
 import { ColetasExcursoesStack } from './ColetasExcursoesStack';
 import { ChatExcursoesStack } from './ChatExcursoesStack';
 import { PagamentosExcursoesStack } from './PagamentosExcursoesStack';
@@ -53,12 +52,20 @@ export function MainTabsExcursoes() {
     >
       <Tab.Screen
         name="HomeExc"
-        component={HomeExcursoesScreen}
-        options={{
-          title: 'Início',
-          tabBarIcon: ({ color, focused }) => (
-            <MaterialIcons name="home" size={24} color={color} style={{ opacity: focused ? 1 : 0.9 }} />
-          ),
+        component={ColetasExcursoesStack}
+        options={({ route }) => {
+          const focused = getFocusedRouteNameFromRoute(route) ?? 'ColetasMain';
+          const hideTab =
+            focused === 'RealizarEmbarques' ||
+            focused === 'CadastrarPassageiroExcursao' ||
+            focused === 'EmbarqueConcluido';
+          return {
+            title: 'Início',
+            tabBarIcon: ({ color, focused: f }: { color: string; focused: boolean }) => (
+              <MaterialIcons name="home" size={24} color={color} style={{ opacity: f ? 1 : 0.9 }} />
+            ),
+            tabBarStyle: hideTab ? { display: 'none' as const } : tabBarVisibleStyle,
+          };
         }}
       />
       <Tab.Screen
