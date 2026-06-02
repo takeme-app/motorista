@@ -18,8 +18,11 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ColetasExcursoesStackParamList } from '../../navigation/ColetasExcursoesStack';
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 import { supabase } from '../../lib/supabase';
+import { formatCpf, onlyDigits, validateCpf } from '../../utils/formatCpf';
 
 type Props = NativeStackScreenProps<ColetasExcursoesStackParamList, 'CadastrarPassageiroExcursao'>;
+
+const GENDER_OPTIONS = ['Masculino', 'Feminino', 'Outro'] as const;
 
 export function CadastrarPassageiroExcursaoScreen({ navigation, route }: Props) {
   const { excursionId } = route.params;
@@ -47,13 +50,18 @@ export function CadastrarPassageiroExcursaoScreen({ navigation, route }: Props) 
       Alert.alert('Atenção', 'Informe o nome completo.');
       return;
     }
+    const cpfDigits = onlyDigits(cpf);
+    if (cpfDigits && !validateCpf(cpfDigits)) {
+      Alert.alert('CPF inválido', 'Verifique o CPF informado (11 dígitos válidos).');
+      return;
+    }
     setSaving(true);
     const { error } = await supabase.from('excursion_passengers').insert({
       excursion_request_id: excursionId,
       full_name: name,
-      cpf: cpf.trim() || null,
+      cpf: cpfDigits ? formatCpf(cpf) : null,
       age: age.trim() || null,
-      gender: gender.trim() || null,
+      gender: gender || null,
       observations: observations.trim() || null,
     });
     setSaving(false);
@@ -85,10 +93,42 @@ export function CadastrarPassageiroExcursaoScreen({ navigation, route }: Props) 
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Field label="Nome completo" placeholder="Digite o nome do dependente" value={fullName} onChangeText={setFullName} />
-          <Field label="CPF" placeholder="Ex: 123.456.789-99" value={cpf} onChangeText={setCpf} keyboardType="numbers-and-punctuation" />
-          <Field label="Idade" placeholder="Ex: 25 anos" value={age} onChangeText={setAge} />
-          <Field label="Sexo" placeholder="Ex: Masculino" value={gender} onChangeText={setGender} />
+          <Field label="Nome completo" placeholder="Digite o nome do passageiro" value={fullName} onChangeText={setFullName} />
+          <Field
+            label="CPF"
+            placeholder="000.000.000-00"
+            value={cpf}
+            onChangeText={(t) => setCpf(formatCpf(t))}
+            keyboardType="number-pad"
+            maxLength={14}
+          />
+          <Field
+            label="Idade"
+            placeholder="Ex: 25"
+            value={age}
+            onChangeText={(t) => setAge(onlyDigits(t).slice(0, 3))}
+            keyboardType="number-pad"
+            maxLength={3}
+          />
+
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Sexo</Text>
+            <View style={styles.genderRow}>
+              {GENDER_OPTIONS.map((opt) => {
+                const sel = gender === opt;
+                return (
+                  <TouchableOpacity
+                    key={opt}
+                    style={[styles.genderChip, sel && styles.genderChipOn]}
+                    onPress={() => setGender(opt)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.genderChipText, sel && styles.genderChipTextOn]}>{opt}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
 
           <Text style={styles.uploadLabel}>Documento de identificação</Text>
           <TouchableOpacity style={styles.uploadBox} onPress={onUploadDoc} activeOpacity={0.85}>
@@ -153,12 +193,14 @@ function Field({
   value,
   onChangeText,
   keyboardType,
+  maxLength,
 }: {
   label: string;
   placeholder: string;
   value: string;
   onChangeText: (t: string) => void;
-  keyboardType?: 'default' | 'numbers-and-punctuation';
+  keyboardType?: 'default' | 'numbers-and-punctuation' | 'number-pad';
+  maxLength?: number;
 }) {
   return (
     <View style={styles.field}>
@@ -170,6 +212,7 @@ function Field({
         value={value}
         onChangeText={onChangeText}
         keyboardType={keyboardType ?? 'default'}
+        maxLength={maxLength}
       />
     </View>
   );
@@ -215,6 +258,19 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#111827',
   },
+  genderRow: { flexDirection: 'row', gap: 10 },
+  genderChip: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: '#F2F2F2',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#F2F2F2',
+  },
+  genderChipOn: { backgroundColor: '#111827', borderColor: '#111827' },
+  genderChipText: { fontSize: 14, fontWeight: '600', color: '#374151' },
+  genderChipTextOn: { color: '#FFFFFF' },
   uploadLabel: { fontSize: 14, fontWeight: '700', color: '#111827', marginBottom: 10 },
   rowLabel: {
     flexDirection: 'row',

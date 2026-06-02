@@ -354,7 +354,7 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
             />
           </View>
 
-          <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
+          <ScrollView style={styles.scroll} contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
             {filtered.map((p) => {
               const embarked = p.status_departure === 'embarked';
               const busy = uploadingPassengerId === p.id;
@@ -548,7 +548,8 @@ const styles = StyleSheet.create({
   },
   searchIcon: { marginRight: 4 },
   searchInput: { flex: 1, paddingVertical: 12, fontSize: 15, color: '#111827' },
-  list: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 120 },
+  scroll: { flex: 1 },
+  list: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 150 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

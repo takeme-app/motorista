@@ -64,9 +64,19 @@ export function MainTabsExcursoes() {
       <Tab.Screen
         name="ColetasExc"
         component={ColetasExcursoesStack}
-        options={{
-          title: 'Excursões',
-          tabBarIcon: ({ color }) => <MaterialIcons name="directions-bus" size={24} color={color} />,
+        options={({ route }) => {
+          const focused = getFocusedRouteNameFromRoute(route) ?? 'ColetasMain';
+          const hideTab =
+            focused === 'RealizarEmbarques' ||
+            focused === 'CadastrarPassageiroExcursao' ||
+            focused === 'EmbarqueConcluido';
+          return {
+            title: 'Excursões',
+            tabBarIcon: ({ color }: { color: string }) => (
+              <MaterialIcons name="directions-bus" size={24} color={color} />
+            ),
+            tabBarStyle: hideTab ? { display: 'none' as const } : tabBarVisibleStyle,
+          };
         }}
       />
       <Tab.Screen
