@@ -18,6 +18,7 @@ function formatBRL(cents: number | null | undefined): string {
 
 export function EmbarqueConcluidoScreen({ navigation, route }: Props) {
   const { boarded, justified, totalExcursion, excursionId, totalAmountCents } = route.params;
+  const isVolta = (route.params.phase ?? 'ida') === 'volta';
   const [destinationQuery, setDestinationQuery] = useState<string | null>(null);
 
   useEffect(() => {
@@ -51,6 +52,10 @@ export function EmbarqueConcluidoScreen({ navigation, route }: Props) {
     navigation.popToTop();
   }, [navigation]);
 
+  const goVolta = useCallback(() => {
+    navigation.navigate('RealizarEmbarques', { excursionId, phase: 'volta' });
+  }, [navigation, excursionId]);
+
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
       <StatusBar style="dark" />
@@ -62,9 +67,13 @@ export function EmbarqueConcluidoScreen({ navigation, route }: Props) {
             </View>
           </View>
           <View style={styles.card}>
-            <Text style={styles.title}>Embarque concluído com sucesso!</Text>
+            <Text style={styles.title}>
+              {isVolta ? 'Embarque de volta concluído!' : 'Embarque concluído com sucesso!'}
+            </Text>
             <Text style={styles.subtitle}>
-              Todos os passageiros foram registrados. A excursão está pronta para partir.
+              {isVolta
+                ? 'Todos os passageiros do retorno foram registrados.'
+                : 'Todos os passageiros foram registrados. A excursão está pronta para partir.'}
             </Text>
             <View style={styles.stats}>
               <StatRow label="Passageiros embarcados" value={String(boarded)} />
@@ -78,8 +87,17 @@ export function EmbarqueConcluidoScreen({ navigation, route }: Props) {
         </View>
       </View>
       <View style={styles.footer}>
-        <TouchableOpacity style={styles.btnBlack} onPress={openMaps} activeOpacity={0.88}>
-          <Text style={styles.btnBlackText}>Acompanhar excursão</Text>
+        {!isVolta && (
+          <TouchableOpacity style={styles.btnBlack} onPress={goVolta} activeOpacity={0.88}>
+            <Text style={styles.btnBlackText}>Iniciar embarque de volta</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity
+          style={isVolta ? styles.btnBlack : styles.btnOutline}
+          onPress={openMaps}
+          activeOpacity={0.88}
+        >
+          <Text style={isVolta ? styles.btnBlackText : styles.btnOutlineText}>Acompanhar excursão</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={goHome} activeOpacity={0.7} style={styles.linkWrap}>
           <Text style={styles.linkText}>Voltar ao início</Text>
@@ -156,6 +174,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   btnBlackText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
+  btnOutline: {
+    height: 56,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#111827',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  btnOutlineText: { fontSize: 16, fontWeight: '700', color: '#111827' },
   linkWrap: { alignItems: 'center', paddingVertical: 8 },
   linkText: { fontSize: 16, fontWeight: '600', color: '#111827' },
 });

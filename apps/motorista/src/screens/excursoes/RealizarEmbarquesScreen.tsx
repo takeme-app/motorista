@@ -32,6 +32,7 @@ type Passenger = {
   age: string | null;
   gender: string | null;
   status_departure: string;
+  status_return: string;
   absence_justified: boolean;
 };
 
@@ -52,6 +53,14 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const bottomInset = useBottomSafeInset({ extra: 24 });
   const { excursionId } = route.params;
+  const phase: 'ida' | 'volta' = route.params.phase ?? 'ida';
+  const isVolta = phase === 'volta';
+  const statusCol = isVolta ? 'status_return' : 'status_departure';
+  const photoCol = isVolta ? 'photo_url_return' : 'photo_url';
+  const statusOf = useCallback(
+    (p: Passenger) => (isVolta ? p.status_return : p.status_departure),
+    [isVolta],
+  );
   const [loading, setLoading] = useState(true);
   const [passengers, setPassengers] = useState<Passenger[]>([]);
   const [search, setSearch] = useState('');
@@ -65,25 +74,30 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
     setLoading(true);
     const { data: psgData, error: psgErr } = await supabase
       .from('excursion_passengers')
-      .select('id, full_name, age, gender, status_departure, absence_justified')
+      .select('id, full_name, age, gender, status_departure, status_return, absence_justified')
       .eq('excursion_request_id', excursionId)
       .order('full_name');
     if (psgErr) {
       console.warn('[RealizarEmbarques]', psgErr.message);
     }
     const rows = (psgData ?? []) as any[];
+    const mapped: Passenger[] = rows.map((r) => ({
+      id: r.id,
+      full_name: r.full_name ?? '',
+      age: r.age ?? null,
+      gender: r.gender ?? null,
+      status_departure: r.status_departure ?? 'not_embarked',
+      status_return: r.status_return ?? 'not_embarked',
+      absence_justified: Boolean(r.absence_justified),
+    }));
+    // Na volta, só entram as pessoas que embarcaram na ida (as mesmas pessoas).
     setPassengers(
-      rows.map((r) => ({
-        id: r.id,
-        full_name: r.full_name ?? '',
-        age: r.age ?? null,
-        gender: r.gender ?? null,
-        status_departure: r.status_departure ?? 'not_embarked',
-        absence_justified: Boolean(r.absence_justified),
-      })),
+      isVolta
+        ? mapped.filter((p) => p.status_departure === 'embarked' || p.status_departure === 'disembarked')
+        : mapped,
     );
     setLoading(false);
-  }, [excursionId]);
+  }, [excursionId, isVolta]);
 
   useFocusEffect(
     useCallback(() => {
@@ -96,21 +110,30 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
     (async () => {
       const { data } = await supabase
         .from('excursion_requests')
-        .select('status, total_amount_cents')
+        .select('status, total_amount_cents, check_in_ida_started_at, check_in_volta_started_at')
         .eq('id', excursionId)
         .maybeSingle();
       if (cancelled || !data) return;
-      const row = data as { status: string; total_amount_cents: number | null };
+      const row = data as any;
       setTotalAmountCents(row.total_amount_cents ?? null);
-      const st = row.status;
-      if (st === 'approved' || st === 'scheduled') {
-        await supabase.from('excursion_requests').update({ status: 'in_progress' }).eq('id', excursionId);
+      const now = new Date().toISOString();
+      const patch: Record<string, unknown> = {};
+      if (isVolta) {
+        // Abrir o embarque de volta marca o início do check-in de volta (notifica o cliente).
+        if (!row.check_in_volta_started_at) patch.check_in_volta_started_at = now;
+      } else {
+        // Embarque de ida: a viagem entra em andamento e marca o início do check-in de ida.
+        if (row.status === 'approved' || row.status === 'scheduled') patch.status = 'in_progress';
+        if (!row.check_in_ida_started_at) patch.check_in_ida_started_at = now;
+      }
+      if (Object.keys(patch).length > 0) {
+        await supabase.from('excursion_requests').update(patch as never).eq('id', excursionId);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [excursionId]);
+  }, [excursionId, isVolta]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -119,22 +142,22 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
   }, [passengers, search]);
 
   const boardedCount = useMemo(
-    () => passengers.filter((p) => p.status_departure === 'embarked').length,
-    [passengers],
+    () => passengers.filter((p) => statusOf(p) === 'embarked').length,
+    [passengers, statusOf],
   );
 
   const totalForBar = Math.max(passengers.length, 1);
   const progressPct = Math.min(100, Math.round((boardedCount / totalForBar) * 100));
 
   const notEmbarkedUnjustified = useMemo(
-    () => passengers.filter((p) => p.status_departure === 'not_embarked' && !p.absence_justified),
-    [passengers],
+    () => passengers.filter((p) => statusOf(p) === 'not_embarked' && !p.absence_justified),
+    [passengers, statusOf],
   );
 
   const navigateSuccess = useCallback(
     (list: Passenger[]) => {
-      const boarded = list.filter((p) => p.status_departure === 'embarked').length;
-      const justified = list.filter((p) => p.status_departure === 'not_embarked' && p.absence_justified).length;
+      const boarded = list.filter((p) => statusOf(p) === 'embarked').length;
+      const justified = list.filter((p) => statusOf(p) === 'not_embarked' && p.absence_justified).length;
       const totalExcursion = list.length;
       navigation.navigate('EmbarqueConcluido', {
         excursionId,
@@ -142,9 +165,10 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
         justified,
         totalExcursion,
         totalAmountCents,
+        phase,
       });
     },
-    [excursionId, navigation, totalAmountCents],
+    [excursionId, navigation, totalAmountCents, statusOf, phase],
   );
 
   const tryFinalize = useCallback(() => {
@@ -157,14 +181,14 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
 
   const embarkOrUndo = useCallback(
     async (p: Passenger) => {
-      if (p.status_departure === 'embarked') {
+      if (statusOf(p) === 'embarked') {
         const { error } = await supabase
           .from('excursion_passengers')
           .update({
-            status_departure: 'not_embarked',
-            photo_url: null,
+            [statusCol]: 'not_embarked',
+            [photoCol]: null,
             updated_at: new Date().toISOString(),
-          })
+          } as never)
           .eq('id', p.id);
         if (error) {
           Alert.alert('Erro', 'Não foi possível desmarcar o embarque.');
@@ -172,7 +196,7 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
           return;
         }
         setPassengers((prev) =>
-          prev.map((x) => (x.id === p.id ? { ...x, status_departure: 'not_embarked' } : x)),
+          prev.map((x) => (x.id === p.id ? { ...x, [statusCol]: 'not_embarked' } : x)),
         );
         return;
       }
@@ -200,7 +224,7 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
       }
 
       const b64 = result.assets[0].base64;
-      const path = `${user.id}/${excursionId}/${p.id}/boarding_${Date.now()}.jpg`;
+      const path = `${user.id}/${excursionId}/${p.id}/boarding_${phase}_${Date.now()}.jpg`;
       let bytes: Uint8Array;
       try {
         const binary = atob(b64);
@@ -225,10 +249,10 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
       const { error: dbErr } = await supabase
         .from('excursion_passengers')
         .update({
-          status_departure: 'embarked',
-          photo_url: path,
+          [statusCol]: 'embarked',
+          [photoCol]: path,
           updated_at: new Date().toISOString(),
-        })
+        } as never)
         .eq('id', p.id);
 
       setUploadingPassengerId(null);
@@ -239,10 +263,10 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
       }
 
       setPassengers((prev) =>
-        prev.map((x) => (x.id === p.id ? { ...x, status_departure: 'embarked' } : x)),
+        prev.map((x) => (x.id === p.id ? { ...x, [statusCol]: 'embarked' } : x)),
       );
     },
-    [excursionId, loadAll],
+    [excursionId, loadAll, statusCol, photoCol, phase, statusOf],
   );
 
   const openJustify = useCallback(() => {
@@ -278,22 +302,24 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
     setModal('none');
     const { data } = await supabase
       .from('excursion_passengers')
-      .select('id, full_name, age, gender, status_departure, absence_justified')
+      .select('id, full_name, age, gender, status_departure, status_return, absence_justified')
       .eq('excursion_request_id', excursionId)
       .order('full_name');
     const rows = (data ?? []) as any[];
-    const list: Passenger[] = rows.map((r) => ({
+    const mapped: Passenger[] = rows.map((r) => ({
       id: r.id,
       full_name: r.full_name ?? '',
       age: r.age ?? null,
       gender: r.gender ?? null,
       status_departure: r.status_departure ?? 'not_embarked',
+      status_return: r.status_return ?? 'not_embarked',
       absence_justified: Boolean(r.absence_justified),
     }));
+    const list = isVolta
+      ? mapped.filter((p) => p.status_departure === 'embarked' || p.status_departure === 'disembarked')
+      : mapped;
     setPassengers(list);
-    const stillPending = list.filter(
-      (p) => p.status_departure === 'not_embarked' && !p.absence_justified,
-    );
+    const stillPending = list.filter((p) => statusOf(p) === 'not_embarked' && !p.absence_justified);
     if (stillPending.length > 0) {
       Alert.alert(
         'Ausentes pendentes',
@@ -302,7 +328,7 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
       return;
     }
     navigateSuccess(list);
-  }, [excursionId, justifySelected, navigateSuccess]);
+  }, [excursionId, justifySelected, navigateSuccess, isVolta, statusOf]);
 
   const finishAnyway = useCallback(() => {
     setModal('none');
@@ -316,14 +342,18 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
         <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
           <MaterialIcons name="arrow-back" size={22} color="#111827" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Realizar embarques</Text>
-        <TouchableOpacity
-          style={styles.iconBtn}
-          onPress={() => navigation.navigate('CadastrarPassageiroExcursao', { excursionId })}
-          activeOpacity={0.7}
-        >
-          <MaterialIcons name="add" size={24} color="#111827" />
-        </TouchableOpacity>
+        <Text style={styles.headerTitle}>{isVolta ? 'Embarque de volta' : 'Realizar embarques'}</Text>
+        {isVolta ? (
+          <View style={styles.iconBtn} />
+        ) : (
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={() => navigation.navigate('CadastrarPassageiroExcursao', { excursionId })}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="add" size={24} color="#111827" />
+          </TouchableOpacity>
+        )}
       </View>
 
       {loading ? (
@@ -338,7 +368,11 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
               Embarcados: <Text style={styles.statGold}>{boardedCount}</Text>
             </Text>
           </View>
-          <Text style={styles.statsHint}>Embarcar abre a câmera — é necessário tirar uma foto para confirmar.</Text>
+          <Text style={styles.statsHint}>
+            {isVolta
+              ? 'Embarque de volta — as mesmas pessoas da ida. Embarcar abre a câmera para registrar a foto.'
+              : 'Embarcar abre a câmera — é necessário tirar uma foto para confirmar.'}
+          </Text>
           <View style={styles.progressTrack}>
             <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
           </View>
@@ -356,7 +390,7 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
 
           <ScrollView style={styles.scroll} contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
             {filtered.map((p) => {
-              const embarked = p.status_departure === 'embarked';
+              const embarked = statusOf(p) === 'embarked';
               const busy = uploadingPassengerId === p.id;
               return (
                 <View key={p.id} style={styles.row}>
@@ -393,16 +427,20 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
           </ScrollView>
 
           <View style={[styles.bottom, { paddingBottom: bottomInset }]}>
-            <TouchableOpacity
-              style={styles.addLink}
-              onPress={() => navigation.navigate('CadastrarPassageiroExcursao', { excursionId })}
-              activeOpacity={0.7}
-            >
-              <MaterialIcons name="add" size={18} color="#111827" />
-              <Text style={styles.addLinkText}> Cadastrar novo passageiro</Text>
-            </TouchableOpacity>
+            {!isVolta && (
+              <TouchableOpacity
+                style={styles.addLink}
+                onPress={() => navigation.navigate('CadastrarPassageiroExcursao', { excursionId })}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="add" size={18} color="#111827" />
+                <Text style={styles.addLinkText}> Cadastrar novo passageiro</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={styles.btnBlack} onPress={tryFinalize} activeOpacity={0.88}>
-              <Text style={styles.btnBlackText}>Finalizar embarque</Text>
+              <Text style={styles.btnBlackText}>
+                {isVolta ? 'Finalizar embarque de volta' : 'Finalizar embarque'}
+              </Text>
             </TouchableOpacity>
           </View>
         </>

@@ -10,7 +10,7 @@ export type ColetasExcursoesStackParamList = {
   ColetasMain: undefined;
   HistoricoExcursoes: undefined;
   DetalhesExcursao: { excursionId: string };
-  RealizarEmbarques: { excursionId: string };
+  RealizarEmbarques: { excursionId: string; phase?: 'ida' | 'volta' };
   CadastrarPassageiroExcursao: { excursionId: string };
   EmbarqueConcluido: {
     excursionId: string;
@@ -18,6 +18,7 @@ export type ColetasExcursoesStackParamList = {
     justified: number;
     totalExcursion: number;
     totalAmountCents?: number | null;
+    phase?: 'ida' | 'volta';
   };
 };
 
