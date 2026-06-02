@@ -250,6 +250,27 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
+  const confirmComplete = useCallback((id: string) => {
+    Alert.alert('Concluir excursão', 'Deseja realmente concluir a excursão?', [
+      { text: 'Não', style: 'cancel' },
+      {
+        text: 'Sim',
+        style: 'destructive',
+        onPress: async () => {
+          const { error } = await supabase
+            .from('excursion_requests')
+            .update({ status: 'completed', updated_at: new Date().toISOString() } as never)
+            .eq('id', id);
+          if (error) {
+            Alert.alert('Erro', 'Não foi possível concluir a excursão.');
+            return;
+          }
+          await load();
+        },
+      },
+    ]);
+  }, [load]);
+
   const toggleExpand = useCallback((id: string) => {
     setExcursions((prev) => prev.map((e) => e.id === id ? { ...e, expanded: !e.expanded } : e));
   }, []);
@@ -461,13 +482,14 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
                             </View>
                           ))}
                           <TouchableOpacity
-                            style={[styles.cardBtnBlack, exc.boarding.done && styles.cardBtnDisabled]}
-                            disabled={exc.boarding.done}
+                            style={styles.cardBtnBlack}
                             onPress={() =>
-                              navigation.navigate('RealizarEmbarques', {
-                                excursionId: exc.id,
-                                phase: exc.boarding.phase,
-                              })
+                              exc.boarding.complete
+                                ? confirmComplete(exc.id)
+                                : navigation.navigate('RealizarEmbarques', {
+                                    excursionId: exc.id,
+                                    phase: exc.boarding.phase,
+                                  })
                             }
                             activeOpacity={0.88}
                           >

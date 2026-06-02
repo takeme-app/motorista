@@ -61,10 +61,16 @@ export type BoardingFlags = {
   boarding_volta_done_at?: string | null;
 };
 
-export type BoardingCta = { phase: 'ida' | 'volta'; label: string; done: boolean };
+export type BoardingCta = {
+  phase: 'ida' | 'volta';
+  label: string;
+  done: boolean;
+  /** Embarque (ida+volta) finalizado: o botão vira "Finalizar excursão". */
+  complete?: boolean;
+};
 
 export function boardingCta(x: BoardingFlags): BoardingCta {
-  if (x.boarding_volta_done_at) return { phase: 'volta', label: 'Embarque concluído', done: true };
+  if (x.boarding_volta_done_at) return { phase: 'volta', label: 'Finalizar excursão', done: false, complete: true };
   if (x.check_in_volta_started_at) return { phase: 'volta', label: 'Continuar embarque de volta', done: false };
   if (x.boarding_ida_done_at) return { phase: 'volta', label: 'Iniciar embarque de volta', done: false };
   if (x.check_in_ida_started_at) return { phase: 'ida', label: 'Continuar embarque', done: false };
