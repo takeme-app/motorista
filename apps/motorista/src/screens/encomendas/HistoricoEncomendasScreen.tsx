@@ -12,6 +12,7 @@ import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useBottomSafeInset } from '@take-me/shared';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ColetasEncomendasStackParamList } from '../../navigation/ColetasEncomendasStack';
@@ -100,6 +101,7 @@ function parseDateInput(str: string): Date | null {
 }
 
 export function HistoricoEncomendasScreen({ navigation }: Props) {
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const { showAlert } = useAppAlert();
   const [loading, setLoading] = useState(true);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -266,7 +268,7 @@ export function HistoricoEncomendasScreen({ navigation }: Props) {
 
       <Modal visible={filterVisible} transparent animationType="slide">
         <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setFilterVisible(false)} />
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
           <View style={styles.sheetHandle} />
           <Text style={styles.sheetTitle}>Filtrar atividades</Text>
           <View style={styles.sheetDivider} />

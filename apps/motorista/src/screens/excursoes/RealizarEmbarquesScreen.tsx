@@ -509,7 +509,7 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
                 );
               })}
             </ScrollView>
-            <View style={styles.sheetFooter}>
+            <View style={[styles.sheetFooter, { paddingBottom: bottomInset }]}>
               <TouchableOpacity
                 style={[styles.btnBlack, savingJustify && { opacity: 0.65 }]}
                 onPress={applyJustifyAndFinish}

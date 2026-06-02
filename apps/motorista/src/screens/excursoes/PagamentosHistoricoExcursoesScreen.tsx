@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -89,6 +90,7 @@ function PixIcon() {
 }
 
 export function PagamentosHistoricoExcursoesScreen({ navigation }: Props) {
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
@@ -250,7 +252,7 @@ export function PagamentosHistoricoExcursoesScreen({ navigation }: Props) {
       <Modal visible={filterVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setFilterVisible(false)} />
-          <View style={styles.sheet}>
+          <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
             <View style={styles.sheetHandleRow}>
               <View style={styles.sheetHandle} />
             </View>

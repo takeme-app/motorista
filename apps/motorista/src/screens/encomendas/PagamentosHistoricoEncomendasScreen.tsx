@@ -11,6 +11,7 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -144,6 +145,7 @@ function PixIcon() {
 }
 
 export function PagamentosHistoricoEncomendasScreen({ navigation }: Props) {
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const { showAlert } = useAppAlert();
   const now = new Date();
   const defaultStart = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1));
@@ -348,7 +350,7 @@ export function PagamentosHistoricoEncomendasScreen({ navigation }: Props) {
               setPickerTarget(null);
             }}
           />
-          <View style={styles.sheet}>
+          <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
             <View style={styles.sheetHandleRow}>
               <View style={styles.sheetHandle} />
             </View>

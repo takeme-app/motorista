@@ -20,7 +20,7 @@ import type { CompositeScreenProps } from '@react-navigation/native';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
-import { getOrCreateActiveSupportConversationId, formatTripCode as formatSharedTripCode } from '@take-me/shared';
+import { useBottomSafeInset, getOrCreateActiveSupportConversationId, formatTripCode as formatSharedTripCode } from '@take-me/shared';
 import { supabase } from '../lib/supabase';
 import { invokeRefundJourneyStartNotAccepted } from '../lib/refundJourneyStartNotAccepted';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
@@ -370,6 +370,7 @@ function TripCard({
 }
 
 export function ActivitiesScreen({ navigation }: Props) {
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const { showAlert } = useAppAlert();
   const [loading, setLoading] = useState(true);
   const [startingTripId, setStartingTripId] = useState<string | null>(null);
@@ -880,7 +881,7 @@ export function ActivitiesScreen({ navigation }: Props) {
           activeOpacity={1}
           onPress={() => setFilterVisible(false)}
         />
-        <View style={styles.bottomSheet}>
+        <View style={[styles.bottomSheet, { paddingBottom: bottomInset }]}>
           <View style={styles.sheetHandle} />
           <Text style={styles.sheetTitle}>Filtrar atividades</Text>
 

@@ -58,7 +58,7 @@ import {
 import { onlyDigits } from '../../utils/formatCpf';
 import { closeShipmentConversation } from '../../lib/shipmentConversation';
 import { getUserErrorMessage, isShipmentDriverRatingsUnavailableError } from '../../utils/errorMessage';
-import { formatShipmentCode } from '@take-me/shared';
+import { useBottomSafeInset, formatShipmentCode } from '@take-me/shared';
 
 let Location: any = null;
 try { Location = require('expo-location'); } catch { /* not linked yet */ }
@@ -164,6 +164,7 @@ function shipmentDisplayId(id: string): string {
 const NEARBY_KM = 0.15;
 
 export function ActiveShipmentScreen({ navigation, route }: Props) {
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const { showAlert } = useAppAlert();
@@ -1419,7 +1420,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       >
         <KeyboardAvoidingView behavior="height" style={styles.kbav}>
           <View style={styles.modalOverlay}>
-            <View style={styles.sheet}>
+            <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
               <View style={styles.handle} />
               <View style={styles.sheetHeader}>
                 <Text style={styles.sheetTitle}>Deseja confirmar a Coleta {shipment.coletaLetter}?</Text>
@@ -1531,7 +1532,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       >
         <KeyboardAvoidingView behavior="height" style={styles.kbav}>
           <View style={styles.modalOverlay}>
-            <View style={styles.sheet}>
+            <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
               <View style={styles.handle} />
               <View style={styles.sheetHeader}>
                 <View style={{ flex: 1 }}>
@@ -1619,7 +1620,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       >
         <KeyboardAvoidingView behavior="height" style={styles.kbav}>
           <View style={styles.modalOverlay}>
-            <View style={styles.sheet}>
+            <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
               <View style={styles.handle} />
               <View style={styles.sheetHeader}>
                 <View style={{ flex: 1 }}>
