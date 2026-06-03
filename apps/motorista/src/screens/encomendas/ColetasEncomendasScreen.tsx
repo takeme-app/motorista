@@ -187,13 +187,13 @@ export function ColetasEncomendasScreen({ navigation }: Props) {
 
     const { data: chatsData } = await supabase
       .from('conversations' as never)
-      .select('id, participant_name, participant_avatar, last_message, last_message_at, unread_driver, status')
+      .select('id, participant_name, participant_avatar, last_message, last_message_at, unread_driver, status, client_id')
       .eq('driver_id', user.id)
       .not('shipment_id', 'is', null)
       .order('last_message_at', { ascending: false })
-      .limit(3);
+      .limit(30);
 
-    setChatPreviews(((chatsData ?? []) as unknown as {
+    const rawChats = (chatsData ?? []) as unknown as {
       id: string;
       participant_name?: string | null;
       participant_avatar?: string | null;
@@ -201,7 +201,19 @@ export function ColetasEncomendasScreen({ navigation }: Props) {
       last_message_at?: string | null;
       unread_driver?: number | null;
       status?: string | null;
-    }[]).map((c) => ({
+      client_id?: string | null;
+    }[];
+    // Uma conversa por cliente: várias encomendas do mesmo cliente geram várias
+    // conversas (uma por shipment); aqui mantemos só a mais recente de cada cliente.
+    const seenClients = new Set<string>();
+    const dedupedChats = rawChats.filter((c) => {
+      const key = `client:${c.client_id ?? c.participant_name ?? c.id}`;
+      if (seenClients.has(key)) return false;
+      seenClients.add(key);
+      return true;
+    });
+
+    setChatPreviews(dedupedChats.slice(0, 3).map((c) => ({
       id: c.id,
       participantName: c.participant_name?.trim() || 'Cliente',
       participantAvatar: c.participant_avatar ?? null,
