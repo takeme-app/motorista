@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useCallback } from 'react';
 import { View, Modal, Pressable, Animated, StyleSheet } from 'react-native';
+import { useBottomSafeInset } from '@take-me/shared';
 
 const SLIDE_DISTANCE = 500;
 const ANIM_DURATION_OVERLAY = 200;
@@ -12,6 +13,7 @@ type Props = {
 };
 
 export function AnimatedBottomSheet({ visible, onClose, children }: Props) {
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const overlayOpacity = useRef(new Animated.Value(0)).current;
   const sheetTranslateY = useRef(new Animated.Value(SLIDE_DISTANCE)).current;
 
@@ -53,7 +55,9 @@ export function AnimatedBottomSheet({ visible, onClose, children }: Props) {
       <View style={styles.container} pointerEvents="box-none">
         <Animated.View style={[styles.overlay, { opacity: overlayOpacity }]} pointerEvents="none" />
         <Pressable style={styles.touchable} onPress={handleClose} />
-        <Animated.View style={[styles.sheet, { transform: [{ translateY: sheetTranslateY }] }]}>
+        <Animated.View
+          style={[styles.sheet, { paddingBottom: bottomInset }, { transform: [{ translateY: sheetTranslateY }] }]}
+        >
           <View style={styles.handle} />
           {children}
         </Animated.View>
