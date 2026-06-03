@@ -34,7 +34,9 @@ export function AppAlertModal({
   onConfirm,
   destructive,
 }: AppAlertModalProps) {
-  const isConfirm = !!confirmLabel || !!onConfirm;
+  // Modo confirmação (2 botões) só quando há confirmLabel — o provider sempre
+  // passa onConfirm, então não dá pra usá-lo como gatilho.
+  const isConfirm = !!confirmLabel;
   return (
     <Modal
       visible={visible}
