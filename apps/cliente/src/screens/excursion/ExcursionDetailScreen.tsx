@@ -398,14 +398,11 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         )}
 
-        {(detail.status === 'scheduled' || detail.status === 'approved' || detail.status === 'in_progress') && (
-          <TouchableOpacity style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>Acompanhar detalhes</Text>
-          </TouchableOpacity>
-        )}
-
         {detail.status === 'completed' && (
-          <TouchableOpacity style={styles.secondaryButton}>
+          <TouchableOpacity
+            style={styles.secondaryButton}
+            onPress={() => navigation.navigate('ExcursionBudget', { excursionRequestId })}
+          >
             <Text style={styles.secondaryButtonText}>Recibo</Text>
           </TouchableOpacity>
         )}
