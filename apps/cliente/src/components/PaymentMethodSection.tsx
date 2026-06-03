@@ -68,11 +68,16 @@ function getCancellationPolicyLines(
   switch (variant) {
     case 'shipment_credit':
     case 'shipment_debit':
+      // Encomenda não tem reembolso automático por janela — é tratado pelo suporte.
+      return [
+        'Cancelamento pelo app antes da entrega',
+        'Reembolso de valores pagos tratado pelo suporte',
+      ];
     case 'trip':
     default:
       return [
         `Cancelamento até ${hoursLabel} antes da partida: reembolso integral`,
-        `Cancelamento após esse prazo: sem reembolso`,
+        `Cancelamento após esse prazo: sem reembolso automático`,
       ];
   }
 }

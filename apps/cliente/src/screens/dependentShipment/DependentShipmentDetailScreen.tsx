@@ -788,16 +788,16 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
         <Text style={styles.policySheetTitle}>Política de cancelamento</Text>
         <ScrollView style={styles.policyScroll} showsVerticalScrollIndicator={false}>
           <Text style={styles.policyText}>
-            O cancelamento é <Text style={styles.policyBold}>gratuito</Text> quando ocorrer antes do aceite de um motorista ou dentro de <Text style={styles.policyBold}>2 minutos</Text> após o aceite, desde que não tenha havido deslocamento iniciado.
+            O cancelamento é feito pelo app e <Text style={styles.policyBold}>não tem taxa</Text>.
           </Text>
           <Text style={styles.policyText}>
-            Após esse período, poderá ser cobrada uma <Text style={styles.policyBold}>taxa proporcional</Text> ao deslocamento do motorista (R$ 2,00/min + R$ 1,20/km), com mínimo de R$ 80,00 e teto de R$ 250,00.
+            O reembolso de valores já pagos é tratado pelo <Text style={styles.policyBold}>suporte</Text> — fale com a gente pelo app para avaliarmos o estorno.
           </Text>
           <Text style={styles.policyText}>
-            Em caso de tentativa frustrada (destinatário indisponível, endereço incorreto, etc.), a mesma taxa poderá ser aplicada.
+            Se o envio não for realizado até o dia agendado (nenhum motorista aceitou ou iniciou), o valor pago é <Text style={styles.policyBold}>estornado integralmente</Text>.
           </Text>
           <Text style={styles.policyText}>
-            Se não concordar com alguma cobrança, você pode solicitar revisão em até 7 dias pelo suporte.
+            Em caso de dúvida sobre um estorno, você pode solicitar revisão pelo suporte.
           </Text>
         </ScrollView>
         <TouchableOpacity style={styles.policySheetCancelBtn} onPress={handleWantCancel} activeOpacity={0.8}>
