@@ -20,6 +20,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ClientChatRouteParams } from '../navigation/ActivitiesStackTypes';
+import { getMainTabBarStyleFromInsets } from '../navigation/mainTabBarStyle';
 import { getOrCreateActiveSupportConversationId, useBottomSafeInset } from '@take-me/shared';
 import { supabase } from '../lib/supabase';
 import { ensureDriverClientConversation, markConversationReadByClient } from '../lib/chatConversations';
@@ -96,16 +97,18 @@ export function ChatScreen({ navigation, route }: Props) {
 
   // Esconde a bottom tab bar enquanto o chat está focado e restaura ao sair.
   // O Chat aparece via ActivitiesStack/ProfileStack — o tab bar pertence ao
-  // navigator pai (MainTabs), por isso o `getParent()`. Setar como `undefined`
-  // ao desfocar faz o navigator voltar ao default herdado de `screenOptions`.
+  // navigator pai (MainTabs), por isso o `getParent()`. Ao desfocar, restauramos
+  // o estilo COM safe-area (getMainTabBarStyleFromInsets); usar `undefined` aqui
+  // fazia o navigator voltar ao tab bar padrão (sem paddingBottom), quebrando a
+  // barra na aba de Perfil/Atividades.
   useFocusEffect(
     useCallback(() => {
       const parent = navigation.getParent();
       parent?.setOptions({ tabBarStyle: { display: 'none' } });
       return () => {
-        parent?.setOptions({ tabBarStyle: undefined });
+        parent?.setOptions({ tabBarStyle: getMainTabBarStyleFromInsets(insets) });
       };
-    }, [navigation]),
+    }, [navigation, insets.bottom]),
   );
   const contactName = route.params?.contactName ?? 'Suporte Take Me';
   const routeConversationId = route.params?.conversationId;
