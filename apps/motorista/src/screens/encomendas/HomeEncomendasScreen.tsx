@@ -26,7 +26,11 @@ import { getUserErrorMessage } from '../../utils/errorMessage';
 type PackageSize = 'Pequeno' | 'Médio' | 'Grande';
 
 type Solicitacao = {
+  /** Encomenda representante (a mais recente) do cliente. */
   id: string;
+  /** Todas as encomendas do mesmo cliente nesta coleta (aceitas juntas). */
+  shipmentIds: string[];
+  count: number;
   clientName: string;
   clientInitial: string;
   size: PackageSize;
@@ -134,21 +138,33 @@ export function HomeEncomendasScreen() {
       user_id: string;
     }[];
 
-    const list: Solicitacao[] = [];
+    // Agrupa as solicitações POR CLIENTE: o preparador aceita e coleta todas as
+    // encomendas do mesmo cliente em uma única coleta.
+    const byClient = new Map<string, typeof rows>();
     for (const r of rows) {
+      const arr = byClient.get(r.user_id);
+      if (arr) arr.push(r);
+      else byClient.set(r.user_id, [r]);
+    }
+    const list: Solicitacao[] = [];
+    for (const [uid, group] of byClient) {
+      const rep = group[0]!;
       const { data: clientProf } = await supabase
-        .from('profiles').select('full_name').eq('id', r.user_id).maybeSingle();
+        .from('profiles').select('full_name').eq('id', uid).maybeSingle();
       const cp = clientProf as { full_name?: string | null } | null;
       const clientName = cp?.full_name ?? 'Cliente';
+      const totalCents = group.reduce((sum, g) => sum + (g.amount_cents ?? 0), 0);
       list.push({
-        id: r.id,
+        id: rep.id,
+        shipmentIds: group.map((g) => g.id),
+        count: group.length,
         clientName,
         clientInitial: clientName.charAt(0).toUpperCase(),
-        size: packageSizeLabel(r.package_size),
-        priceFormatted: formatCents(r.amount_cents),
-        originAddress: r.origin_address,
-        scheduledAt: formatTime(r.scheduled_at ?? r.created_at),
-        instructions: r.instructions ?? 'Sem instruções.',
+        size: packageSizeLabel(rep.package_size),
+        priceFormatted: formatCents(totalCents),
+        originAddress: rep.origin_address,
+        scheduledAt: formatTime(rep.scheduled_at ?? rep.created_at),
+        instructions: rep.instructions ?? 'Sem instruções.',
         expanded: false,
       });
     }
@@ -197,63 +213,58 @@ export function HomeEncomendasScreen() {
     const modal = acceptModal;
     setActioning(true);
     try {
-      const { data: claimData, error: claimErr } = await supabase.rpc(
-        'shipment_preparer_accept_claim' as never,
-        { p_shipment_id: modal.id } as never,
-      );
-      const claim = claimData as { ok?: boolean; error?: string; skipped?: boolean } | null;
-
-      if (claimErr) {
-        showAlert('Erro', getUserErrorMessage(claimErr, 'Não foi possível aceitar a coleta.'));
-        return;
+      let okCount = 0;
+      let firstError: string | null = null;
+      // Aceita TODAS as encomendas do cliente (a coleta é única).
+      for (const sid of modal.shipmentIds) {
+        const { data: claimData, error: claimErr } = await supabase.rpc(
+          'shipment_preparer_accept_claim' as never,
+          { p_shipment_id: sid } as never,
+        );
+        if (claimErr) {
+          firstError = firstError ?? 'erro';
+          continue;
+        }
+        const claim = claimData as { ok?: boolean; error?: string } | null;
+        if (claim?.ok === true) {
+          okCount += 1;
+          // Abre/realinha a conversa preparador ↔ cliente (não bloqueia o aceite).
+          const { data: convData, error: convErr } = await supabase.rpc(
+            'create_or_get_shipment_preparer_conversation' as never,
+            { p_shipment_id: sid } as never,
+          );
+          const conv = convData as { ok?: boolean; error?: string } | null;
+          if (convErr || conv?.ok !== true) {
+            console.warn('[preparer] create_or_get_shipment_preparer_conversation falhou', convErr?.message ?? conv?.error);
+          }
+        } else {
+          firstError = firstError ?? (claim?.error ?? 'erro');
+        }
       }
-      if (claim?.ok !== true) {
-        if (claim?.error === 'already_claimed') {
-          showAlert(
-            'Coleta indisponível',
-            'Outro preparador já aceitou esta encomenda. A lista será atualizada.',
-          );
-          await load();
-          return;
+
+      if (okCount > 0) {
+        setAccepted((prev) => [...prev, modal.id]);
+        setSolicitacoes((prev) => prev.filter((s) => s.id !== modal.id));
+      }
+
+      if (okCount === 0) {
+        if (firstError === 'already_claimed') {
+          showAlert('Coleta indisponível', 'Outro preparador já aceitou estas encomendas. A lista será atualizada.');
+        } else if (firstError === 'awaiting_driver') {
+          showAlert('Coleta aguardando motorista', 'As encomendas ainda precisam ser aceitas pelo motorista antes de ficarem disponíveis para coleta.');
+        } else if (firstError === 'forbidden' || firstError === 'no_base') {
+          showAlert('Coleta indisponível', 'Estas encomendas não pertencem à sua base de preparação.');
+        } else {
+          showAlert('Erro', 'Não foi possível aceitar a coleta. Atualize a lista e tente novamente.');
         }
-        if (claim?.error === 'awaiting_driver') {
-          showAlert(
-            'Coleta aguardando motorista',
-            'Esta encomenda ainda precisa ser aceita pelo motorista antes de ficar disponível para coleta.',
-          );
-          await load();
-          return;
-        }
-        if (claim?.error === 'forbidden' || claim?.error === 'no_base') {
-          showAlert(
-            'Coleta indisponível',
-            'Esta encomenda não pertence à sua base de preparação.',
-          );
-          await load();
-          return;
-        }
+        await load();
+      } else if (firstError) {
         showAlert(
-          'Erro',
-          'Não foi possível aceitar a coleta. Atualize a lista e tente novamente.',
+          'Atenção',
+          `Aceitas ${okCount} de ${modal.shipmentIds.length} encomendas. Algumas não puderam ser aceitas (podem ter sido pegas por outro preparador).`,
         );
         await load();
-        return;
       }
-
-      // Abre/realinha a conversa preparador ↔ cliente. Sem essa chamada o chat
-      // do shipment fica vinculado apenas ao motorista e o preparador não vê
-      // a conversa. Não bloqueia o aceite se falhar.
-      const { data: convData, error: convErr } = await supabase.rpc(
-        'create_or_get_shipment_preparer_conversation' as never,
-        { p_shipment_id: modal.id } as never,
-      );
-      const conv = convData as { ok?: boolean; conversation_id?: string; error?: string } | null;
-      if (convErr || conv?.ok !== true) {
-        console.warn('[preparer] create_or_get_shipment_preparer_conversation falhou', convErr?.message ?? conv?.error);
-      }
-
-      setAccepted((prev) => [...prev, modal.id]);
-      setSolicitacoes((prev) => prev.filter((s) => s.id !== modal.id));
     } catch (e: unknown) {
       showAlert('Erro', getUserErrorMessage(e, 'Não foi possível aceitar a coleta.'));
     } finally {
@@ -337,6 +348,9 @@ export function HomeEncomendasScreen() {
                   </View>
                 </View>
                 <Text style={styles.price}>{s.priceFormatted}</Text>
+                {s.count > 1 && (
+                  <Text style={styles.countText}>{s.count} encomendas deste cliente</Text>
+                )}
                 <View style={styles.locationRow}>
                   <MaterialIcons name="place" size={14} color="#9CA3AF" />
                   <Text style={styles.locationText} numberOfLines={1}>{s.originAddress}</Text>
@@ -379,7 +393,11 @@ export function HomeEncomendasScreen() {
         <View style={styles.modalOverlay}>
           <View style={[styles.modalBox, { paddingBottom: modalBottom }]}>
             <Text style={styles.modalTitle}>Aceitar coleta?</Text>
-            <Text style={styles.modalDesc}>Confirma a coleta de {acceptModal?.clientName}?</Text>
+            <Text style={styles.modalDesc}>
+              {acceptModal && acceptModal.count > 1
+                ? `Confirma a coleta das ${acceptModal.count} encomendas de ${acceptModal.clientName}? Você pega todas numa única corrida e leva à base.`
+                : `Confirma a coleta de ${acceptModal?.clientName}?`}
+            </Text>
             <View style={styles.modalRow}>
               <TouchableOpacity style={styles.modalBtnCancel} onPress={() => setAcceptModal(null)} activeOpacity={0.8} disabled={actioning}>
                 <Text style={styles.modalBtnCancelText}>Não, voltar</Text>
@@ -449,6 +467,7 @@ const styles = StyleSheet.create({
   sizeBadge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
   sizeBadgeText: { fontSize: 12, fontWeight: '700' },
   price: { fontSize: 20, fontWeight: '700', color: '#C9A227', marginBottom: 4 },
+  countText: { fontSize: 13, fontWeight: '600', color: '#92400E', marginBottom: 6 },
   locationRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 8 },
   locationText: { fontSize: 13, color: '#6B7280', flex: 1 },
   expandBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', paddingVertical: 4 },
