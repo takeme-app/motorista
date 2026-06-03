@@ -41,6 +41,8 @@ type Trip = {
   status: 'completed' | 'cancelled';
   amount_cents?: number | null;
   bookings: Booking[];
+  shipmentsCount: number;
+  dependentsCount: number;
 };
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -64,18 +66,31 @@ function shortAddr(addr: string): string {
   return addr.split(',')[0]?.trim() ?? addr;
 }
 
-function isPackageTrip(bookings: Booking[]): boolean {
-  const pax = bookings.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
-  const bags = bookings.reduce((s, b) => s + (b.bags_count ?? 0), 0);
-  return bags > 0 && pax === 0;
+type TripCounts = { pax: number; bags: number; enc: number; dep: number };
+
+function tripCounts(trip: Trip): TripCounts {
+  const pax = trip.bookings.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
+  const bags = trip.bookings.reduce((s, b) => s + (b.bags_count ?? 0), 0);
+  return { pax, bags, enc: trip.shipmentsCount, dep: trip.dependentsCount };
 }
 
-function subtitleForTrip(bookings: Booking[]): string {
-  const pax = bookings.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
-  const bags = bookings.reduce((s, b) => s + (b.bags_count ?? 0), 0);
+/** Tipo principal da viagem para rótulo/ícone (Viagem/Encomenda/Dependente/Misto). */
+function tripKind(trip: Trip): { label: string; icon: 'car' | 'box' | 'people' } {
+  const { pax, enc, dep } = tripCounts(trip);
+  const kinds = [pax > 0, enc > 0, dep > 0].filter(Boolean).length;
+  if (kinds > 1) return { label: 'Misto', icon: 'car' };
+  if (enc > 0) return { label: 'Encomenda', icon: 'box' };
+  if (dep > 0) return { label: 'Dependente', icon: 'people' };
+  return { label: 'Viagem', icon: 'car' };
+}
+
+function subtitleForTrip(trip: Trip): string {
+  const { pax, bags, enc, dep } = tripCounts(trip);
   const parts: string[] = [];
   if (pax > 0) parts.push(`${pax} passageiro${pax !== 1 ? 's' : ''}`);
-  if (bags > 0) parts.push(`${bags} pacote${bags !== 1 ? 's' : ''}`);
+  if (enc > 0) parts.push(`${enc} encomenda${enc !== 1 ? 's' : ''}`);
+  if (dep > 0) parts.push(`${dep} dependente${dep !== 1 ? 's' : ''}`);
+  if (parts.length === 0 && bags > 0) parts.push(`${bags} pacote${bags !== 1 ? 's' : ''}`);
   return parts.length > 0 ? parts.join(' • ') : '—';
 }
 
@@ -88,16 +103,18 @@ function formatEarnings(trip: Trip): string {
 // ─── Trip Row ──────────────────────────────────────────────────────────────────
 
 function TripRow({ trip, onPress }: { trip: Trip; onPress: () => void }) {
-  const isPackage = isPackageTrip(trip.bookings);
+  const kind = tripKind(trip);
   const isCompleted = trip.status === 'completed';
   const earningsLabel = formatEarnings(trip);
 
   return (
     <TouchableOpacity style={styles.tripRow} onPress={onPress} activeOpacity={0.75}>
-      {/* Icon */}
+      {/* Icon por tipo */}
       <View style={styles.tripIcon}>
-        {isPackage ? (
+        {kind.icon === 'box' ? (
           <MaterialIcons name="inventory-2" size={28} color="#9CA3AF" />
+        ) : kind.icon === 'people' ? (
+          <MaterialIcons name="groups" size={28} color="#9CA3AF" />
         ) : (
           <Image
             // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -110,13 +127,18 @@ function TripRow({ trip, onPress }: { trip: Trip; onPress: () => void }) {
 
       {/* Content */}
       <View style={styles.tripContent}>
-        <Text style={styles.tripDestination} numberOfLines={1}>
-          {shortAddr(trip.destination_address)}
-        </Text>
+        <View style={styles.tripTitleRow}>
+          <Text style={styles.tripDestination} numberOfLines={1}>
+            {shortAddr(trip.destination_address)}
+          </Text>
+          <View style={styles.kindChip}>
+            <Text style={styles.kindChipText}>{kind.label}</Text>
+          </View>
+        </View>
         <Text style={styles.tripMeta} numberOfLines={1}>
           {formatDateTime(trip.departure_at)}
           {'  '}
-          <Text style={styles.tripMetaSub}>{subtitleForTrip(trip.bookings)}</Text>
+          <Text style={styles.tripMetaSub}>{subtitleForTrip(trip)}</Text>
         </Text>
         {earningsLabel ? (
           <Text style={styles.tripEarnings} numberOfLines={1}>
@@ -194,7 +216,36 @@ export function TripHistoryScreen({ navigation }: Props) {
       .order('departure_at', { ascending: false });
 
     if (!error && data) {
-      const rows = data as unknown as Trip[];
+      const rows = (data as unknown as Trip[]).map((r) => ({
+        ...r,
+        shipmentsCount: 0,
+        dependentsCount: 0,
+      }));
+
+      // Conta encomendas e dependentes por viagem para identificar o tipo.
+      const tripIds = rows.map((r) => r.id);
+      if (tripIds.length > 0) {
+        const [{ data: ships }, { data: deps }] = await Promise.all([
+          supabase.from('shipments').select('scheduled_trip_id').in('scheduled_trip_id' as never, tripIds as never),
+          supabase
+            .from('dependent_shipments')
+            .select('scheduled_trip_id')
+            .in('scheduled_trip_id' as never, tripIds as never),
+        ]);
+        const shipCount: Record<string, number> = {};
+        for (const s of (ships ?? []) as unknown as { scheduled_trip_id: string | null }[]) {
+          if (s.scheduled_trip_id) shipCount[s.scheduled_trip_id] = (shipCount[s.scheduled_trip_id] ?? 0) + 1;
+        }
+        const depCount: Record<string, number> = {};
+        for (const d of (deps ?? []) as unknown as { scheduled_trip_id: string | null }[]) {
+          if (d.scheduled_trip_id) depCount[d.scheduled_trip_id] = (depCount[d.scheduled_trip_id] ?? 0) + 1;
+        }
+        for (const r of rows) {
+          r.shipmentsCount = shipCount[r.id] ?? 0;
+          r.dependentsCount = depCount[r.id] ?? 0;
+        }
+      }
+
       setCompleted(rows.filter((r) => r.status === 'completed'));
       setCancelled(rows.filter((r) => r.status === 'cancelled'));
     }
@@ -339,11 +390,19 @@ const styles = StyleSheet.create({
     height: 40,
   },
   tripContent: { flex: 1 },
+  tripTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  kindChip: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  kindChipText: { fontSize: 11, fontWeight: '700', color: '#374151' },
   tripDestination: {
     fontSize: 15,
     fontWeight: '700',
     color: '#111827',
-    marginBottom: 4,
+    flexShrink: 1,
   },
   tripMeta: {
     fontSize: 13,

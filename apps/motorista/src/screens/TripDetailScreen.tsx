@@ -892,6 +892,16 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const totalPax = bookingsInTrip.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
   const totalBags = bookingsInTrip.reduce((s, b) => s + (b.bags_count ?? 0), 0);
   const totalEncomendas = shipments.length;
+  const totalDependentes = dependentShipments.length;
+  // Resumo de tipo (Viagem / Encomenda / Dependente / Misto) + partes do subtítulo.
+  const tripSubtitleParts: string[] = [];
+  if (totalPax > 0) tripSubtitleParts.push(`${totalPax} passageiro${totalPax !== 1 ? 's' : ''}`);
+  if (totalEncomendas > 0) tripSubtitleParts.push(`${totalEncomendas} encomenda${totalEncomendas !== 1 ? 's' : ''}`);
+  if (totalDependentes > 0) tripSubtitleParts.push(`${totalDependentes} dependente${totalDependentes !== 1 ? 's' : ''}`);
+  if (tripSubtitleParts.length === 0 && totalBags > 0) tripSubtitleParts.push(`${totalBags} pacote${totalBags !== 1 ? 's' : ''}`);
+  const tripKindCount = [totalPax > 0, totalEncomendas > 0, totalDependentes > 0].filter(Boolean).length;
+  const tripKindLabel =
+    tripKindCount > 1 ? 'Misto' : totalEncomendas > 0 ? 'Encomenda' : totalDependentes > 0 ? 'Dependente' : 'Viagem';
   const totalRevenueCents =
     confirmedTripBookings.reduce(
       (s, b) => s + amountForDriverTotal(b.amount_cents, b.worker_earning_cents ?? null),
@@ -1130,15 +1140,18 @@ export function TripDetailScreen({ route, navigation }: Props) {
           {/* Status + code + date */}
           <StatusBadge status={trip.status} journeyStarted={journeyStarted} />
 
-          <Text style={styles.tripCode}>ID da Viagem: {tripCode(trip.id)}</Text>
+          <View style={styles.tripCodeRow}>
+            <Text style={styles.tripCode}>ID da Viagem: {tripCode(trip.id)}</Text>
+            <View style={styles.kindChip}>
+              <Text style={styles.kindChipText}>{tripKindLabel}</Text>
+            </View>
+          </View>
           <Text style={styles.dateLabel}>{formatDateTime(trip.departure_at)}</Text>
 
-          {/* Subtitle */}
-          <Text style={styles.subtitle}>
-            {totalPax > 0 ? `${totalPax} passageiro${totalPax !== 1 ? 's' : ''}` : ''}
-            {totalPax > 0 && totalEncomendas > 0 ? ' • ' : ''}
-            {totalEncomendas > 0 ? `${totalEncomendas} encomenda${totalEncomendas !== 1 ? 's' : ''}` : ''}
-          </Text>
+          {/* Subtitle: passageiros / encomendas / dependentes */}
+          {tripSubtitleParts.length > 0 && (
+            <Text style={styles.subtitle}>{tripSubtitleParts.join(' • ')}</Text>
+          )}
 
           {(totalBags > 0 || bagsCapacity > 0) && (
             <Text style={styles.bagCapacity}>
@@ -1622,7 +1635,10 @@ const styles = StyleSheet.create({
   statusBadgeText: { fontSize: 13, fontWeight: '600' },
 
   // Trip code + date
-  tripCode: { fontSize: 22, fontWeight: '800', color: '#111827', marginBottom: 2 },
+  tripCode: { fontSize: 22, fontWeight: '800', color: '#111827', marginBottom: 2, flexShrink: 1 },
+  tripCodeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  kindChip: { backgroundColor: '#F3F4F6', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  kindChipText: { fontSize: 12, fontWeight: '700', color: '#374151' },
   tripIdFull: { fontSize: 11, color: '#9CA3AF', marginBottom: 4, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
   dateLabel: { fontSize: 14, color: '#6B7280', marginBottom: 6 },
   subtitle: { fontSize: 14, color: '#374151', marginBottom: 2 },
