@@ -155,29 +155,34 @@ Deno.serve(async (req) => {
     const fcmUrl = `https://fcm.googleapis.com/v1/projects/${GOOGLE_PROJECT_ID}/messages:send`;
     const results: unknown[] = [];
 
-    // Channel id precisa bater com o criado em runtime por cada app via
-    // Notifee (react-native-notify-kit): garante que o FCM em background e
-    // o display local em foreground usem o mesmo canal HIGH, evitando canais
-    // duplicados e "heads-up" faltando no Android. Sufixo `-v2`: em devices
-    // antigos o canal `-default` pode ter sido criado com importância
-    // DEFAULT pela primeira push em background; o Android não permite subir
-    // importância depois, então usamos um id novo para garantir HIGH.
-    const androidChannelId =
-      targetAppSlug === "motorista"
-        ? "motorista-default-v2"
-        : "cliente-default-v2";
-
     for (const token of tokens) {
+      // Android: data-only (SEM o bloco `notification`) — o sistema NÃO auto-exibe
+      // na bandeja; o app renderiza exatamente 1x via Notifee (foreground onMessage
+      // + setBackgroundMessageHandler). Isso elimina a dupla (bandeja do sistema +
+      // Notifee). title/body viajam no `data` (display_title/display_body), que o app
+      // já lê. iOS: alerta via apns (sem `content-available`, p/ não acionar o handler
+      // de background no iOS e evitar dupla lá também).
+      const dataPayload: Record<string, string> = {
+        ...customData,
+        display_title: title,
+        display_body: bodyText,
+        // id estável p/ o Notifee (substitui/colapsa em vez de empilhar duplicado).
+        fcm_android_tag: String(record.id ?? ""),
+      };
       const messagePayload = {
         message: {
           token,
-          notification: { title, body: bodyText },
-          data: customData,
+          data: dataPayload,
           android: {
             priority: "HIGH",
-            notification: {
-              sound: "default",
-              channel_id: androidChannelId,
+          },
+          apns: {
+            headers: { "apns-priority": "10" },
+            payload: {
+              aps: {
+                alert: { title, body: bodyText },
+                sound: "default",
+              },
             },
           },
         },
