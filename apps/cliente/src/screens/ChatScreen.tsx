@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Image,
   Alert,
+  Modal,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -128,7 +129,9 @@ export function ChatScreen({ navigation, route }: Props) {
   const [conversationStatus, setConversationStatus] = useState<'active' | 'closed'>('active');
   const [myId, setMyId] = useState<string | null>(null);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [attachSheetVisible, setAttachSheetVisible] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const attachSheetBottom = useBottomSafeInset({ extra: 16 });
   const flatListRef = useRef<FlatList>(null);
   const recordingRef = useRef<{ stopAndUnloadAsync: () => Promise<void>; getURI: () => string | null } | null>(null);
 
@@ -232,6 +235,8 @@ export function ChatScreen({ navigation, route }: Props) {
     setLoading(true);
     loadMessages();
     loadConversation();
+    // Marca as mensagens recebidas como lidas → o remetente vê "visualizado" (✓✓).
+    void supabase.rpc('mark_messages_read' as never, { p_conversation_id: conversationId } as never);
 
     const channel = supabase
       .channel(`chat:${conversationId}`)
@@ -245,6 +250,16 @@ export function ChatScreen({ navigation, route }: Props) {
             return [...prev, newMsg];
           });
           setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+          // Chat aberto → marca a mensagem que acabou de chegar como lida.
+          void supabase.rpc('mark_messages_read' as never, { p_conversation_id: conversationId } as never);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${conversationId}` },
+        (payload) => {
+          const upd = payload.new as Message;
+          setMessages((prev) => prev.map((m) => (m.id === upd.id ? { ...m, read_at: upd.read_at } : m)));
         }
       )
       .subscribe();
@@ -313,11 +328,7 @@ export function ChatScreen({ navigation, route }: Props) {
       showAlert('Conversa', 'Aguarde a conversa carregar.');
       return;
     }
-    Alert.alert('Enviar anexo', 'Escolha uma opção', [
-      { text: 'Galeria de fotos', onPress: () => { void pickFromGallery(); } },
-      { text: 'Arquivo', onPress: () => { void pickDocument(); } },
-      { text: 'Cancelar', style: 'cancel' },
-    ]);
+    setAttachSheetVisible(true);
   };
 
   const pickFromGallery = async () => {
@@ -656,6 +667,41 @@ export function ChatScreen({ navigation, route }: Props) {
           </View>
         )}
       </KeyboardAvoidingView>
+
+      {/* Sheet de anexo (padrão do app, no lugar do Alert nativo) */}
+      <Modal
+        visible={attachSheetVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAttachSheetVisible(false)}
+      >
+        <View style={styles.attachOverlay}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setAttachSheetVisible(false)} />
+          <View style={[styles.attachSheet, { paddingBottom: attachSheetBottom }]}>
+            <View style={styles.attachHandle} />
+            <Text style={styles.attachTitle}>Enviar anexo</Text>
+            <TouchableOpacity
+              style={styles.attachRow}
+              activeOpacity={0.8}
+              onPress={() => { setAttachSheetVisible(false); void pickFromGallery(); }}
+            >
+              <View style={styles.attachIcon}><MaterialIcons name="photo-library" size={22} color={COLORS.black} /></View>
+              <Text style={styles.attachRowText}>Galeria de fotos</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.attachRow}
+              activeOpacity={0.8}
+              onPress={() => { setAttachSheetVisible(false); void pickDocument(); }}
+            >
+              <View style={styles.attachIcon}><MaterialIcons name="insert-drive-file" size={22} color={COLORS.black} /></View>
+              <Text style={styles.attachRowText}>Arquivo</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.attachCancel} activeOpacity={0.8} onPress={() => setAttachSheetVisible(false)}>
+              <Text style={styles.attachCancelText}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -663,6 +709,15 @@ export function ChatScreen({ navigation, route }: Props) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   flex: { flex: 1 },
+  attachOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.45)' },
+  attachSheet: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 20, paddingTop: 10 },
+  attachHandle: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: '#E5E7EB', marginBottom: 14 },
+  attachTitle: { fontSize: 16, fontWeight: '700', color: COLORS.black, marginBottom: 8 },
+  attachRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14 },
+  attachIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  attachRowText: { fontSize: 16, color: COLORS.black, fontWeight: '500' },
+  attachCancel: { marginTop: 6, paddingVertical: 14, alignItems: 'center' },
+  attachCancelText: { fontSize: 16, fontWeight: '600', color: COLORS.neutral700 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 },
   errorText: { color: '#B91C1C', fontSize: 15, textAlign: 'center' },
   hintText: { color: COLORS.neutral700, fontSize: 14, textAlign: 'center', paddingVertical: 32, paddingHorizontal: 16 },
