@@ -149,6 +149,7 @@ export type DependentShipmentFormParams = {
   instructions?: string;
   dependentId?: string;
   photoUri?: string;
+  photoUris?: string[];
 };
 
 export type DependentShipmentStackParamList = {

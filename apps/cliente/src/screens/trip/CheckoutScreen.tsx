@@ -190,17 +190,20 @@ export function CheckoutScreen({ navigation, route }: Props) {
     }
     return routePriceCents;
   })();
-  const needsFullPricingPreview =
-    Boolean(scheduledTripId) &&
-    resolvedPricingBasis === 'per_person' &&
-    passengerCountForPricing > 1;
+  // Só exibimos o preço FINAL (com taxa da plataforma) — nunca o valor base
+  // intermediário (ex.: "80" antes do cálculo), que dava impressão errada.
+  // Enquanto o breakdown final não está pronto, mostramos "Carregando preço…".
+  // Em caso de erro do preview, caímos no base para não travar a tela.
   const displayChargeCents =
     pricingPreview?.totalCents ??
-    (needsFullPricingPreview && !pricingPreview && !pricingError ? null : orderBaseCents);
+    (pricingError ? orderBaseCents : null);
+  // Esperamos um preço quando há base calculável ou a viagem agendada ainda carrega.
+  const expectingPrice = orderBaseCents != null || (Boolean(scheduledTripId) && fareLoading);
+  const awaitingFinalPrice = displayChargeCents == null && expectingPrice;
   const fareFormatted =
     displayChargeCents != null
       ? formatTripFareBrl(displayChargeCents)
-      : scheduledTripId
+      : expectingPrice
         ? 'Carregando preço…'
         : '—';
   const [tripDateLabel, setTripDateLabel] = useState<string | null>(null);
@@ -1010,7 +1013,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
             onSelectMethod={setSelectedPaymentMethod}
             confirmLabel="Confirmar pagamento"
             cancellationPolicyVariant="trip"
-            loading={paymentSubmitting || fareLoading}
+            loading={paymentSubmitting || fareLoading || awaitingFinalPrice}
             onConfirmPayment={handleConfirmPayment}
             allowedMethods={allowedPaymentMethods}
           />

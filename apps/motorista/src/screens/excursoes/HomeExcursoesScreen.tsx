@@ -90,7 +90,7 @@ export function HomeExcursoesScreen({ navigation }: Props) {
     const { data, error } = await supabase
       .from('excursion_requests')
       .select(
-        'id, destination, excursion_date, scheduled_departure_at, scheduled_return_at, excursion_time, check_in_ida_started_at, check_in_volta_started_at, boarding_ida_done_at, boarding_volta_done_at, fleet_type, status, user_id, created_at, confirmed_at',
+        'id, origin, destination, excursion_date, scheduled_departure_at, scheduled_return_at, excursion_time, check_in_ida_started_at, check_in_volta_started_at, boarding_ida_done_at, boarding_volta_done_at, fleet_type, status, user_id, created_at, confirmed_at',
       )
       .eq('preparer_id', user.id)
       .order('created_at', { ascending: false })

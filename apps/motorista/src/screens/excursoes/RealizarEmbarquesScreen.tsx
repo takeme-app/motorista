@@ -66,7 +66,6 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState<'none' | 'pending' | 'justify'>('none');
   const [justifySelected, setJustifySelected] = useState<Set<string>>(new Set());
-  const [savingJustify, setSavingJustify] = useState(false);
   const [uploadingPassengerId, setUploadingPassengerId] = useState<string | null>(null);
   const [totalAmountCents, setTotalAmountCents] = useState<number | null>(null);
 
@@ -289,52 +288,24 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
     });
   }, []);
 
-  const applyJustifyAndFinish = useCallback(async () => {
+  // "Avançar" agora leva à tela de descrição + anexo por passageiro (a gravação de
+  // absence_justified/reason/attachment e a finalização acontecem lá).
+  const goToJustifyReasons = useCallback(() => {
     if (justifySelected.size === 0) {
       Alert.alert('Seleção', 'Marque os passageiros ausentes a justificar.');
       return;
     }
-    setSavingJustify(true);
-    const ids = [...justifySelected];
-    const { error } = await supabase
-      .from('excursion_passengers')
-      .update({ absence_justified: true, updated_at: new Date().toISOString() })
-      .in('id', ids);
-    setSavingJustify(false);
-    if (error) {
-      Alert.alert('Erro', 'Não foi possível salvar as justificativas.');
-      return;
-    }
+    const selected = notEmbarkedUnjustified
+      .filter((p) => justifySelected.has(p.id))
+      .map((p) => ({ id: p.id, full_name: p.full_name, gender: p.gender, age: p.age }));
     setModal('none');
-    const { data } = await supabase
-      .from('excursion_passengers')
-      .select('id, full_name, age, gender, status_departure, status_return, absence_justified')
-      .eq('excursion_request_id', excursionId)
-      .order('full_name');
-    const rows = (data ?? []) as any[];
-    const mapped: Passenger[] = rows.map((r) => ({
-      id: r.id,
-      full_name: r.full_name ?? '',
-      age: r.age ?? null,
-      gender: r.gender ?? null,
-      status_departure: r.status_departure ?? 'not_embarked',
-      status_return: r.status_return ?? 'not_embarked',
-      absence_justified: Boolean(r.absence_justified),
-    }));
-    const list = isVolta
-      ? mapped.filter((p) => p.status_departure === 'embarked' || p.status_departure === 'disembarked')
-      : mapped;
-    setPassengers(list);
-    const stillPending = list.filter((p) => statusOf(p) === 'not_embarked' && !p.absence_justified);
-    if (stillPending.length > 0) {
-      Alert.alert(
-        'Ausentes pendentes',
-        'Ainda há passageiros não embarcados sem justificativa. Selecione todos os ausentes a justificar ou use "Finalizar mesmo assim" no aviso anterior.',
-      );
-      return;
-    }
-    void navigateSuccess(list);
-  }, [excursionId, justifySelected, navigateSuccess, isVolta, statusOf]);
+    navigation.navigate('JustificarAusenciaExcursao', {
+      excursionId,
+      phase,
+      totalAmountCents,
+      passengers: selected,
+    });
+  }, [justifySelected, notEmbarkedUnjustified, navigation, excursionId, phase, totalAmountCents]);
 
   const finishAnyway = useCallback(() => {
     setModal('none');
@@ -511,16 +482,11 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
             </ScrollView>
             <View style={[styles.sheetFooter, { paddingBottom: bottomInset }]}>
               <TouchableOpacity
-                style={[styles.btnBlack, savingJustify && { opacity: 0.65 }]}
-                onPress={applyJustifyAndFinish}
-                disabled={savingJustify}
+                style={styles.btnBlack}
+                onPress={goToJustifyReasons}
                 activeOpacity={0.88}
               >
-                {savingJustify ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.btnBlackText}>Avançar</Text>
-                )}
+                <Text style={styles.btnBlackText}>Avançar</Text>
               </TouchableOpacity>
             </View>
           </View>

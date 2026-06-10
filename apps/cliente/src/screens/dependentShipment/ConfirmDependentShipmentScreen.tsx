@@ -65,6 +65,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     dependentId,
     amountCents,
     photoUri,
+    photoUris,
   } = route.params;
   const driver = route.params.driver;
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('dinheiro');
@@ -277,10 +278,17 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
                 ? 'pix'
                 : 'dinheiro';
         const status = 'pending_review';
-        let photoUrl: string | null = null;
-        if (photoUri) {
-          photoUrl = await uploadPhotoAndGetPath(user.id, photoUri);
+        // Upload de todas as fotos (carrossel). photo_url = primeira; photo_paths = todas.
+        const rawPhotoUris = [
+          ...(photoUris ?? []),
+          ...(photoUri ? [photoUri] : []),
+        ];
+        const uploadedPaths: string[] = [];
+        for (const uri of rawPhotoUris) {
+          const p = await uploadPhotoAndGetPath(user.id, uri);
+          if (p) uploadedPaths.push(p);
         }
+        const photoUrl: string | null = uploadedPaths[0] ?? null;
         let pricingFields = pricingInsertRow;
         if (!pricingFields) {
           const fallbackAdminPct = await fetchPlatformFeePctForService('dependent_shipment');
@@ -331,6 +339,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
             ...(scheduledTripId ? { scheduled_trip_id: scheduledTripId } : {}),
             status,
             photo_url: photoUrl,
+            photo_paths: uploadedPaths,
           })
           .select('id')
           .single();
@@ -394,6 +403,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
       showAlert,
       pricingInsertRow,
       photoUri,
+      photoUris,
       uploadPhotoAndGetPath,
       driver,
       allowedPaymentMethods,

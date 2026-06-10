@@ -168,7 +168,7 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
     const { data, error } = await supabase
       .from('excursion_requests')
       .select(
-        'id, destination, excursion_date, scheduled_departure_at, check_in_ida_started_at, check_in_volta_started_at, boarding_ida_done_at, boarding_volta_done_at, fleet_type, status, user_id, created_at, confirmed_at',
+        'id, origin, destination, excursion_date, scheduled_departure_at, check_in_ida_started_at, check_in_volta_started_at, boarding_ida_done_at, boarding_volta_done_at, fleet_type, status, user_id, created_at, confirmed_at',
       )
       .eq('preparer_id', user.id)
       .order('created_at', { ascending: false })
@@ -227,7 +227,7 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
 
       list.push({
         id: r.id,
-        origin: 'Origem a definir',
+        origin: (typeof r.origin === 'string' && r.origin.trim()) ? r.origin.trim() : 'Origem a definir',
         destination: r.destination ?? 'Destino',
         departureTime: depIso,
         returnTime: retIso,

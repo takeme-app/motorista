@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { View, StyleSheet, TouchableOpacity, ScrollView, Image, type ImageSourcePropType } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, ScrollView, Image, AppState, type ImageSourcePropType } from 'react-native';
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -394,68 +394,89 @@ export function ActivitiesScreen({ navigation }: Props) {
     }, [loadActivities])
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    let channel: ReturnType<typeof supabase.channel> | null = null;
-    (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      const user = session?.user;
-      if (!user || cancelled) return;
-      // Em RN, sem `setAuth` o WS pode inscrever sem JWT — Postgres Changes falha
-      // com CHANNEL_ERROR (RLS rejeita anon). Reforça o token antes do subscribe.
-      if (session?.access_token) {
-        supabase.realtime.setAuth(session.access_token);
-      }
-      const uid = user.id;
-      channel = supabase
-        .channel(`client-activities-${uid}-${Date.now()}`)
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'bookings', filter: `user_id=eq.${uid}` },
-          () => {
-            void loadActivities({ silent: true });
-          },
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'shipments', filter: `user_id=eq.${uid}` },
-          () => {
-            void loadActivities({ silent: true });
-          },
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'dependent_shipments', filter: `user_id=eq.${uid}` },
-          () => {
-            void loadActivities({ silent: true });
-          },
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'excursion_requests', filter: `user_id=eq.${uid}` },
-          () => {
-            void loadActivities({ silent: true });
-          },
-        )
-        // O badge depende de scheduled_trips.status (motorista marca completed/cancelled).
-        // Sem filter porque a tabela não tem user_id; loadActivities + RLS filtram o que retorna.
-        .on(
-          'postgres_changes',
-          { event: 'UPDATE', schema: 'public', table: 'scheduled_trips' },
-          (payload) => {
-            console.log('[realtime] scheduled_trips UPDATE', payload?.new && typeof payload.new === 'object' ? (payload.new as { id?: string; status?: string }).status : '?');
-            void loadActivities({ silent: true });
-          },
-        )
-        .subscribe((status, err) => {
-          console.log('[realtime] client-activities status:', status, 'err:', err?.message ?? err);
-        });
-    })();
-    return () => {
-      cancelled = true;
-      if (channel) void supabase.removeChannel(channel);
-    };
-  }, [loadActivities]);
+  // Atualização automática enquanto a tela está focada. Mantido em useFocusEffect
+  // (e não em useEffect de mount) porque o WebSocket do Realtime morre quando o app
+  // vai a background; assim re-assinamos ao focar. Além disso: reconecta+refetch ao
+  // voltar do background (AppState) e um polling leve como fallback caso algum evento
+  // se perca (ex.: RLS de scheduled_trips, que não tem user_id para filtrar).
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      let channel: ReturnType<typeof supabase.channel> | null = null;
+
+      const subscribe = async () => {
+        const { data: { session } } = await supabase.auth.getSession();
+        const user = session?.user;
+        if (!user || cancelled) return;
+        // Em RN, sem `setAuth` o WS pode inscrever sem JWT — Postgres Changes falha
+        // com CHANNEL_ERROR (RLS rejeita anon). Reforça o token antes do subscribe.
+        if (session?.access_token) {
+          supabase.realtime.setAuth(session.access_token);
+        }
+        const uid = user.id;
+        // Remove canal anterior antes de recriar (evita inscrições duplicadas).
+        if (channel) {
+          void supabase.removeChannel(channel);
+          channel = null;
+        }
+        channel = supabase
+          .channel(`client-activities-${uid}-${Date.now()}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'bookings', filter: `user_id=eq.${uid}` },
+            () => { void loadActivities({ silent: true }); },
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'shipments', filter: `user_id=eq.${uid}` },
+            () => { void loadActivities({ silent: true }); },
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'dependent_shipments', filter: `user_id=eq.${uid}` },
+            () => { void loadActivities({ silent: true }); },
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'excursion_requests', filter: `user_id=eq.${uid}` },
+            () => { void loadActivities({ silent: true }); },
+          )
+          // O badge depende de scheduled_trips.status (motorista marca completed/cancelled).
+          // Sem filter porque a tabela não tem user_id; loadActivities + RLS filtram o que retorna.
+          .on(
+            'postgres_changes',
+            { event: 'UPDATE', schema: 'public', table: 'scheduled_trips' },
+            () => { void loadActivities({ silent: true }); },
+          )
+          .subscribe();
+      };
+
+      void subscribe();
+
+      // O WebSocket do Realtime cai em background no RN. Como a aba continua focada,
+      // o useFocusEffect não re-roda ao voltar — então reconectamos e refazemos o
+      // fetch quando o app volta ao primeiro plano.
+      const appStateSub = AppState.addEventListener('change', (state) => {
+        if (state === 'active' && !cancelled) {
+          void loadActivities({ silent: true });
+          void subscribe();
+        }
+      });
+
+      // Fallback: garante atualização mesmo se um evento realtime for perdido ou o
+      // socket estiver instável (ex.: dev em Wi-Fi). Silencioso, só enquanto focado.
+      const pollId = setInterval(() => {
+        if (!cancelled) void loadActivities({ silent: true });
+      }, 20000);
+
+      return () => {
+        cancelled = true;
+        appStateSub.remove();
+        clearInterval(pollId);
+        if (channel) void supabase.removeChannel(channel);
+      };
+    }, [loadActivities]),
+  );
 
   useEffect(() => {
     loadFilterPreferences();

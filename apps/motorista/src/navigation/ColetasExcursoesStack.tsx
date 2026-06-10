@@ -4,7 +4,15 @@ import { HistoricoExcursoesScreen } from '../screens/excursoes/HistoricoExcursoe
 import { DetalhesExcursaoScreen } from '../screens/excursoes/DetalhesExcursaoScreen';
 import { RealizarEmbarquesScreen } from '../screens/excursoes/RealizarEmbarquesScreen';
 import { CadastrarPassageiroExcursaoScreen } from '../screens/excursoes/CadastrarPassageiroExcursaoScreen';
+import { JustificarAusenciaExcursaoScreen } from '../screens/excursoes/JustificarAusenciaExcursaoScreen';
 import { EmbarqueConcluidoScreen } from '../screens/excursoes/EmbarqueConcluidoScreen';
+
+export type JustifyPassenger = {
+  id: string;
+  full_name: string;
+  gender: string | null;
+  age: string | null;
+};
 
 export type ColetasExcursoesStackParamList = {
   ColetasMain: undefined;
@@ -12,6 +20,12 @@ export type ColetasExcursoesStackParamList = {
   DetalhesExcursao: { excursionId: string };
   RealizarEmbarques: { excursionId: string; phase?: 'ida' | 'volta' };
   CadastrarPassageiroExcursao: { excursionId: string };
+  JustificarAusenciaExcursao: {
+    excursionId: string;
+    phase?: 'ida' | 'volta';
+    totalAmountCents?: number | null;
+    passengers: JustifyPassenger[];
+  };
   EmbarqueConcluido: {
     excursionId: string;
     boarded: number;
@@ -41,6 +55,10 @@ export function ColetasExcursoesStack() {
         name="CadastrarPassageiroExcursao"
         component={CadastrarPassageiroExcursaoScreen}
         options={{ animation: 'slide_from_bottom' }}
+      />
+      <Stack.Screen
+        name="JustificarAusenciaExcursao"
+        component={JustificarAusenciaExcursaoScreen}
       />
       <Stack.Screen
         name="EmbarqueConcluido"

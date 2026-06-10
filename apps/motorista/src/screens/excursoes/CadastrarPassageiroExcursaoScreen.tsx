@@ -8,7 +8,9 @@ import {
   ActivityIndicator,
   Alert,
   Platform,
+  Image,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -32,17 +34,60 @@ export function CadastrarPassageiroExcursaoScreen({ navigation, route }: Props) 
   const [gender, setGender] = useState('');
   const [observations, setObservations] = useState('');
   const [saving, setSaving] = useState(false);
+  // Documento (RG/CNH) e foto — upload p/ bucket privado `excursion-passenger-docs`
+  // (path começa com auth.uid() do preparador — RLS). *Uri = preview local; *Path = caminho salvo.
+  const [documentUri, setDocumentUri] = useState<string | null>(null);
+  const [documentPath, setDocumentPath] = useState<string | null>(null);
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [photoPath, setPhotoPath] = useState<string | null>(null);
+  const [uploading, setUploading] = useState<'doc' | 'photo' | null>(null);
 
-  const onUploadDoc = useCallback(() => {
-    Alert.alert(
-      'Documento',
-      'O envio de RG/CNH será ligado ao armazenamento em uma próxima versão. Por agora, cadastre os dados abaixo.',
-    );
-  }, []);
-
-  const onUploadPhoto = useCallback(() => {
-    Alert.alert('Foto', 'Upload de foto opcional em breve.');
-  }, []);
+  const pickAndUpload = useCallback(async (kind: 'doc' | 'photo') => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (perm.status !== 'granted') {
+      Alert.alert('Permissão', 'Precisamos de acesso à galeria para enviar a imagem.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.75,
+      base64: true,
+    });
+    const asset = result.canceled ? null : result.assets[0];
+    if (!asset?.base64) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user?.id) {
+      Alert.alert('Sessão', 'Faça login novamente.');
+      return;
+    }
+    let bytes: Uint8Array;
+    try {
+      const binary = atob(asset.base64);
+      bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    } catch {
+      Alert.alert('Erro', 'Não foi possível processar a imagem. Tente novamente.');
+      return;
+    }
+    // Path DEVE começar com auth.uid() (RLS do bucket excursion-passenger-docs).
+    const path = `${user.id}/${excursionId}/${kind}_${Date.now()}.jpg`;
+    setUploading(kind);
+    const { error } = await supabase.storage
+      .from('excursion-passenger-docs')
+      .upload(path, bytes, { contentType: 'image/jpeg', upsert: true });
+    setUploading(null);
+    if (error) {
+      Alert.alert('Erro', 'Não foi possível enviar a imagem. Tente novamente.');
+      return;
+    }
+    if (kind === 'doc') {
+      setDocumentPath(path);
+      setDocumentUri(asset.uri);
+    } else {
+      setPhotoPath(path);
+      setPhotoUri(asset.uri);
+    }
+  }, [excursionId]);
 
   const onSave = useCallback(async () => {
     const name = fullName.trim();
@@ -63,6 +108,8 @@ export function CadastrarPassageiroExcursaoScreen({ navigation, route }: Props) 
       age: age.trim() || null,
       gender: gender || null,
       observations: observations.trim() || null,
+      document_url: documentPath,
+      photo_url: photoPath,
     });
     setSaving(false);
     if (error) {
@@ -70,7 +117,7 @@ export function CadastrarPassageiroExcursaoScreen({ navigation, route }: Props) 
       return;
     }
     navigation.goBack();
-  }, [excursionId, fullName, cpf, age, gender, observations, navigation]);
+  }, [excursionId, fullName, cpf, age, gender, observations, documentPath, photoPath, navigation]);
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
@@ -131,23 +178,49 @@ export function CadastrarPassageiroExcursaoScreen({ navigation, route }: Props) 
           </View>
 
           <Text style={styles.uploadLabel}>Documento de identificação</Text>
-          <TouchableOpacity style={styles.uploadBox} onPress={onUploadDoc} activeOpacity={0.85}>
-            <View style={styles.uploadIconWrap}>
-              <MaterialIcons name="cloud-upload" size={22} color="#5C4A2E" />
-            </View>
-            <Text style={styles.uploadTitle}>Upload frente e verso</Text>
-            <Text style={styles.uploadHint}>Aceitamos RG, CNH ou documento de identificação válido.</Text>
+          <TouchableOpacity
+            style={styles.uploadBox}
+            onPress={() => pickAndUpload('doc')}
+            disabled={uploading !== null}
+            activeOpacity={0.85}
+          >
+            {uploading === 'doc' ? (
+              <ActivityIndicator color="#5C4A2E" />
+            ) : documentUri ? (
+              <Image source={{ uri: documentUri }} style={styles.uploadPreview} resizeMode="cover" />
+            ) : (
+              <>
+                <View style={styles.uploadIconWrap}>
+                  <MaterialIcons name="cloud-upload" size={22} color="#5C4A2E" />
+                </View>
+                <Text style={styles.uploadTitle}>Upload frente e verso</Text>
+                <Text style={styles.uploadHint}>Aceitamos RG, CNH ou documento de identificação válido.</Text>
+              </>
+            )}
           </TouchableOpacity>
 
           <View style={styles.rowLabel}>
             <Text style={styles.uploadLabel}>Foto do passageiro</Text>
             <Text style={styles.optional}>Opcional</Text>
           </View>
-          <TouchableOpacity style={styles.uploadBox} onPress={onUploadPhoto} activeOpacity={0.85}>
-            <View style={styles.uploadIconWrap}>
-              <MaterialIcons name="photo-camera" size={22} color="#5C4A2E" />
-            </View>
-            <Text style={styles.uploadTitle}>Clique pra fazer o upload</Text>
+          <TouchableOpacity
+            style={styles.uploadBox}
+            onPress={() => pickAndUpload('photo')}
+            disabled={uploading !== null}
+            activeOpacity={0.85}
+          >
+            {uploading === 'photo' ? (
+              <ActivityIndicator color="#5C4A2E" />
+            ) : photoUri ? (
+              <Image source={{ uri: photoUri }} style={styles.uploadPreview} resizeMode="cover" />
+            ) : (
+              <>
+                <View style={styles.uploadIconWrap}>
+                  <MaterialIcons name="photo-camera" size={22} color="#5C4A2E" />
+                </View>
+                <Text style={styles.uploadTitle}>Clique pra fazer o upload</Text>
+              </>
+            )}
           </TouchableOpacity>
 
           <View style={styles.rowLabel}>
@@ -285,11 +358,15 @@ const styles = StyleSheet.create({
     borderColor: '#D1D5DB',
     borderStyle: 'dashed',
     borderRadius: 14,
+    minHeight: 130,
     paddingVertical: 22,
     paddingHorizontal: 16,
     alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 8,
+    overflow: 'hidden',
   },
+  uploadPreview: { width: '100%', height: 160, borderRadius: 10 },
   uploadIconWrap: {
     width: 48,
     height: 48,

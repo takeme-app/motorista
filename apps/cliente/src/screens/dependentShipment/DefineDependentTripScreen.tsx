@@ -41,7 +41,7 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
   const bottomInset = useBottomSafeInset();
   const { showAlert } = useAppAlert();
   const { currentPlace, refreshLocation } = useCurrentLocation();
-  const { fullName, contactPhone, bagsCount, instructions, dependentId, photoUri, extraPassengers } = route.params;
+  const { fullName, contactPhone, bagsCount, instructions, dependentId, photoUri, photoUris, extraPassengers } = route.params;
 
   const when = useWhenTimeSelection();
 
@@ -169,6 +169,7 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
       instructions,
       dependentId,
       extraPassengers,
+      ...(photoUris?.length ? { photoUris } : {}),
       ...(photoUri ? { photoUri } : {}),
     });
   }, [
@@ -188,6 +189,7 @@ export function DefineDependentTripScreen({ navigation, route }: Props) {
     dependentId,
     extraPassengers,
     photoUri,
+    photoUris,
     navigation,
     showAlert,
     saveRecentDestination,
