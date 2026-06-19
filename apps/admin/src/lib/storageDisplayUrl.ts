@@ -96,3 +96,30 @@ export async function resolveStorageDisplayUrl(client: SupabaseClient, pathOrUrl
   const { data } = client.storage.from(primary).getPublicUrl(trimmed);
   return data.publicUrl ?? null;
 }
+
+const CHAT_ATTACHMENTS_BUCKET = 'chat-attachments';
+
+/**
+ * Resolve a URL exibível de um anexo de chat.
+ * - Mensagens novas (motorista/cliente e admin) gravam apenas o `attachment_path`
+ *   no bucket privado chat-attachments → precisa de signed URL.
+ * - Mensagens antigas do admin podem ter `attachment_url` (signed URL de longa duração) → usa direto.
+ */
+export async function resolveChatAttachmentUrl(
+  client: SupabaseClient,
+  attachmentPath: string | null,
+  attachmentUrl: string | null,
+): Promise<string | null> {
+  const path = attachmentPath?.trim();
+  if (path) {
+    const { data, error } = await client.storage
+      .from(CHAT_ATTACHMENTS_BUCKET)
+      .createSignedUrl(path, 60 * 60);
+    if (!error && data?.signedUrl) return data.signedUrl;
+  }
+
+  const url = attachmentUrl?.trim();
+  if (url) return url;
+
+  return null;
+}

@@ -8,8 +8,10 @@ import {
   submitExcursionBudget,
   fetchPreparadorEditDetail,
   fetchPreparadorCandidates,
+  fetchApprovedDriversForEncomendaUI,
   formatCurrencyBRL,
 } from '../data/queries';
+import type { ApprovedDriverCandidate } from '../data/queries';
 import type { PreparadorEditDetail, PreparadorCandidate } from '../data/types';
 import { supabase } from '../lib/supabase';
 
@@ -41,7 +43,8 @@ const addBtn: React.CSSProperties = {
 };
 
 type BudgetTeamLine = {
-  worker_id: string | null;
+  worker_id?: string | null;
+  name?: string;
   role: 'driver' | 'preparer';
   value_cents: number;
 };
@@ -89,11 +92,12 @@ export default function ElaborarOrcamentoScreen() {
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<PreparadorEditDetail | null>(null);
   const [preparerCandidates, setPreparerCandidates] = useState<PreparadorCandidate[]>([]);
-  const [drivers, setDrivers] = useState<Array<{ id: string; nome: string }>>([]);
   const [banner, setBanner] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   // Form state
+  const [driverName, setDriverName] = useState<string>('');
   const [selectedDriverId, setSelectedDriverId] = useState<string>('');
+  const [approvedDrivers, setApprovedDrivers] = useState<ApprovedDriverCandidate[]>([]);
   const [selectedPreparerId, setSelectedPreparerId] = useState<string>('');
   const [driverValueCents, setDriverValueCents] = useState<number>(0);
   const [preparerValueCents, setPreparerValueCents] = useState<number>(0);
@@ -109,18 +113,15 @@ export default function ElaborarOrcamentoScreen() {
     (async () => {
       if (!excursionId) { setLoading(false); return; }
       setLoading(true);
-      const [d, preps, { data: driverRows }] = await Promise.all([
+      const [d, preps, drivers] = await Promise.all([
         fetchPreparadorEditDetail(excursionId),
         fetchPreparadorCandidates(),
-        (supabase as any).from('worker_profiles')
-          .select('id, status')
-          .eq('role', 'driver')
-          .eq('status', 'approved')
-          .limit(200),
+        fetchApprovedDriversForEncomendaUI(),
       ]);
       if (cancelled) return;
       setDetail(d);
       setPreparerCandidates(preps);
+      setApprovedDrivers(drivers);
 
       void (async () => {
         const [{ data: pkgs }, { data: recs }] = await Promise.all([
@@ -139,17 +140,17 @@ export default function ElaborarOrcamentoScreen() {
         setPackageCatalog((pkgs as any[]) || []);
         setRecreationCatalog((recs as any[]) || []);
       })();
-      const driverIds = (driverRows ?? []).map((r: any) => r.id as string);
-      let driverList: Array<{ id: string; nome: string }> = [];
-      if (driverIds.length > 0) {
-        const { data: profs } = await (supabase as any).from('profiles').select('id, full_name').in('id', driverIds);
-        const map = new Map((profs ?? []).map((p: any) => [p.id, p.full_name || 'Motorista']));
-        driverList = driverIds.map((id: string) => ({ id, nome: (map.get(id) as string) || 'Motorista' }));
-      }
       if (cancelled) return;
-      setDrivers(driverList);
       if (d) {
-        setSelectedDriverId(d.driverId ?? '');
+        const teamLines = Array.isArray(d.budgetLines) ? d.budgetLines : [];
+        const driverLine = teamLines.find((raw) => {
+          const l = raw as any;
+          return l && String(l.kind ?? '') === 'team' && String(l.role ?? '').toLowerCase().includes('driver');
+        }) as any;
+        const driverLabel = driverLine ? String(driverLine.name ?? driverLine.label ?? '').trim() : '';
+        setDriverName(driverLabel && driverLabel !== 'Motorista' ? driverLabel : '');
+        const driverLineWorkerId = driverLine ? String(driverLine.worker_id ?? '').trim() : '';
+        setSelectedDriverId(d.driverId ?? driverLineWorkerId ?? '');
         setSelectedPreparerId(d.preparerId ?? '');
         setDriverValueCents(d.driverPayoutCents ?? 0);
         setPreparerValueCents(d.preparerPayoutCents ?? 0);
@@ -239,12 +240,15 @@ export default function ElaborarOrcamentoScreen() {
       setBanner({ type: 'err', text: 'Total deve ser maior que zero.' });
       return;
     }
-    if (finalize && !selectedDriverId && !selectedPreparerId) {
-      setBanner({ type: 'err', text: 'Vincule ao menos um worker (motorista ou preparador).' });
+    const trimmedDriverName = driverName.trim();
+    if (finalize && !trimmedDriverName && !selectedPreparerId) {
+      setBanner({ type: 'err', text: 'Informe o motorista ou vincule um preparador.' });
       return;
     }
     const team: BudgetTeamLine[] = [];
-    if (selectedDriverId) team.push({ worker_id: selectedDriverId, role: 'driver', value_cents: driverValueCents });
+    if (trimmedDriverName || driverValueCents > 0 || selectedDriverId) {
+      team.push({ worker_id: selectedDriverId || null, name: trimmedDriverName, role: 'driver', value_cents: driverValueCents });
+    }
     if (selectedPreparerId) team.push({ worker_id: selectedPreparerId, role: 'preparer', value_cents: preparerValueCents });
     const cleanBasicItems = sanitizeBudgetRows(basicItems);
     const cleanAdditionalServices = sanitizeBudgetRows(additionalServices);
@@ -252,11 +256,13 @@ export default function ElaborarOrcamentoScreen() {
     const displayLines: BudgetPayloadLine[] = [
       ...team.map((row) => ({
         kind: 'team' as const,
-        label: row.role === 'driver' ? 'Motorista' : 'Preparador de excursões',
+        label: row.role === 'driver'
+          ? (row.name?.trim() || 'Motorista')
+          : 'Preparador de excursões',
         qty: 1,
         value_cents: Math.max(0, row.value_cents),
         amount_cents: Math.max(0, row.value_cents),
-        worker_id: row.worker_id,
+        worker_id: row.worker_id ?? null,
         role: row.role,
       })),
       ...cleanBasicItems.map((row) => ({
@@ -304,7 +310,15 @@ export default function ElaborarOrcamentoScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [excursionId, totalCents, selectedDriverId, selectedPreparerId, driverValueCents, preparerValueCents, basicItems, additionalServices, recreationItems, navigate]);
+  }, [excursionId, totalCents, driverName, selectedDriverId, selectedPreparerId, driverValueCents, preparerValueCents, basicItems, additionalServices, recreationItems, navigate]);
+
+  const handleSelectDriver = useCallback((driverId: string) => {
+    setSelectedDriverId(driverId);
+    if (driverId) {
+      const drv = approvedDrivers.find((d) => d.id === driverId);
+      if (drv?.nome) setDriverName(drv.nome);
+    }
+  }, [approvedDrivers]);
 
   // ── UI blocks ─────────────────────────────────────────────────────────
   const breadcrumb = React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#767676', ...font } },
@@ -372,14 +386,16 @@ export default function ElaborarOrcamentoScreen() {
     React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#767676', ...font } }, 'Equipe vinculada'),
     React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
       React.createElement('div', { style: { flex: '2 1 0', minWidth: 160, display: 'flex', flexDirection: 'column' as const, gap: 4 } },
-        React.createElement('span', { style: labelStyle }, 'Motorista'),
+        React.createElement('span', { style: labelStyle }, 'Motorista cadastrado (opcional)'),
         React.createElement('select', {
           value: selectedDriverId,
-          onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedDriverId(e.target.value),
+          onChange: (e: React.ChangeEvent<HTMLSelectElement>) => handleSelectDriver(e.target.value),
           style: inputStyle,
         },
-          React.createElement('option', { value: '' }, '— Selecione —'),
-          ...drivers.map((d) => React.createElement('option', { key: d.id, value: d.id }, d.nome)))),
+          React.createElement('option', { value: '' }, '— Externo / não cadastrado —'),
+          ...approvedDrivers.map((d) => React.createElement('option', { key: d.id, value: d.id }, d.isPartner ? `${d.nome} (parceiro)` : d.nome))),
+        React.createElement('span', { style: { marginTop: 4, fontSize: 11, color: '#767676', ...font } },
+          selectedDriverId ? 'Repasse via Stripe Connect será gerado para este motorista.' : 'Sem motorista cadastrado: pagamento resolvido fora da plataforma.')),
       React.createElement('div', { style: { flex: '1 1 0', minWidth: 140, display: 'flex', flexDirection: 'column' as const, gap: 4 } },
         React.createElement('span', { style: labelStyle }, 'Valor motorista'),
         React.createElement('input', {
@@ -387,6 +403,18 @@ export default function ElaborarOrcamentoScreen() {
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDriverValueCents(parseBRLInputToCents(e.target.value)),
           style: inputStyle,
         }))),
+    !selectedDriverId
+      ? React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
+          React.createElement('div', { style: { flex: '1 1 0', minWidth: 160, display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+            React.createElement('span', { style: labelStyle }, 'Nome do motorista (exibição)'),
+            React.createElement('input', {
+              type: 'text',
+              value: driverName,
+              placeholder: 'Nome do motorista (van/ônibus)',
+              onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDriverName(e.target.value),
+              style: inputStyle,
+            })))
+      : null,
     React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
       React.createElement('div', { style: { flex: '2 1 0', minWidth: 160, display: 'flex', flexDirection: 'column' as const, gap: 4 } },
         React.createElement('span', { style: labelStyle }, 'Preparador de excursões'),

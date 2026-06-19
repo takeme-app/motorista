@@ -45,6 +45,52 @@ type PromoLookup = {
   promo_worker_route_id: string | null;
 };
 
+type AbateResult = { extraCents: number; ledgerId: string | null };
+
+const NO_ABATE: AbateResult = { extraCents: 0, ledgerId: null };
+
+/**
+ * Abate da taxa da plataforma (saldo devido em corridas-dinheiro) no momento de
+ * uma cobrança Connect com cartão/Pix. Consome transacionalmente (FOR UPDATE) até
+ * `min(adminEarning, workerEarning)` do saldo devido — o cap por corrida é a taxa
+ * admin, e o segundo limite garante que `application_fee_amount <= amount` (o
+ * líquido do motorista no Stripe nunca fica negativo). Registra um debit
+ * `connect_charge_abate` no ledger e devolve o valor a somar no application_fee.
+ */
+async function consumePlatformFeeOwed(
+  admin: SupabaseClient,
+  workerId: string,
+  adminEarningCents: number,
+  workerEarningCents: number,
+  bookingId: string | null,
+): Promise<AbateResult> {
+  const cap = Math.min(
+    Math.max(0, Math.floor(adminEarningCents)),
+    Math.max(0, Math.floor(workerEarningCents)),
+  );
+  if (!workerId || cap <= 0) return NO_ABATE;
+  const { data, error } = await admin.rpc("consume_platform_fee_owed", {
+    p_worker_id: workerId,
+    p_max_cents: cap,
+    p_booking_id: bookingId,
+  });
+  if (error) {
+    console.error("[charge-booking] consume_platform_fee_owed:", error.message);
+    return NO_ABATE;
+  }
+  const row = data as { extra_cents?: unknown; ledger_id?: unknown } | null;
+  const extraCents = Math.max(0, Math.floor(Number(row?.extra_cents ?? 0)));
+  const ledgerId = typeof row?.ledger_id === "string" ? row.ledger_id : null;
+  return { extraCents, ledgerId };
+}
+
+/** Desfaz o débito de abate quando a cobrança não se concretiza (falha do PI/insert). */
+async function revertAbateLedger(admin: SupabaseClient, ledgerId: string | null): Promise<void> {
+  if (!ledgerId) return;
+  const { error } = await admin.from("driver_platform_fee_ledger").delete().eq("id", ledgerId);
+  if (error) console.error("[charge-booking] revertAbateLedger:", error.message);
+}
+
 async function loadPromotionForRoute(
   admin: SupabaseClient,
   orderType: 'bookings' | 'shipments' | 'dependent_shipments' | 'excursions',
@@ -544,6 +590,8 @@ Deno.serve(async (req) => {
       const driverId = (tripRow.driver_id as string | undefined)?.trim() ?? "";
       let connectAccountId: string | null = null;
       let applicationFeeCents: number | null = null;
+      let extraDebitCents = 0;
+      let abateLedgerId: string | null = null;
       if (driverId) {
         const { data: wp } = await admin
           .from("worker_profiles")
@@ -562,7 +610,11 @@ Deno.serve(async (req) => {
               { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
             );
           }
-          applicationFeeCents = adminEarningCents;
+          // Abate do saldo devido (corridas-dinheiro) — booking ainda não existe: linka depois.
+          const abate = await consumePlatformFeeOwed(admin, driverId, adminEarningCents, workerEarningCents, null);
+          extraDebitCents = abate.extraCents;
+          abateLedgerId = abate.ledgerId;
+          applicationFeeCents = adminEarningCents + extraDebitCents;
         }
       }
 
@@ -592,6 +644,7 @@ Deno.serve(async (req) => {
       try {
         pi = await stripeFetch(stripeSecret, "POST", "/payment_intents", piParams) as typeof pi;
       } catch (e) {
+        await revertAbateLedger(admin, abateLedgerId);
         return new Response(
           JSON.stringify({ error: e instanceof Error ? e.message : "Falha ao cobrar no Stripe" }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -599,6 +652,7 @@ Deno.serve(async (req) => {
       }
 
       if (pi.status === "requires_action") {
+        await revertAbateLedger(admin, abateLedgerId);
         return new Response(
           JSON.stringify({
             error:
@@ -608,6 +662,7 @@ Deno.serve(async (req) => {
         );
       }
       if (pi.status !== "succeeded" && pi.status !== "requires_capture") {
+        await revertAbateLedger(admin, abateLedgerId);
         const errMsg = pi.last_payment_error?.message ?? "Pagamento não foi aprovado";
         return new Response(JSON.stringify({ error: errMsg }), {
           status: 400,
@@ -646,6 +701,7 @@ Deno.serve(async (req) => {
         promo_worker_route_id: promo.promo_worker_route_id,
         admin_pct_applied: pricing.admin_pct_applied,
         amount_cents: billedCents,
+        platform_fee_extra_debit_cents: extraDebitCents,
         status: "paid",
         paid_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -670,6 +726,7 @@ Deno.serve(async (req) => {
             console.error("[charge-booking] estorno após falha no insert:", re);
           }
         }
+        await revertAbateLedger(admin, abateLedgerId);
         const detail = insErr?.message?.trim() || "sem detalhe";
         return new Response(
           JSON.stringify({
@@ -681,6 +738,15 @@ Deno.serve(async (req) => {
       }
 
       const newBookingId = inserted.id as string;
+
+      // Linka o débito de abate ao booking recém-criado (para auditoria e reversão).
+      if (abateLedgerId) {
+        const { error: linkErr } = await admin
+          .from("driver_platform_fee_ledger")
+          .update({ booking_id: newBookingId } as never)
+          .eq("id", abateLedgerId);
+        if (linkErr) console.error("[charge-booking] link abate->booking:", linkErr.message);
+      }
 
       // Payout é criado automaticamente pelo trigger SQL quando a trip é completada
       // (fn_create_payouts_on_trip_complete). Não criamos aqui no charge.
@@ -724,6 +790,8 @@ Deno.serve(async (req) => {
     const driverId = st?.driver_id?.trim();
     let connectAccountId: string | null = null;
     let applicationFeeCents: number | null = null;
+    let extraDebitCents = 0;
+    let abateLedgerId: string | null = null;
 
     if (driverId) {
       const { data: wp } = await admin
@@ -745,6 +813,17 @@ Deno.serve(async (req) => {
         adminEarningStored >= 0
       ) {
         applicationFeeCents = Math.floor(adminEarningStored);
+        // Abate do saldo devido (corridas-dinheiro) — booking já existe.
+        const abate = await consumePlatformFeeOwed(
+          admin,
+          driverId,
+          adminEarningStored,
+          Number.isFinite(workerEarningStored) ? workerEarningStored : amountCents - Math.floor(adminEarningStored),
+          bookingId,
+        );
+        extraDebitCents = abate.extraCents;
+        abateLedgerId = abate.ledgerId;
+        applicationFeeCents = Math.floor(adminEarningStored) + extraDebitCents;
       } else if (connectAccountId) {
         const workerPayout = Number(booking.worker_payout_cents ?? workerEarningStored ?? 0);
         const payout = Number.isFinite(workerPayout)
@@ -793,7 +872,11 @@ Deno.serve(async (req) => {
         // Caminho raro (Pix com saldo já casado): grava PI já; webhook vai promover status.
         await admin
           .from("bookings")
-          .update({ stripe_payment_intent_id: piPix.id ?? null, updated_at: new Date().toISOString() } as never)
+          .update({
+            stripe_payment_intent_id: piPix.id ?? null,
+            platform_fee_extra_debit_cents: extraDebitCents,
+            updated_at: new Date().toISOString(),
+          } as never)
           .eq("id", bookingId!)
           .eq("user_id", userId);
         return new Response(
@@ -802,6 +885,15 @@ Deno.serve(async (req) => {
         );
       }
       if (piPix.status === "requires_action" && piPix.next_action?.type === "pix_display_qr_code") {
+        // Registra o abate no booking; se o Pix não for pago e o booking for cancelado,
+        // o trigger trg_bookings_revert_platform_fee_abate devolve o saldo ao motorista.
+        if (extraDebitCents > 0) {
+          await admin
+            .from("bookings")
+            .update({ platform_fee_extra_debit_cents: extraDebitCents, updated_at: new Date().toISOString() } as never)
+            .eq("id", bookingId!)
+            .eq("user_id", userId);
+        }
         const qr = piPix.next_action.pix_display_qr_code;
         return new Response(
           JSON.stringify({
@@ -816,6 +908,7 @@ Deno.serve(async (req) => {
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
+      await revertAbateLedger(admin, abateLedgerId);
       const errMsg = piPix.last_payment_error?.message ?? `Pix não disponível (status=${piPix.status ?? "?"})`;
       return new Response(JSON.stringify({ error: errMsg }), {
         status: 400,
@@ -846,6 +939,7 @@ Deno.serve(async (req) => {
       last_payment_error?: { message?: string };
     };
     if (pi.status === "requires_action") {
+      await revertAbateLedger(admin, abateLedgerId);
       return new Response(
         JSON.stringify({
           error:
@@ -855,6 +949,7 @@ Deno.serve(async (req) => {
       );
     }
     if (pi.status !== "succeeded" && pi.status !== "requires_capture") {
+      await revertAbateLedger(admin, abateLedgerId);
       const errMsg = pi.last_payment_error?.message ?? "Pagamento não foi aprovado";
       return new Response(
         JSON.stringify({ error: errMsg }),
@@ -869,6 +964,7 @@ Deno.serve(async (req) => {
         paid_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         stripe_payment_intent_id: pi.id ?? null,
+        platform_fee_extra_debit_cents: extraDebitCents,
       })
       .eq("id", bookingId)
       .eq("user_id", userId);

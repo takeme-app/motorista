@@ -400,7 +400,7 @@ export interface PreparadorEditPassenger {
   phone: string | null;
   observations: string | null;
   /** Boarding/departure status from excursion_passengers.status_departure */
-  statusDeparture: 'not_started' | 'embarked' | 'absent' | null;
+  statusDeparture: 'not_embarked' | 'embarked' | 'disembarked' | null;
   /** Return status from excursion_passengers.status_return */
   statusReturn: string | null;
   /** Whether absence was justified */

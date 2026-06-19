@@ -11,16 +11,18 @@ export interface FileUploadProps {
    * `${conversationId}/...` como primeira pasta.
    */
   pathPrefix: string;
-  /** Callback ao completar upload (signed URL de 1 ano já pronta para exibir). */
-  onUploaded: (signedUrl: string, type: 'pdf' | 'image') => void;
+  /**
+   * Callback ao completar upload. Retorna o `path` no bucket e o `kind`
+   * compatível com message_kind (image|audio|file). Vídeo é gravado como
+   * 'file' e identificado pela extensão na exibição.
+   */
+  onUploaded: (path: string, kind: 'image' | 'audio' | 'file') => void;
   /** Cancela o upload / fecha o componente */
   onCancel?: () => void;
-  /** Aceita apenas certos tipos (default: pdf + imagens) */
+  /** Aceita apenas certos tipos (default: pdf + imagens + áudio + vídeo) */
   accept?: string;
   style?: React.CSSProperties;
 }
-
-const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 365;
 
 // ── Styles ───────────────────────────────────────────────────────────
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -70,9 +72,18 @@ const btnStyle: React.CSSProperties = {
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────
-function getFileType(file: File): 'pdf' | 'image' | null {
-  if (file.type === 'application/pdf') return 'pdf';
-  if (file.type.startsWith('image/')) return 'image';
+// kind compatível com message_kind (image|audio|file). Vídeo/PDF/documentos => 'file'.
+function getFileKind(file: File): 'image' | 'audio' | 'file' | null {
+  const type = file.type || '';
+  if (type.startsWith('image/')) return 'image';
+  if (type.startsWith('audio/')) return 'audio';
+  if (type.startsWith('video/')) return 'file';
+  if (type === 'application/pdf') return 'file';
+  // Documentos do Office / texto / zip também são aceitos como arquivo genérico.
+  if (
+    type.startsWith('application/') ||
+    type.startsWith('text/')
+  ) return 'file';
   return null;
 }
 
@@ -84,7 +95,14 @@ function formatSize(bytes: number): string {
 
 // ── Component ────────────────────────────────────────────────────────
 export default function FileUpload(props: FileUploadProps) {
-  const { bucket = 'chat-attachments', pathPrefix, onUploaded, onCancel, accept = '.pdf,.png,.jpg,.jpeg,.webp', style } = props;
+  const {
+    bucket = 'chat-attachments',
+    pathPrefix,
+    onUploaded,
+    onCancel,
+    accept = '.pdf,.png,.jpg,.jpeg,.webp,.gif,.heic,.mp3,.m4a,.aac,.wav,.ogg,.mp4,.mov,.webm,.3gp,.doc,.docx,.xls,.xlsx,.txt,.csv',
+    style,
+  } = props;
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -94,13 +112,13 @@ export default function FileUpload(props: FileUploadProps) {
   const handleFileSelect = useCallback((files: FileList | null) => {
     if (!files || files.length === 0) return;
     const f = files[0];
-    const type = getFileType(f);
-    if (!type) {
-      setError('Formato não suportado. Use PDF, PNG, JPG ou WEBP.');
+    const kind = getFileKind(f);
+    if (!kind) {
+      setError('Formato não suportado.');
       return;
     }
-    if (f.size > 10 * 1024 * 1024) {
-      setError('Arquivo muito grande. Máximo 10 MB.');
+    if (f.size > 25 * 1024 * 1024) {
+      setError('Arquivo muito grande. Máximo 25 MB.');
       return;
     }
     setFile(f);
@@ -109,8 +127,8 @@ export default function FileUpload(props: FileUploadProps) {
 
   const handleUpload = useCallback(async () => {
     if (!file) return;
-    const type = getFileType(file);
-    if (!type) return;
+    const kind = getFileKind(file);
+    if (!kind) return;
     const safePrefix = (pathPrefix || '').trim();
     if (!safePrefix) {
       setError('Contexto inválido para upload.');
@@ -129,16 +147,12 @@ export default function FileUpload(props: FileUploadProps) {
 
       const { error: uploadError } = await (supabase as any).storage
         .from(bucket)
-        .upload(path, file, { contentType: file.type, upsert: false });
+        .upload(path, file, { contentType: file.type || 'application/octet-stream', upsert: false });
 
       if (uploadError) throw uploadError;
 
-      const { data: signed, error: signErr } = await (supabase as any).storage
-        .from(bucket)
-        .createSignedUrl(path, SIGNED_URL_TTL_SEC);
-      if (signErr || !signed?.signedUrl) throw signErr ?? new Error('Não foi possível gerar URL assinada');
-
-      onUploaded(signed.signedUrl, type);
+      // Grava apenas o path; a exibição gera signed URL sob demanda (bucket privado).
+      onUploaded(path, kind);
       setFile(null);
     } catch (err: any) {
       setError(err.message || 'Erro ao enviar arquivo');
@@ -166,7 +180,11 @@ export default function FileUpload(props: FileUploadProps) {
     // Dropzone ou preview
     file
       ? React.createElement('div', { style: previewStyle },
-          React.createElement('span', { style: { fontSize: 18 } }, getFileType(file) === 'pdf' ? '\u{1F4C4}' : '\u{1F5BC}'),
+          React.createElement('span', { style: { fontSize: 18 } },
+            getFileKind(file) === 'image' ? '\u{1F5BC}'
+              : getFileKind(file) === 'audio' ? '\u{1F3A4}'
+                : (file.type || '').startsWith('video/') ? '\u{1F3A5}'
+                  : '\u{1F4C4}'),
           React.createElement('div', { style: { flex: 1, overflow: 'hidden' } },
             React.createElement('div', { style: { fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' as const, overflow: 'hidden', textOverflow: 'ellipsis' } }, file.name),
             React.createElement('div', { style: { fontSize: 12, color: '#767676' } }, formatSize(file.size)),
@@ -184,7 +202,7 @@ export default function FileUpload(props: FileUploadProps) {
           onDrop: handleDrop,
         },
           'Arraste um arquivo ou clique para selecionar',
-          React.createElement('div', { style: { fontSize: 11, color: '#999', marginTop: 4 } }, 'PDF, PNG, JPG (max 10 MB)'),
+          React.createElement('div', { style: { fontSize: 11, color: '#999', marginTop: 4 } }, 'Imagem, áudio, vídeo, PDF e documentos (max 25 MB)'),
         ),
 
     // Error

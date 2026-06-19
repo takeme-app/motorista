@@ -251,6 +251,25 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Só permite criar/editar orçamento antes do cliente aceitar/pagar.
+    // 'approved' já significa pago; demais status posteriores (scheduled,
+    // in_progress, completed) ou encerrados (cancelled, rejected) bloqueiam.
+    const EDITABLE_STATUSES = ["pending", "contacted", "quoted", "in_analysis"];
+    const currentStatus = String(excursion.status ?? "");
+    const wasQuoted = currentStatus === "quoted";
+    if (!EDITABLE_STATUSES.includes(currentStatus)) {
+      const message = currentStatus === "approved"
+        ? "Orçamento já aceito/pago; não pode ser editado."
+        : `Status atual (${currentStatus}) não permite editar o orçamento.`;
+      return new Response(
+        JSON.stringify({ error: message }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
     if (!budget_lines || typeof budget_lines !== "object") {
       return new Response(
         JSON.stringify({ error: "budget_lines é obrigatório" }),

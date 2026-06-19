@@ -243,6 +243,19 @@ Deno.serve(async (req) => {
         };
       };
 
+      // Trava local anti-duplicidade: grava o PaymentIntent assim que criado, sem
+      // depender do webhook. Status só vira `approved` no stripe-webhook.
+      if (piPix.id) {
+        await admin
+          .from("excursion_requests")
+          .update({
+            stripe_payment_intent_id: piPix.id,
+            payment_method: resolvedMethod,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", excursionId);
+      }
+
       if (piPix.status === "succeeded" || piPix.status === "requires_capture") {
         return new Response(
           JSON.stringify({ ok: true, excursion_request_id: excursionId, payment_intent_id: piPix.id ?? null }),
@@ -333,6 +346,19 @@ Deno.serve(async (req) => {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // Trava local anti-duplicidade após aprovação do cartão. Status vira `approved`
+    // no stripe-webhook (payment_intent.succeeded).
+    if (pi.id) {
+      await admin
+        .from("excursion_requests")
+        .update({
+          stripe_payment_intent_id: pi.id,
+          payment_method: resolvedMethod,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", excursionId);
     }
 
     return new Response(
