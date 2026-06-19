@@ -44,7 +44,8 @@ function formatShortDate(iso: string): string {
 
 function formatHour(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  // Hora LOCAL sem Intl (toLocaleTimeString é instável no Hermes e retornava hora errada).
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 function PixIcon() {
@@ -94,20 +95,25 @@ export function PagamentosEncomendasScreen() {
     const start = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
     const end = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999).toISOString();
 
+    // A perna do preparador conclui quando ele DEPOSITA na base (delivered_to_base_at),
+    // nao na entrega final (delivered_at) — essa e feita por outro motorista (base->destino)
+    // e pode ocorrer dias depois. Por isso o payout do preparador conta por delivered_to_base_at.
     const { data: shipments } = await supabase
       .from('shipments')
-      .select('id, amount_cents, created_at, delivered_at')
+      .select('id, preparer_payout_cents, created_at, delivered_to_base_at')
       .eq('preparer_id' as never, user.id)
       .eq('base_id' as never, myBaseId as never)
-      .eq('status', 'delivered')
-      .gte('delivered_at', start)
-      .lte('delivered_at', end)
-      .order('delivered_at', { ascending: false });
+      .not('delivered_to_base_at' as never, 'is', null)
+      .gte('delivered_to_base_at', start)
+      .lte('delivered_to_base_at', end)
+      .order('delivered_to_base_at', { ascending: false });
 
+    // Preparador recebe a parcela do km base<->origem (preparer_payout_cents),
+    // nao o total pago pelo cliente (amount_cents).
     const list: Transfer[] = (shipments ?? []).map((s: any) => ({
       id: s.id,
-      amount_cents: s.amount_cents,
-      created_at: s.delivered_at ?? s.created_at,
+      amount_cents: s.preparer_payout_cents ?? 0,
+      created_at: s.delivered_to_base_at ?? s.created_at,
     }));
 
     setTransfers(list);
@@ -186,7 +192,7 @@ export function PagamentosEncomendasScreen() {
                     <PixIcon />
                     <View style={styles.transferInfo}>
                       <Text style={styles.transferAmount}>{formatCents(t.amount_cents)}</Text>
-                      <Text style={styles.transferMeta}>Pix • {formatHour(t.created_at)}</Text>
+                      <Text style={styles.transferMeta}>Entrega na base • {formatHour(t.created_at)}</Text>
                     </View>
                     <Text style={styles.transferDate}>{formatShortDate(t.created_at)}</Text>
                   </View>

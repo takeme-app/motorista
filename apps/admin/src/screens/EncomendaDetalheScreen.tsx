@@ -5,7 +5,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { webStyles } from '../styles/webStyles';
-import { fetchEncomendaEditDetail, formatCurrencyBRL } from '../data/queries';
+import { fetchEncomendaEditDetail, formatCurrencyBRL, approveLargeShipment, rejectLargeShipment } from '../data/queries';
 import type { EncomendaEditDetail } from '../data/types';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -53,6 +53,8 @@ export default function EncomendaDetalheScreen() {
   const [detail, setDetail] = useState<EncomendaEditDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
     if (!routeId) {
@@ -75,7 +77,7 @@ export default function EncomendaDetalheScreen() {
       setLoading(false);
     });
     return () => { cancel = true; };
-  }, [routeId]);
+  }, [routeId, reloadTick]);
 
   const breadcrumb = React.createElement('div', {
     style: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 600, color: '#767676', ...font },
@@ -133,7 +135,50 @@ export default function EncomendaDetalheScreen() {
     },
   }, 'Editar');
 
+  // Encomenda grande aguardando aprovação do admin: libera Aprovar/Recusar.
+  const needsApproval = detail.kind === 'shipment'
+    && (detail.packageSize ?? '').toLowerCase() === 'grande'
+    && !detail.adminApprovedAt
+    && detail.status !== 'cancelled'
+    && detail.status !== 'delivered';
+
+  const runApprovalAction = async (action: 'approve' | 'reject') => {
+    if (actionBusy) return;
+    if (action === 'reject' && !window.confirm('Recusar esta encomenda grande? O cliente será estornado e o pedido cancelado.')) return;
+    setActionBusy(true);
+    const { error } = action === 'approve'
+      ? await approveLargeShipment(detail.id)
+      : await rejectLargeShipment(detail.id);
+    setActionBusy(false);
+    if (error) { window.alert(`Erro: ${error}`); return; }
+    setReloadTick((t) => t + 1);
+  };
+
+  const aprovarBtn = needsApproval
+    ? React.createElement('button', {
+      type: 'button', disabled: actionBusy, onClick: () => runApprovalAction('approve'),
+      style: {
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', height: 44, padding: '0 24px',
+        borderRadius: 999, border: 'none', background: '#16a34a', cursor: actionBusy ? 'not-allowed' : 'pointer',
+        fontSize: 14, fontWeight: 600, color: '#fff', opacity: actionBusy ? 0.6 : 1, ...font,
+      },
+    }, actionBusy ? 'Processando…' : 'Aprovar encomenda')
+    : null;
+
+  const recusarBtn = needsApproval
+    ? React.createElement('button', {
+      type: 'button', disabled: actionBusy, onClick: () => runApprovalAction('reject'),
+      style: {
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', height: 44, padding: '0 24px',
+        borderRadius: 999, border: '1px solid #e11d48', background: '#fff', cursor: actionBusy ? 'not-allowed' : 'pointer',
+        fontSize: 14, fontWeight: 600, color: '#e11d48', opacity: actionBusy ? 0.6 : 1, ...font,
+      },
+    }, 'Recusar')
+    : null;
+
   const actions = React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 12, alignItems: 'center' } },
+    aprovarBtn,
+    recusarBtn,
     editBtn,
     tripBtn);
 

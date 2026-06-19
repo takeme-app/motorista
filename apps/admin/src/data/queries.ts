@@ -1107,6 +1107,7 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
       whenOption: r.when_option ?? '',
       createdAt: r.created_at ?? '',
       scheduledAt: r.scheduled_at ?? null,
+      adminApprovedAt: r.admin_approved_at ?? null,
     };
   }
   const { data: d, error: e2 } = await supabase.from('dependent_shipments').select('*').eq('id', id).maybeSingle();
@@ -1156,6 +1157,37 @@ export async function updateShipmentFields(
 ): Promise<{ error: string | null }> {
   if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
   const { error } = await (supabase.from('shipments') as any).update(patch).eq('id', id);
+  return { error: error ? (error as Error).message : null };
+}
+
+/** Aprova uma encomenda grande: libera a oferta ao motorista (trigger abre a fila). */
+export async function approveLargeShipment(id: string): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const { error } = await (supabase.from('shipments') as any)
+    .update({ admin_approved_at: new Date().toISOString() })
+    .eq('id', id)
+    .is('admin_approved_at', null);
+  return { error: error ? (error as Error).message : null };
+}
+
+/** Recusa uma encomenda grande: estorna (process-refund) e cancela. */
+export async function rejectLargeShipment(id: string): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  // Tenta o estorno; quando há PaymentIntent, process-refund já marca status='cancelled'.
+  try {
+    await invokeEdgeFunction('process-refund', 'POST', undefined, {
+      entity_type: 'shipment',
+      entity_id: id,
+      reason: 'admin_rejected_large',
+    });
+  } catch {
+    // Sem PaymentIntent (ex.: dinheiro) ou falha de estorno: cancela manualmente abaixo.
+  }
+  // Garante cancelamento + motivo (idempotente; não sobrescreve se já cancelado).
+  const { error } = await (supabase.from('shipments') as any)
+    .update({ status: 'cancelled', cancellation_reason: 'admin_rejected_large' })
+    .eq('id', id)
+    .neq('status', 'cancelled');
   return { error: error ? (error as Error).message : null };
 }
 

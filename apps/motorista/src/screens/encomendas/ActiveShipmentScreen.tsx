@@ -9,6 +9,8 @@ import {
   Modal,
   Platform,
   useWindowDimensions,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../../components/Text';
@@ -406,7 +408,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       const { data } = await supabase
         .from('shipments')
         .select(
-          'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, amount_cents, created_at, status, user_id, base_id, pickup_code, delivery_code, picked_up_at, passenger_to_preparer_code, preparer_to_base_code, picked_up_by_preparer_at',
+          'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, amount_cents, preparer_payout_cents, created_at, status, user_id, base_id, pickup_code, delivery_code, picked_up_at, passenger_to_preparer_code, preparer_to_base_code, picked_up_by_preparer_at',
         )
         .eq('id', shipmentId)
         .maybeSingle();
@@ -445,6 +447,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         destination_lat: number | null;
         destination_lng: number | null;
         amount_cents: number | null;
+        preparer_payout_cents: number | null;
         created_at: string;
         status: string;
         user_id: string;
@@ -506,7 +509,8 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
           pickupHasMapCoords,
           baseHasMapCoords: deliveryHasMapCoords,
           deliveryHasMapCoords,
-        amountCents: row.amount_cents ?? 0,
+        // Valor exibido ao preparador = parcela dele (preparer_payout_cents), nao o total do cliente.
+        amountCents: row.preparer_payout_cents ?? 0,
         confirmedAt: row.created_at,
         pickupCodeExpected: String(row.pickup_code ?? ''),
         deliveryCodeExpected: String(row.delivery_code ?? ''),
@@ -589,7 +593,8 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         baseHasMapCoords,
         /** Proximidade da 2ª etapa = depósito na base. */
         deliveryHasMapCoords: baseHasMapCoords,
-        amountCents: row.amount_cents ?? 0,
+        // Valor exibido ao preparador = parcela dele (preparer_payout_cents), nao o total do cliente.
+        amountCents: row.preparer_payout_cents ?? 0,
         confirmedAt: row.created_at,
         pickupCodeExpected: String(row.pickup_code ?? ''),
         deliveryCodeExpected: String(row.delivery_code ?? ''),
@@ -1156,7 +1161,9 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       );
       if (error) throw error;
       setSummaryVisible(false);
-      navigation.navigate('ColetasMain');
+      // Defere a navegação para depois do Modal sair da árvore: navegar com o Modal
+      // ainda visível deixa o overlay nativo preso no Android (tela "congelada").
+      requestAnimationFrame(() => navigation.navigate('ColetasMain'));
     } catch (e: unknown) {
       if (isShipmentDriverRatingsUnavailableError(e)) {
         showAlert(
@@ -1499,7 +1506,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
           >
             <Text style={styles.miniConfirmBtnText}>
               {step === 'to_pickup'
-                ? 'Confirmar coleta'
+                ? 'Iniciar coleta'
                 : shipment.hasPreparerBase
                   ? 'Confirmar na base'
                   : 'Confirmar entrega'}
@@ -1516,6 +1523,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         animationType="slide"
         onRequestClose={() => !pickupLoading && setPickupVisible(false)}
       >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
         <KeyboardAvoidingView behavior="height" style={styles.kbav}>
           <View style={styles.modalOverlay}>
             <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
@@ -1628,6 +1636,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
             </View>
           </View>
         </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
       </Modal>
 
       {/* ── Delivery modal ── */}
@@ -1637,6 +1646,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         animationType="slide"
         onRequestClose={() => !deliveryLoading && setDeliveryVisible(false)}
       >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
         <KeyboardAvoidingView behavior="height" style={styles.kbav}>
           <View style={styles.modalOverlay}>
             <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
@@ -1745,6 +1755,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
             </View>
           </View>
         </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
       </Modal>
 
       {/* ── Summary modal ── */}
@@ -1754,6 +1765,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         animationType="slide"
         onRequestClose={() => !summaryLoading && setSummaryVisible(false)}
       >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
         <KeyboardAvoidingView behavior="height" style={styles.kbav}>
           <View style={styles.modalOverlay}>
             <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
@@ -1771,7 +1783,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                 </View>
                 <TouchableOpacity
                   style={styles.closeBtn}
-                  onPress={() => { setSummaryVisible(false); navigation.navigate('ColetasMain'); }}
+                  onPress={() => { setSummaryVisible(false); requestAnimationFrame(() => navigation.navigate('ColetasMain')); }}
                   activeOpacity={0.7}
                 >
                   <MaterialIcons name="close" size={18} color="#374151" />
@@ -1836,7 +1848,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.makeMoreBtn}
-                  onPress={() => { setSummaryVisible(false); navigation.navigate('ColetasMain'); }}
+                  onPress={() => { setSummaryVisible(false); requestAnimationFrame(() => navigation.navigate('ColetasMain')); }}
                   activeOpacity={0.7}
                 >
                   <Text style={styles.makeMoreText}>Fazer mais coletas</Text>
@@ -1845,6 +1857,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
             </View>
           </View>
         </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
       </Modal>
     </View>
   );

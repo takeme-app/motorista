@@ -6,6 +6,7 @@ import {
   StyleSheet,
   FlatList,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
   ActivityIndicator,
   Image,
@@ -95,6 +96,25 @@ export function ChatScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const composerBottom = useBottomSafeInset({ extra: 6 });
   const { showAlert } = useAppAlert();
+
+  // No Android (Expo edge-to-edge) o softwareKeyboardLayoutMode 'pan' NÃO reposiciona o
+  // composer ancorado no rodapé, e o KeyboardAvoidingView 'padding' ficava preso ao fechar
+  // (o campo subia e não voltava). Controlamos a altura manualmente: empurra o composer pra
+  // cima ao abrir o teclado e reseta a 0 ao fechar. iOS continua no KAV 'padding'.
+  const [androidKbHeight, setAndroidKbHeight] = useState(0);
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const showSub = Keyboard.addListener('keyboardDidShow', (e) => {
+      setAndroidKbHeight(e.endCoordinates?.height ?? 0);
+    });
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      setAndroidKbHeight(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   // Esconde a bottom tab bar enquanto o chat está focado e restaura ao sair.
   // O Chat aparece via ActivitiesStack/ProfileStack — o tab bar pertence ao
@@ -548,7 +568,9 @@ export function ChatScreen({ navigation, route }: Props) {
       </View>
 
       <KeyboardAvoidingView
-        style={styles.flex}
+        // iOS: KAV 'padding' com offset do header. Android: KAV inativo e empurramos o
+        // composer via paddingBottom controlado por listeners (reseta a 0 ao fechar o teclado).
+        style={[styles.flex, Platform.OS === 'android' ? { paddingBottom: androidKbHeight } : null]}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 56 : 0}
       >

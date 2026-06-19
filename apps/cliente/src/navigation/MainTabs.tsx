@@ -7,12 +7,13 @@ import { ServicesScreen } from '../screens/ServicesScreen';
 import { ActivitiesStack } from './ActivitiesStack';
 import { ProfileStack } from './ProfileStack';
 import type { ProfileStackParamList } from './ProfileStackTypes';
+import type { ActivitiesStackParamList } from './ActivitiesStackTypes';
 import { getMainTabBarStyleFromInsets } from './mainTabBarStyle';
 
 export type MainTabParamList = {
   Home: undefined;
   Services: undefined;
-  Activities: undefined;
+  Activities: NavigatorScreenParams<ActivitiesStackParamList>;
   Profile: NavigatorScreenParams<ProfileStackParamList>;
 };
 
@@ -74,6 +75,14 @@ export function MainTabs() {
             <MaterialIcons name="receipt" size={24} color={color} />
           ),
         }}
+        listeners={({ navigation }) => ({
+          // Tocar na aba sempre volta para a lista de atividades (evita reabrir
+          // uma tela aninhada — ex.: o chat "Time de Encomendas" — que ficou no topo da pilha).
+          tabPress: (e) => {
+            e.preventDefault();
+            navigation.navigate('Activities', { screen: 'ActivitiesList' });
+          },
+        })}
       />
       <Tab.Screen
         name="Profile"

@@ -17,6 +17,14 @@ const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
 type TabTrecho = 'motorista' | 'prep_exc' | 'prep_enc';
 
+/** Tipo de adicional (surcharge_catalog.surcharge_type) próprio de cada aba: viagem é
+ * separada de encomenda/excursão, então cada trecho só oferece adicionais do seu contexto. */
+const SURCHARGE_TYPE_BY_TAB: Record<TabTrecho, string> = {
+  motorista: 'viagem',
+  prep_exc: 'preparador_excursoes',
+  prep_enc: 'preparador_encomendas',
+};
+
 type TrechoFormSlice = {
   origem: string;
   destino: string;
@@ -589,7 +597,7 @@ export default function PagamentoCriarTrechoScreen() {
         },
       },
         React.createElement('option', { value: '' }, 'Selecione adicional'),
-        ...surcharges.filter((s) => s.is_active && s.surcharge_mode === 'manual').map((s) =>
+        ...surcharges.filter((s) => s.is_active && s.surcharge_mode === 'manual' && s.surcharge_type === SURCHARGE_TYPE_BY_TAB[tab]).map((s) =>
           React.createElement('option', { key: s.id, value: s.id }, s.name))),
       React.createElement('div', { style: { position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } }, chevronDownSvg)));
 

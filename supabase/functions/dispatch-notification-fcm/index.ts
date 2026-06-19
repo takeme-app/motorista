@@ -152,6 +152,34 @@ Deno.serve(async (req) => {
       created_at: String(record.created_at ?? ""),
     };
 
+    // Deeplink: `notifications.data` guarda `{ route, params }`. O FCM só aceita
+    // valores string em `data`, então enviamos `route` como string e `params`
+    // como JSON string (o parser dos apps já desserializa params string).
+    // Sem isto, o app recebe a push mas não sabe para onde navegar ao tocar.
+    let deeplink: Record<string, unknown> | null = null;
+    const rawData = record.data;
+    if (rawData && typeof rawData === "object") {
+      deeplink = rawData as Record<string, unknown>;
+    } else if (typeof rawData === "string" && rawData.trim()) {
+      try {
+        const parsed = JSON.parse(rawData);
+        if (parsed && typeof parsed === "object") {
+          deeplink = parsed as Record<string, unknown>;
+        }
+      } catch {
+        /* data não era JSON válido — segue sem deeplink */
+      }
+    }
+    if (deeplink && typeof deeplink.route === "string" && deeplink.route.trim()) {
+      customData.route = deeplink.route.trim();
+      if (deeplink.params != null) {
+        customData.params =
+          typeof deeplink.params === "string"
+            ? deeplink.params
+            : JSON.stringify(deeplink.params);
+      }
+    }
+
     const fcmUrl = `https://fcm.googleapis.com/v1/projects/${GOOGLE_PROJECT_ID}/messages:send`;
     const results: unknown[] = [];
 

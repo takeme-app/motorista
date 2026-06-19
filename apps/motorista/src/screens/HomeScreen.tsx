@@ -362,7 +362,9 @@ export function HomeScreen({ navigation }: Props) {
                   .select('id', { count: 'exact', head: true })
                   .in('scheduled_trip_id', myTripIds)
                   .is('driver_id', null)
-                  .in('status', ['pending_review', 'confirmed']),
+                  .in('status', ['pending_review', 'confirmed'])
+                  // Encomenda grande não aprovada pelo admin ainda não conta como solicitação.
+                  .or('package_size.neq.grande,admin_approved_at.not.is.null'),
                 supabase
                   .from('dependent_shipments')
                   .select('id', { count: 'exact', head: true })
@@ -393,7 +395,9 @@ export function HomeScreen({ navigation }: Props) {
             .eq('client_preferred_driver_id', uid)
             .is('current_offer_driver_id', null)
             .is('driver_id', null)
-            .in('status', ['pending_review', 'confirmed']),
+            .in('status', ['pending_review', 'confirmed'])
+            // Encomenda grande só conta após aprovação do admin.
+            .or('package_size.neq.grande,admin_approved_at.not.is.null'),
           supabase
             .from('scheduled_trips')
             .select('id', { count: 'exact', head: true })

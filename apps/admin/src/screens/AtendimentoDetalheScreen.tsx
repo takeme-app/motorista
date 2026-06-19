@@ -17,6 +17,7 @@ import {
   updateWorkerStatus,
   updateShipmentStatus,
   updateDependentShipmentStatus,
+  approveLargeShipment,
 } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -1898,6 +1899,14 @@ export default function AtendimentoDetalheScreen() {
                 : await updateShipmentStatus(String(sid), 'confirmed');
               setAutorizarSubmitting(false);
               if (error) { showToast(`Erro ao aprovar: ${error}`); return; }
+              // Encomenda grande (shipments): além de confirmar, marca admin_approved_at.
+              // É o que limpa o badge "Aguardando aprovação" no app do cliente E libera a
+              // oferta ao motorista (trigger abre a fila). Inócuo para encomendas não-grandes.
+              // dependent_shipments não tem esse fluxo (sem admin_approved_at/fila).
+              if (encomendaShipmentKind !== 'dependent_shipment') {
+                const { error: approveErr } = await approveLargeShipment(String(sid));
+                if (approveErr) { showToast(`Erro ao liberar oferta: ${approveErr}`); return; }
+              }
               setEncomendaShipmentStatus('confirmed');
               if (conversationId) {
                 await (supabase as any).rpc('close_support_conversation', { p_conversation_id: conversationId, p_finish_note: 'Encomenda aprovada' });

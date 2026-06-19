@@ -1,6 +1,6 @@
 {
   "name": "motorista",
-  "version": "1.0.10",
+  "version": "1.0.18",
   "private": true,
   "main": "index.ts",
   "scripts": {

@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
+import { registerPalliativePix } from '../../lib/palliativePixStore';
 import { PaymentMethodSection, type CardPaymentConfirmParams, type PaymentMethodType } from '../../components/PaymentMethodSection';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
@@ -250,6 +251,34 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
       } finally {
         setSavingPayment(false);
       }
+      return;
+    }
+
+    // Pix paliativo (Stripe Pix desabilitado): aprova o orçamento só aos 40s (na tela de Pix),
+    // reusando confirm-excursion-cash (aprova + cria payouts). Sem cobrança real.
+    if (params.method === 'pix') {
+      const reqId = registerPalliativePix({
+        amountCents: total,
+        effectivate: async () => {
+          const { data: refreshData } = await supabase.auth.refreshSession();
+          const { data: { session } } = await supabase.auth.getSession();
+          const accessToken = refreshData.session?.access_token ?? session?.access_token;
+          if (!accessToken) throw new Error('Sessão expirada.');
+          const { data, error } = await supabase.functions.invoke('confirm-excursion-cash', {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            body: { excursion_request_id: detail.id },
+          });
+          const payload = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+          const edgeError =
+            error || (typeof payload.error === 'string' && payload.error.trim() ? { message: payload.error.trim() } : null);
+          if (edgeError) throw new Error((edgeError as { message?: string }).message ?? 'Falha ao aprovar.');
+        },
+        navigateSuccess: () => {
+          setDetail((prev) => (prev ? { ...prev, payment_method: 'pix', status: 'approved' } : prev));
+          navigation.goBack();
+        },
+      });
+      navigation.navigate('PixPaliativo', { requestId: reqId });
       return;
     }
 

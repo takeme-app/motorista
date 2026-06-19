@@ -16,6 +16,10 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { PagamentosExcStackParamList } from '../../navigation/PagamentosExcursoesStack';
 import { supabase } from '../../lib/supabase';
+import {
+  fetchExcursionPaymentTransfers,
+  type ExcursionPaymentTransfer,
+} from '../../lib/excursionPaymentTransfers';
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 
 type Props = NativeStackScreenProps<PagamentosExcStackParamList, 'PagamentosHistorico'>;
@@ -23,11 +27,12 @@ type Props = NativeStackScreenProps<PagamentosExcStackParamList, 'PagamentosHist
 const GOLD = '#C9A227';
 const CREAM = '#FFFBEB';
 
-type Transfer = {
-  id: string;
-  amount_cents: number;
-  paid_at: string;
-};
+type Transfer = ExcursionPaymentTransfer;
+
+// Só payout pago é repasse real "Pix"; excursão concluída ainda não transferida é "Excursão".
+function transferLabel(source: ExcursionPaymentTransfer['source']): string {
+  return source === 'payout' ? 'Pix' : 'Excursão';
+}
 
 type WeekGroup = {
   label: string;
@@ -52,7 +57,8 @@ function formatShortDate(iso: string): string {
 
 function formatHour(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  // Hora LOCAL sem Intl (toLocaleTimeString é instável no Hermes e retornava hora errada).
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 function getWeekGroups(transfers: Transfer[], year: number, month: number): WeekGroup[] {
@@ -117,22 +123,8 @@ export function PagamentosHistoricoExcursoesScreen({ navigation }: Props) {
     const start = new Date(y, m, sd).toISOString();
     const end = new Date(y, m, clampedEd, 23, 59, 59, 999).toISOString();
 
-    const { data: payoutsData } = await (supabase as any)
-      .from('payouts')
-      .select('id, worker_amount_cents, paid_at')
-      .eq('worker_id', user.id)
-      .eq('status', 'paid')
-      .gte('paid_at', start)
-      .lte('paid_at', end)
-      .order('paid_at', { ascending: false });
-
-    setTransfers(
-      ((payoutsData ?? []) as { id: string; worker_amount_cents: number; paid_at: string }[]).map((p) => ({
-        id: p.id,
-        amount_cents: p.worker_amount_cents,
-        paid_at: p.paid_at,
-      })),
-    );
+    // Payout pago (repasse oficial) OU, sem payout, a parcela das excursões concluídas no período.
+    setTransfers(await fetchExcursionPaymentTransfers(supabase, user.id, start, end));
     setLoading(false);
   }, []);
 
@@ -232,7 +224,7 @@ export function PagamentosHistoricoExcursoesScreen({ navigation }: Props) {
                       <PixIcon />
                       <View style={styles.transferInfo}>
                         <Text style={styles.transferAmount}>{formatCents(t.amount_cents)}</Text>
-                        <Text style={styles.transferMeta}>Pix • {formatHour(t.paid_at)}</Text>
+                        <Text style={styles.transferMeta}>{transferLabel(t.source)} • {formatHour(t.paid_at)}</Text>
                       </View>
                       <Text style={styles.transferDate}>{formatShortDate(t.paid_at)}</Text>
                     </View>

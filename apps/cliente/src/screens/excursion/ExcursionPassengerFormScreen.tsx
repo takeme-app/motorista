@@ -32,6 +32,14 @@ function formatPhone(value: string): string {
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
 }
 
+/** Idade: apenas dígitos, no máximo 3, limitada a 120. */
+function formatAge(value: string): string {
+  const digits = value.replace(/\D/g, '').slice(0, 3);
+  if (digits.length === 0) return '';
+  const n = Math.min(parseInt(digits, 10), 120);
+  return String(n);
+}
+
 const COLORS = {
   background: '#FFFFFF',
   black: '#0d0d0d',
@@ -87,7 +95,7 @@ export function ExcursionPassengerFormScreen({ navigation, route }: Props) {
       setFullName(row.full_name ?? '');
       setCpf(row.cpf ? formatCpf(onlyDigits(row.cpf)) : '');
       setPhone(row.phone ? formatPhone(row.phone.replace(/\D/g, '')) : '');
-      setAge(row.age ?? '');
+      setAge(formatAge(row.age ?? ''));
       setGender(row.gender ?? '');
       setObservations(row.observations ?? '');
       setDocumentPath(row.document_url ?? null);
@@ -152,7 +160,11 @@ export function ExcursionPassengerFormScreen({ navigation, route }: Props) {
       return;
     }
     const cpfDigits = onlyDigits(cpf);
-    if (cpfDigits && !validateCpf(cpfDigits)) {
+    if (!cpfDigits) {
+      showAlert('Atenção', 'Informe o CPF do passageiro.');
+      return;
+    }
+    if (!validateCpf(cpfDigits)) {
       showAlert('CPF inválido', 'O CPF informado não é válido. Verifique e tente novamente.');
       return;
     }
@@ -265,9 +277,11 @@ export function ExcursionPassengerFormScreen({ navigation, route }: Props) {
           <TextInput
             style={styles.input}
             value={age}
-            onChangeText={setAge}
-            placeholder="Ex: 25 anos"
+            onChangeText={(t) => setAge(formatAge(t))}
+            placeholder="Ex: 25"
             placeholderTextColor={COLORS.neutral700}
+            keyboardType="number-pad"
+            maxLength={3}
           />
           <Text style={styles.label}>Sexo</Text>
           <View style={styles.genderRow}>

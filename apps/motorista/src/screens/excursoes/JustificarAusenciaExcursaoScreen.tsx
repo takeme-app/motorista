@@ -194,13 +194,17 @@ export function JustificarAusenciaExcursaoScreen({ navigation, route }: Props) {
                 </View>
               </View>
 
-              <Text style={styles.fieldLabel}>Motivo da ausência</Text>
+              <View style={styles.rowLabel}>
+                <Text style={styles.fieldLabel}>Motivo da ausência</Text>
+                <Text style={styles.optional}>{st.reason.length}/20</Text>
+              </View>
               <TextInput
                 style={styles.textArea}
                 placeholder="Descreva por que este passageiro não embarcou."
                 placeholderTextColor="#9CA3AF"
                 value={st.reason}
                 onChangeText={(t) => setReason(p.id, t)}
+                maxLength={20}
                 multiline
                 textAlignVertical="top"
               />

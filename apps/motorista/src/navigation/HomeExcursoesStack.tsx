@@ -5,6 +5,7 @@ import { HistoricoExcursoesScreen } from '../screens/excursoes/HistoricoExcursoe
 import { DetalhesExcursaoScreen } from '../screens/excursoes/DetalhesExcursaoScreen';
 import { RealizarEmbarquesScreen } from '../screens/excursoes/RealizarEmbarquesScreen';
 import { CadastrarPassageiroExcursaoScreen } from '../screens/excursoes/CadastrarPassageiroExcursaoScreen';
+import { JustificarAusenciaExcursaoScreen } from '../screens/excursoes/JustificarAusenciaExcursaoScreen';
 import { EmbarqueConcluidoScreen } from '../screens/excursoes/EmbarqueConcluidoScreen';
 
 /**
@@ -32,6 +33,10 @@ export function HomeExcursoesStack() {
         name="CadastrarPassageiroExcursao"
         component={CadastrarPassageiroExcursaoScreen}
         options={{ animation: 'slide_from_bottom' }}
+      />
+      <Stack.Screen
+        name="JustificarAusenciaExcursao"
+        component={JustificarAusenciaExcursaoScreen}
       />
       <Stack.Screen
         name="EmbarqueConcluido"

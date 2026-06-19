@@ -14,7 +14,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useFocusEffect } from '@react-navigation/native';
 import type { ColetasExcursoesStackParamList } from '../../navigation/ColetasExcursoesStack';
+import { boardingCta } from './excursionStatus';
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 import { googleForwardGeocode } from '@take-me/shared';
 import { supabase } from '../../lib/supabase';
@@ -129,6 +131,10 @@ type ExcursionDetail = {
   clientUserId: string;
   clientAvatarUrl: string | null;
   registeredPassengerCount: number;
+  checkInIdaStartedAt: string | null;
+  checkInVoltaStartedAt: string | null;
+  boardingIdaDoneAt: string | null;
+  boardingVoltaDoneAt: string | null;
 };
 
 const CARD_GOLD = '#C9A227';
@@ -219,7 +225,9 @@ function timelineSteps(status: string): boolean[] {
 }
 
 const TIMELINE_LABELS = ['Pedido feito', 'Pagamento aprovado', 'Embarque confirmado', 'Ônibus partiu'];
-const BOARDING_ACTION_STATUSES = ['approved', 'scheduled', 'in_progress', 'payment_done', 'paid', 'active'];
+// `approved` = aguardando aceite do preparador (mostra Aceitar/Recusar). O embarque
+// só libera depois do aceite (status vira `scheduled`). Por isso `approved` fica fora.
+const BOARDING_ACTION_STATUSES = ['scheduled', 'in_progress', 'payment_done', 'paid', 'active'];
 
 export function DetalhesExcursaoScreen({ navigation, route }: Props) {
   const { excursionId } = route.params;
@@ -243,14 +251,17 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
     followRef.current = followMyLocation;
   }, [followMyLocation]);
 
+  const hasLoadedRef = useRef(false);
+
   const load = useCallback(async () => {
-    setLoading(true);
+    if (!hasLoadedRef.current) setLoading(true);
     const { data } = await supabase
       .from('excursion_requests')
       .select(
         [
           'id, origin, destination, excursion_date, scheduled_departure_at, scheduled_return_at, excursion_time,',
-          'check_in_volta_started_at, fleet_type, status, user_id,',
+          'check_in_ida_started_at, check_in_volta_started_at, boarding_ida_done_at, boarding_volta_done_at,',
+          'fleet_type, status, user_id,',
           'created_at, confirmed_at, origin_lat, origin_lng, destination_lat, destination_lng',
         ].join(' '),
       )
@@ -304,11 +315,17 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
       clientUserId: r.user_id as string,
       clientAvatarUrl,
       registeredPassengerCount: (psgRows ?? []).length,
+      checkInIdaStartedAt: r.check_in_ida_started_at ?? null,
+      checkInVoltaStartedAt: r.check_in_volta_started_at ?? null,
+      boardingIdaDoneAt: r.boarding_ida_done_at ?? null,
+      boardingVoltaDoneAt: r.boarding_volta_done_at ?? null,
     });
+    hasLoadedRef.current = true;
     setLoading(false);
   }, [excursionId]);
 
-  useEffect(() => { load(); }, [load]);
+  // Recarrega ao focar (volta da lista/embarque ou após aceitar) p/ refletir status atual.
+  useFocusEffect(useCallback(() => { void load(); }, [load]));
 
   // GPS: última posição + fix atual + atualizações periódicas (mapa “começa em você”).
   useEffect(() => {
@@ -374,6 +391,7 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
     }
     setOpeningChat(true);
     const res = await ensureExcursionClientConversation({
+      excursionRequestId: detail.id,
       clientUserId: detail.clientUserId,
       participantName: detail.responsible,
       participantAvatar: detail.clientAvatarUrl,
@@ -409,6 +427,29 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
     setDetail((d) => (d ? { ...d, status: 'scheduled' } : d));
   }, [detail]);
 
+  const handleCompleteExcursion = useCallback(() => {
+    if (!detail) return;
+    Alert.alert('Concluir excursão', 'Deseja realmente concluir a excursão?', [
+      { text: 'Não', style: 'cancel' },
+      {
+        text: 'Sim',
+        onPress: async () => {
+          setExcursionActionLoading(true);
+          const { error } = await supabase
+            .from('excursion_requests')
+            .update({ status: 'completed', updated_at: new Date().toISOString() } as never)
+            .eq('id', detail.id);
+          setExcursionActionLoading(false);
+          if (error) {
+            Alert.alert('Erro', 'Não foi possível concluir a excursão.');
+            return;
+          }
+          await load();
+        },
+      },
+    ]);
+  }, [detail, load]);
+
   const handleRejectExcursion = useCallback(() => {
     if (!detail) return;
     Alert.alert(
@@ -423,14 +464,14 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
             setExcursionActionLoading(true);
             const { error } = await supabase
               .from('excursion_requests')
-              .update({ status: 'rejected', updated_at: new Date().toISOString() } as never)
+              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
               .eq('id', detail.id);
             setExcursionActionLoading(false);
             if (error) {
               Alert.alert('Erro', 'Não foi possível recusar a excursão.');
               return;
             }
-            setDetail((d) => (d ? { ...d, status: 'rejected' } : d));
+            setDetail((d) => (d ? { ...d, status: 'cancelled' } : d));
             if (navigation.canGoBack()) navigation.goBack();
           },
         },
@@ -647,6 +688,14 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
   const steps = detail ? timelineSteps(detail.status) : [true, false, false, false];
   const timelineSubs = detail ? timelineSubtitlesForDetail(detail) : ['—', '—', '—', '—'];
   const canBoardingActions = detail ? BOARDING_ACTION_STATUSES.includes(detail.status) : false;
+  const boarding = detail
+    ? boardingCta({
+        check_in_ida_started_at: detail.checkInIdaStartedAt,
+        check_in_volta_started_at: detail.checkInVoltaStartedAt,
+        boarding_ida_done_at: detail.boardingIdaDoneAt,
+        boarding_volta_done_at: detail.boardingVoltaDoneAt,
+      })
+    : null;
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -883,6 +932,23 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
                     <Text style={styles.excursionRejectBtnText}>Recusar excursão</Text>
                   </TouchableOpacity>
                 </>
+              ) : null}
+              {canBoardingActions && boarding ? (
+                <TouchableOpacity
+                  style={[styles.excursionActionBtn, excursionActionLoading && { opacity: 0.7 }]}
+                  onPress={() =>
+                    boarding.complete
+                      ? handleCompleteExcursion()
+                      : navigation.navigate('RealizarEmbarques', {
+                          excursionId: detail.id,
+                          phase: boarding.phase,
+                        })
+                  }
+                  disabled={excursionActionLoading}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.excursionActionBtnText}>{boarding.label}</Text>
+                </TouchableOpacity>
               ) : null}
               <TouchableOpacity
                 style={styles.excursionActionBtnSecondary}

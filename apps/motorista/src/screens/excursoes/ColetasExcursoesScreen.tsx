@@ -282,6 +282,7 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
       }
       setOpeningChatExcursionId(exc.id);
       const res = await ensureExcursionClientConversation({
+        excursionRequestId: exc.id,
         clientUserId: exc.clientUserId,
         participantName: exc.responsible,
         participantAvatar: exc.clientAvatarUrl,

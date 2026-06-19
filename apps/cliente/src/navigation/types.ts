@@ -61,6 +61,7 @@ export type ShipmentRecipientParam = {
 };
 
 export type ShipmentStackParamList = {
+  PixPaliativo: { requestId: string };
   SelectShipmentAddress: undefined;
   SelectShipmentDriver: {
     origin: ShipmentPlaceParam;
@@ -153,6 +154,7 @@ export type DependentShipmentFormParams = {
 };
 
 export type DependentShipmentStackParamList = {
+  PixPaliativo: { requestId: string };
   DependentShipmentForm: undefined;
   AddDependent: undefined;
   DependentSuccess: undefined;
@@ -250,6 +252,7 @@ export type TripLiveDriverDisplay = {
 };
 
 export type TripStackParamList = {
+  PixPaliativo: { requestId: string };
   WhenNeeded: undefined;
   PlanTrip: undefined;
   PlanRide: { origin?: TripPlaceParam; destination?: TripPlaceParam; scheduledDateId?: string; scheduledTimeSlot?: string };

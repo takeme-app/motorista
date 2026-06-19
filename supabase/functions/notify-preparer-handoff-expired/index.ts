@@ -93,6 +93,10 @@ Deno.serve(async (req) => {
       "id, user_id, driver_id, scheduled_trip_id, origin_address, destination_address, preparer_handoff_notified_at, preparer_handoff_client_notified_at",
     )
     .not("preparer_handoff_expired_at", "is", null)
+    // Só encomendas COM base entram no fluxo de preparador. Sem base (cidade sem
+    // base) nunca houve preparador, então "Coleta agora é com você" não deve aparecer
+    // — mesmo que flags de handoff tenham ficado setadas por RPCs antigos.
+    .not("base_id", "is", null)
     .or(
       "preparer_handoff_notified_at.is.null,preparer_handoff_client_notified_at.is.null",
     )

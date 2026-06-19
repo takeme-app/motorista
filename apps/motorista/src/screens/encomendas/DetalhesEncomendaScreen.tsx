@@ -139,7 +139,7 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
     const { data } = await supabase
       .from('shipments')
       .select(
-        'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, package_size, amount_cents, instructions, created_at, scheduled_at, status, user_id, base_id',
+        'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, package_size, amount_cents, preparer_payout_cents, instructions, created_at, scheduled_at, status, user_id, base_id',
       )
       .eq('id', shipmentId)
       .maybeSingle();
@@ -149,7 +149,7 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
       id: string; origin_address: string; destination_address: string;
       origin_lat: number | null; origin_lng: number | null;
       destination_lat: number | null; destination_lng: number | null;
-      package_size: string; amount_cents: number; instructions: string | null;
+      package_size: string; amount_cents: number; preparer_payout_cents: number | null; instructions: string | null;
       created_at: string; scheduled_at: string | null; status: string; user_id: string;
       base_id: string | null;
     };
@@ -187,7 +187,9 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
       baseAddress: baseAddress || '—',
       baseName,
       packageSize: packageSizeLabel(row.package_size),
-      amountCents: row.amount_cents,
+      // "Valor" exibido ao preparador = a parcela dele (preparer_payout_cents),
+      // nao o total pago pelo cliente (amount_cents).
+      amountCents: row.preparer_payout_cents ?? 0,
       instructions: row.instructions,
       createdAt: formatDateTime(row.created_at),
       scheduledAt: row.scheduled_at ? formatDateTime(row.scheduled_at) : null,

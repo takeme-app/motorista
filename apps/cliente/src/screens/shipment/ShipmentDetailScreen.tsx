@@ -119,6 +119,9 @@ type ShipmentDetail = {
   preparer_handoff_expired_at: string | null;
   /** Viagem associada — necessária para o acompanhamento em tempo real (mapa com posição do motorista). */
   scheduled_trip_id: string | null;
+  package_size: string | null;
+  /** Encomenda grande: quando o admin aprovou (NULL = aguardando aprovação). */
+  admin_approved_at: string | null;
 };
 
 type DriverProfileRow = { full_name: string | null; avatar_url: string | null };
@@ -176,7 +179,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
       const { data: shipment, error: shipErr } = await supabase
         .from('shipments')
         .select(
-          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents, tip_status, tip_paid_at, driver_id, pickup_code, delivery_code, cancellation_reason, base_id, picked_up_at, picked_up_by_preparer_at, preparer_handoff_expired_at, scheduled_trip_id'
+          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents, tip_status, tip_paid_at, driver_id, pickup_code, delivery_code, cancellation_reason, base_id, picked_up_at, picked_up_by_preparer_at, preparer_handoff_expired_at, scheduled_trip_id, package_size, admin_approved_at'
         )
         .eq('id', shipmentId)
         .eq('user_id', user.id)
@@ -211,6 +214,8 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         picked_up_by_preparer_at: string | null;
         preparer_handoff_expired_at: string | null;
         scheduled_trip_id: string | null;
+        package_size: string | null;
+        admin_approved_at: string | null;
       };
       setDetail({
         id: row.id,
@@ -238,6 +243,8 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         picked_up_by_preparer_at: row.picked_up_by_preparer_at ?? null,
         preparer_handoff_expired_at: row.preparer_handoff_expired_at ?? null,
         scheduled_trip_id: row.scheduled_trip_id ?? null,
+        package_size: row.package_size ?? null,
+        admin_approved_at: row.admin_approved_at ?? null,
       });
       if (row.scheduled_trip_id) {
         const { data: trip } = await supabase
@@ -379,6 +386,14 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
     return ['confirmed', 'in_progress'].includes(s);
   }, [shipmentTripLiveParams, detail?.driver_id, detail?.status, hasValidShipmentMapCoords]);
 
+  const isLargeAwaitingApproval = Boolean(
+    detail &&
+      (detail.package_size ?? '').toLowerCase() === 'grande' &&
+      !detail.admin_approved_at &&
+      detail.status !== 'cancelled' &&
+      detail.status !== 'delivered',
+  );
+
   const awaitingDriverMessage = (() => {
     if (!detail || hasAssignedDriver) return null;
     if (detail.status === 'cancelled' && detail.cancellation_reason === 'no_driver_accepted') {
@@ -386,6 +401,9 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
     }
     if (detail.status === 'cancelled') return null;
     if (detail.status === 'delivered') return null;
+    if (isLargeAwaitingApproval) {
+      return 'Sua encomenda grande está em avaliação pela nossa equipe. Após a aprovação, buscaremos um motorista para a coleta.';
+    }
     return 'Ainda não há motorista atribuído. Assim que um motorista aceitar, os dados dele aparecerão aqui e você poderá acompanhar o envio.';
   })();
 
@@ -789,7 +807,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
             </View>
           </View>
           <Text style={styles.cardDate}>{formatDetailDate(tripDepartureAt ?? detail.created_at)}</Text>
-          <Text style={styles.cardPrice}>R$ {(detail.amount_cents / 100).toFixed(2)} • {shipmentStatusMessage(detail.status)}</Text>
+          <Text style={styles.cardPrice}>R$ {(detail.amount_cents / 100).toFixed(2)} • {isLargeAwaitingApproval ? 'Aguardando aprovação da nossa equipe' : shipmentStatusMessage(detail.status)}</Text>
           <TouchableOpacity style={styles.receiptButton} activeOpacity={0.8}>
             <MaterialIcons name="receipt" size={20} color={COLORS.neutral700} />
             <Text style={styles.receiptButtonText}>Recibo</Text>

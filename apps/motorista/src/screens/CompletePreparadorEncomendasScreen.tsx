@@ -27,7 +27,6 @@ import { UploadField } from '../components/UploadField';
 import type { GoogleGeocodeResult } from '@take-me/shared';
 import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
 import { formatPhoneBR } from '../utils/formatPhone';
-import { currencyInputToCents, formatCurrencyBRLInput } from '../utils/formatCurrency';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CompletePreparadorEncomendas'>;
 
@@ -104,8 +103,6 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
   const [cnhBackUri, setCnhBackUri] = useState<string | null>(null);
   const [criminalRecordUri, setCriminalRecordUri] = useState<string | null>(null);
 
-  const [deliveryFee, setDeliveryFee] = useState('');
-  const [perKmFee, setPerKmFee] = useState('');
 
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [acceptedNotifications, setAcceptedNotifications] = useState(false);
@@ -216,18 +213,6 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
     if (!cnhFrontUri) { showAlert('Atenção', 'Envie a frente da CNH.'); return; }
     if (!cnhBackUri) { showAlert('Atenção', 'Envie o verso da CNH.'); return; }
 
-    // Preços são opcionais: vazio = usar padrão da plataforma.
-    const deliveryFeeCents = deliveryFee.trim() ? currencyInputToCents(deliveryFee) : null;
-    if (deliveryFee.trim() && (deliveryFeeCents == null || deliveryFeeCents < 0)) {
-      showAlert('Atenção', 'Valor por entrega inválido.');
-      return;
-    }
-    const perKmFeeCents = perKmFee.trim() ? currencyInputToCents(perKmFee) : null;
-    if (perKmFee.trim() && (perKmFeeCents == null || perKmFeeCents < 0)) {
-      showAlert('Atenção', 'Valor por km inválido.');
-      return;
-    }
-
     if (!acceptedTerms) { showAlert('Atenção', 'Aceite os Termos de Uso e a Política de Privacidade.'); return; }
 
     setLoading(true);
@@ -293,8 +278,9 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
         cnh_document_url: cnhFrontPath,
         cnh_document_back_url: cnhBackPath,
         background_check_url: criminalPath ?? vehicleDocPath,
-        shipment_delivery_fee_cents: deliveryFeeCents,
-        shipment_per_km_fee_cents: perKmFeeCents,
+        // Preparador não define mais preço; usa-se o padrão da plataforma (sem override).
+        shipment_delivery_fee_cents: null,
+        shipment_per_km_fee_cents: null,
         base_id: baseId,
         updated_at: nowIso,
       };
@@ -569,36 +555,6 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
           selectedLabel="Documento adicionado"
           onPress={() => pickImage(setCriminalRecordUri)}
         />
-
-        <Text style={styles.sectionTitle}>Valores e precificação</Text>
-
-        <FieldBlock
-          label="Valor por entrega (R$)"
-          supporting="Se deixar em branco, usamos o valor padrão da plataforma."
-        >
-          <TextInput
-            style={styles.input}
-            placeholder="Ex: R$ 5,00"
-            placeholderTextColor="#767676"
-            value={deliveryFee ? `R$ ${deliveryFee}` : ''}
-            onChangeText={(t) => setDeliveryFee(formatCurrencyBRLInput(t))}
-            keyboardType="number-pad"
-          />
-        </FieldBlock>
-
-        <FieldBlock
-          label="Valor por km (R$)"
-          supporting="Se deixar em branco, usamos o valor padrão da plataforma."
-        >
-          <TextInput
-            style={styles.input}
-            placeholder="Ex: R$ 1,50"
-            placeholderTextColor="#767676"
-            value={perKmFee ? `R$ ${perKmFee}` : ''}
-            onChangeText={(t) => setPerKmFee(formatCurrencyBRLInput(t))}
-            keyboardType="number-pad"
-          />
-        </FieldBlock>
 
         <View style={styles.checksSection}>
           <View style={styles.checkboxRow}>

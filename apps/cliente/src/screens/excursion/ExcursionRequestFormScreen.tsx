@@ -9,7 +9,6 @@ import {
   Modal,
   Pressable,
   KeyboardAvoidingView,
-  Platform,
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -29,6 +28,7 @@ import {
 } from '../../data/excursionDestinationPresets';
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
 import type { AddressSuggestion } from '../../lib/location';
+import { mapboxForwardGeocode } from '@take-me/shared';
 
 type Props = NativeStackScreenProps<ExcursionStackParamList, 'ExcursionRequestForm'>;
 
@@ -158,18 +158,15 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
       return;
     }
 
+    // Fallback de geocoding quando o usuário digitou e não selecionou da lista:
+    // usa a Mapbox Geocoding compartilhada (consistente com o autocomplete).
+    const mapboxToken = (process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '').trim();
+
     let originLat: number | null = presetOriginCoords?.lat ?? null;
     let originLng: number | null = presetOriginCoords?.lng ?? null;
     if (originLat == null || originLng == null) {
-      // Geocodifica a origem digitada (mesma edge `geocode` server-side do destino).
-      const { data: geoData, error: geoErr } = await supabase.functions.invoke('geocode', {
-        body: { address: `${orig}, Brasil` },
-      });
-      const geo =
-        geoData && typeof geoData === 'object'
-          ? (geoData as { ok?: boolean; lat?: number; lng?: number })
-          : null;
-      if (geoErr || !geo?.ok || typeof geo.lat !== 'number' || typeof geo.lng !== 'number') {
+      const geo = await mapboxForwardGeocode(`${orig}, Brasil`, mapboxToken);
+      if (!geo) {
         setSubmitting(false);
         showAlert(
           'Origem',
@@ -177,23 +174,15 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
         );
         return;
       }
-      originLat = geo.lat;
-      originLng = geo.lng;
+      originLat = geo.latitude;
+      originLng = geo.longitude;
     }
 
     let destinationLat: number | null = presetDestCoords?.lat ?? null;
     let destinationLng: number | null = presetDestCoords?.lng ?? null;
     if (destinationLat == null || destinationLng == null) {
-      // Geocodifica o endereço digitado pela edge function `geocode` (server-side,
-      // via Nominatim/OSM). Evita depender de token de mapa no cliente.
-      const { data: geoData, error: geoErr } = await supabase.functions.invoke('geocode', {
-        body: { address: `${dest}, Brasil` },
-      });
-      const geo =
-        geoData && typeof geoData === 'object'
-          ? (geoData as { ok?: boolean; lat?: number; lng?: number })
-          : null;
-      if (geoErr || !geo?.ok || typeof geo.lat !== 'number' || typeof geo.lng !== 'number') {
+      const geo = await mapboxForwardGeocode(`${dest}, Brasil`, mapboxToken);
+      if (!geo) {
         setSubmitting(false);
         showAlert(
           'Destino',
@@ -201,8 +190,8 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
         );
         return;
       }
-      destinationLat = geo.lat;
-      destinationLng = geo.lng;
+      destinationLat = geo.latitude;
+      destinationLng = geo.longitude;
     }
 
     const recreationItemsPayload = recreationItems
@@ -275,11 +264,12 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
         <Text style={styles.headerTitle}>Excursões</Text>
         <View style={styles.headerSpacer} />
       </View>
-      <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={styles.keyboard} behavior="padding">
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
           showsVerticalScrollIndicator={false}
         >
           <Text style={styles.title}>Solicite uma excursão</Text>

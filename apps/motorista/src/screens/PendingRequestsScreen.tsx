@@ -213,7 +213,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
     const { data: offerRowsRaw } = await supabase
       .from('shipments')
       .select(
-        'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, current_offer_expires_at, scheduled_trip_id, scheduled_trips(status)',
+        'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, admin_approved_at, current_offer_expires_at, scheduled_trip_id, scheduled_trips(status)',
       )
       .eq('current_offer_driver_id', user.id)
       .in('status', ['pending_review', 'confirmed'])
@@ -235,7 +235,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
     const { data: preferredWaitRaw } = await supabase
       .from('shipments')
       .select(
-        'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, current_offer_expires_at, scheduled_trip_id, scheduled_trips(status)',
+        'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, admin_approved_at, current_offer_expires_at, scheduled_trip_id, scheduled_trips(status)',
       )
       .eq('client_preferred_driver_id', user.id)
       .is('current_offer_driver_id', null)
@@ -247,7 +247,11 @@ export function PendingRequestsScreen({ navigation }: Props) {
       const r = row as {
         scheduled_trip_id?: string | null;
         scheduled_trips?: { status?: string | null } | { status?: string | null }[] | null;
+        package_size?: string | null;
+        admin_approved_at?: string | null;
       };
+      // Encomenda grande só aparece após aprovação do admin.
+      if ((r.package_size ?? '').toLowerCase() === 'grande' && !r.admin_approved_at) return false;
       const tid = r.scheduled_trip_id;
       if (tid == null || tid === '') return true;
       return tripStatusAllowsPendingRequests(nestedScheduledTripStatus(r.scheduled_trips));

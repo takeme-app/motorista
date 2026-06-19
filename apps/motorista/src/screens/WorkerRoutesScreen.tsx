@@ -27,8 +27,8 @@ import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { GooglePlacesAutocomplete } from '../components/GooglePlacesAutocomplete';
-import { googleForwardGeocode, type GoogleGeocodeResult, useBottomSafeInset } from '@take-me/shared';
-import { getGoogleMapsApiKey } from '../lib/googleMapsConfig';
+import { mapboxForwardGeocode, type MapboxGeocodeResult, useBottomSafeInset } from '@take-me/shared';
+import { getMapboxAccessToken } from '../lib/googleMapsConfig';
 import { formatCurrencyBRLInput, parseCurrencyBRLToNumber } from '../utils/formatCurrency';
 import { SwipeableRouteRow } from '../components/SwipeableRouteRow';
 
@@ -97,8 +97,8 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
   const [saving, setSaving] = useState(false);
   const [origin, setOrigin] = useState('');
   const [destination, setDestination] = useState('');
-  const [originPlace, setOriginPlace] = useState<GoogleGeocodeResult | null>(null);
-  const [destinationPlace, setDestinationPlace] = useState<GoogleGeocodeResult | null>(null);
+  const [originPlace, setOriginPlace] = useState<MapboxGeocodeResult | null>(null);
+  const [destinationPlace, setDestinationPlace] = useState<MapboxGeocodeResult | null>(null);
   const [price, setPrice] = useState('');
   const slideAnim = useRef(new Animated.Value(300)).current;
 
@@ -380,7 +380,7 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
     const priceCents = reais != null ? Math.round(reais * 100) : 0;
     if (!priceCents || priceCents <= 0) { showAlert('Atenção', 'Informe um valor válido.'); return; }
 
-    const apiKey = getGoogleMapsApiKey();
+    const apiKey = getMapboxAccessToken();
     setSaving(true);
     try {
       let oGeo = originPlace;
@@ -389,19 +389,19 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
         if (!apiKey) {
           showAlert(
             'Mapas',
-            'Escolha origem e destino na lista de sugestões ou configure EXPO_PUBLIC_GOOGLE_MAPS_API_KEY.',
+            'Escolha origem e destino na lista de sugestões ou configure EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN.',
           );
           return;
         }
         if (!oGeo) {
-          oGeo = await googleForwardGeocode(`${origin.trim()}, Brasil`, apiKey);
+          oGeo = await mapboxForwardGeocode(`${origin.trim()}, Brasil`, apiKey);
           if (!oGeo) {
             showAlert('Origem', 'Não encontramos esse local. Toque em uma sugestão da lista ou refine o texto.');
             return;
           }
         }
         if (!dGeo) {
-          dGeo = await googleForwardGeocode(`${destination.trim()}, Brasil`, apiKey);
+          dGeo = await mapboxForwardGeocode(`${destination.trim()}, Brasil`, apiKey);
           if (!dGeo) {
             showAlert('Destino', 'Não encontramos esse local. Toque em uma sugestão da lista ou refine o texto.');
             return;

@@ -21,6 +21,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useBottomSafeInset } from '@take-me/shared';
 import * as ImagePicker from 'expo-image-picker';
+import { formatCpf, onlyDigits } from '../../utils/formatCpf';
 
 type Props = NativeStackScreenProps<ColetasExcursoesStackParamList, 'RealizarEmbarques'>;
 
@@ -31,10 +32,17 @@ type Passenger = {
   full_name: string;
   age: string | null;
   gender: string | null;
+  cpf: string | null;
   status_departure: string;
   status_return: string;
   absence_justified: boolean;
 };
+
+/** "CPF 153.830.070-24" quando houver CPF; senão string vazia. */
+function cpfLine(p: Passenger): string {
+  const digits = onlyDigits(p.cpf ?? '');
+  return digits ? `CPF ${formatCpf(digits)}` : '';
+}
 
 const GOLD_MUTED = '#B8953D';
 
@@ -73,7 +81,7 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
     setLoading(true);
     const { data: psgData, error: psgErr } = await supabase
       .from('excursion_passengers')
-      .select('id, full_name, age, gender, status_departure, status_return, absence_justified')
+      .select('id, full_name, age, gender, cpf, status_departure, status_return, absence_justified')
       .eq('excursion_request_id', excursionId)
       .order('full_name');
     if (psgErr) {
@@ -85,6 +93,7 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
       full_name: r.full_name ?? '',
       age: r.age ?? null,
       gender: r.gender ?? null,
+      cpf: r.cpf ?? null,
       status_departure: r.status_departure ?? 'not_embarked',
       status_return: r.status_return ?? 'not_embarked',
       absence_justified: Boolean(r.absence_justified),
@@ -377,6 +386,7 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
                   <View style={styles.rowBody}>
                     <Text style={styles.name}>{p.full_name}</Text>
                     <Text style={styles.meta}>{metaLine(p)}</Text>
+                    {cpfLine(p) ? <Text style={styles.meta}>{cpfLine(p)}</Text> : null}
                   </View>
                   <TouchableOpacity
                     style={[styles.embarkBtn, embarked && styles.embarkBtnDone, busy && { opacity: 0.65 }]}
@@ -472,6 +482,7 @@ export function RealizarEmbarquesScreen({ navigation, route }: Props) {
                     <View style={styles.rowBody}>
                       <Text style={styles.name}>{p.full_name}</Text>
                       <Text style={styles.meta}>{metaLine(p)}</Text>
+                      {cpfLine(p) ? <Text style={styles.meta}>{cpfLine(p)}</Text> : null}
                     </View>
                     <View style={[styles.checkbox, sel && styles.checkboxOn]}>
                       {sel ? <MaterialIcons name="check" size={16} color="#FFFFFF" /> : null}

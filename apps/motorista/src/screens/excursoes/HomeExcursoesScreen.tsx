@@ -205,6 +205,7 @@ export function HomeExcursoesScreen({ navigation }: Props) {
       }
       setOpeningChatExcursionId(exc.id);
       const res = await ensureExcursionClientConversation({
+        excursionRequestId: exc.id,
         clientUserId: exc.clientUserId,
         participantName: exc.responsible,
         participantAvatar: exc.clientAvatarUrl,
@@ -228,7 +229,7 @@ export function HomeExcursoesScreen({ navigation }: Props) {
     if (so !== 0) return so;
     const ta = a.departureTime ? new Date(a.departureTime).getTime() : 0;
     const tb = b.departureTime ? new Date(b.departureTime).getTime() : 0;
-    return ta - tb;
+    return tb - ta;
   });
   const showBack = navigation.canGoBack();
 

@@ -50,6 +50,7 @@ import {
   type PricingResult,
 } from '@take-me/shared';
 import { snapshotFromPricingResult } from '../../lib/orderPricingSnapshot';
+import { registerPalliativePix } from '../../lib/palliativePixStore';
 import { PaymentMethodSection, type PaymentMethodType, type CardPaymentConfirmParams } from '../../components/PaymentMethodSection';
 import { calendarDayKeySaoPaulo, getDuplicateDestinationSameDayMessage } from '../../lib/sameDestinationSameDayGuard';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
@@ -60,6 +61,43 @@ import { fetchDriverStripeChargesEnabled } from '../../lib/driverStripeConnect';
 import { fetchPlatformFeePctForService } from '../../lib/platformFees';
 
 const supabasePublicUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
+
+/**
+ * Adicionais (catálogo + trecho) e ajuste de horário (fds/noturno/feriado) da viagem.
+ * Espelha EXATAMENTE o charge-booking, garantindo paridade entre o preço exibido e o cobrado
+ * (e o amount_cents gravado nas reservas Pix/Dinheiro, que não passam pelo recálculo do edge).
+ */
+async function resolveBookingPricingExtras(
+  scheduledTripId: string | null | undefined,
+  pricingRouteId: string | null | undefined,
+): Promise<{ timeSurchargePct: number; surchargesCents: number }> {
+  let timeSurchargePct = 0;
+  let surchargesCents = 0;
+  try {
+    if (scheduledTripId) {
+      const { data } = await supabase.rpc('resolve_trip_time_surcharge_pct', {
+        p_scheduled_trip_id: scheduledTripId,
+      });
+      const pct = Number(data);
+      if (Number.isFinite(pct) && pct > 0) timeSurchargePct = pct;
+    }
+  } catch {
+    /* sem adicional de horário */
+  }
+  try {
+    const { data } = await supabase.rpc('resolve_booking_surcharges_cents', {
+      p_pricing_route_id: pricingRouteId ?? null,
+    });
+    const cents = Number(data);
+    if (Number.isFinite(cents) && cents > 0) surchargesCents = Math.floor(cents);
+  } catch {
+    /* sem adicionais */
+  }
+  return { timeSurchargePct, surchargesCents };
+}
+
+const applyTimeSurcharge = (baseCents: number, pct: number): number =>
+  Math.round(baseCents * (1 + (Number.isFinite(pct) ? pct : 0) / 100));
 
 /** Titular (perfil) + extras; `passenger_count` = tamanho total. */
 async function buildBookingPassengersPayload(
@@ -212,9 +250,10 @@ export function CheckoutScreen({ navigation, route }: Props) {
   const [primaryPassenger, setPrimaryPassenger] = useState<{ name: string; cpf: string } | null>(null);
 
   const allowedPaymentMethods = useMemo((): PaymentMethodType[] => {
-    if (connectStatusLoading) return ['dinheiro'];
+    // Pix paliativo não depende do Stripe Connect do motorista — fica disponível como o dinheiro.
+    if (connectStatusLoading) return ['pix', 'dinheiro'];
     if (connectChargesEnabled === true) return ['credito', 'debito', 'pix', 'dinheiro'];
-    return ['dinheiro'];
+    return ['pix', 'dinheiro'];
   }, [connectChargesEnabled, connectStatusLoading]);
 
   useEffect(() => {
@@ -352,10 +391,15 @@ export function CheckoutScreen({ navigation, route }: Props) {
         }
       }
 
+      const { timeSurchargePct, surchargesCents } = await resolveBookingPricingExtras(
+        scheduledTripId,
+        pricingRouteId,
+      );
+
       try {
         const preview = computeOrderPricing({
-          baseCents: orderBaseCents,
-          surchargesCents: 0,
+          baseCents: applyTimeSurcharge(orderBaseCents, timeSurchargePct),
+          surchargesCents,
           adminPct,
           gainPct,
           discountPct,
@@ -380,7 +424,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [orderBaseCents, workerRouteId, pricingRouteId]);
+  }, [orderBaseCents, workerRouteId, pricingRouteId, scheduledTripId]);
 
   useEffect(() => {
     if (!scheduledTripId) {
@@ -519,9 +563,11 @@ export function CheckoutScreen({ navigation, route }: Props) {
         // Snapshot alinhado à base total do pedido (por pessoa × passageiros quando aplicável).
         const bookingAdminPct =
           pricingPreview?.adminPctApplied ?? (await fetchPlatformFeePctForService('booking'));
+        const { timeSurchargePct: confirmTimePct, surchargesCents: confirmSurchargesCents } =
+          await resolveBookingPricingExtras(scheduledTripId, pricingRouteId);
         const previewToUse: PricingResult = computeOrderPricing({
-          baseCents: finalOrderBaseCents,
-          surchargesCents: 0,
+          baseCents: applyTimeSurcharge(finalOrderBaseCents, confirmTimePct),
+          surchargesCents: confirmSurchargesCents,
           adminPct: bookingAdminPct,
           gainPct: pricingPreview?.gainPctApplied ?? 0,
           discountPct: pricingPreview?.discountPctApplied ?? 0,
@@ -613,120 +659,76 @@ export function CheckoutScreen({ navigation, route }: Props) {
             chargedAmountCents = Math.floor(ac);
           }
         } else if (params.method === 'pix') {
-          const { data: row, error } = await supabase
-            .from('bookings')
-            .insert({
-              user_id: user.id,
-              scheduled_trip_id: scheduledTripId,
-              origin_address: origin.address,
-              origin_lat: origin.latitude,
-              origin_lng: origin.longitude,
-              destination_address: destination.address,
-              destination_lat: destination.latitude,
-              destination_lng: destination.longitude,
-              passenger_count,
-              bags_count: bagsCount,
-              passenger_data,
-              ...pricingInsert,
-              status: 'pending',
-              payment_method: 'pix',
-              amount_cents: previewToUse.totalCents,
-              platform_fee_extra_debit_cents: 0,
-            })
-            .select('id')
-            .single();
-          if (error) {
-            showAlert(
-              'Erro ao reservar',
-              getUserErrorMessage(error, 'Não foi possível registrar sua viagem. Tente novamente.')
-            );
-            return;
-          }
-          bookingId = row && typeof row === 'object' && 'id' in row ? String((row as { id: string }).id) : '';
-          if (!bookingId) {
-            showAlert('Erro', 'Não foi possível obter o identificador da reserva.');
-            return;
-          }
-
-          // Pix: cobra via Stripe (mesma engine de envios). Reserva pré-criada como pending;
-          // o webhook stripe-webhook promove para `paid` após o pagamento real do usuário no banco.
-          const stripeCtx = await ensureAccessTokenForStripeFunctions();
-          const cancelBooking = async () => {
-            await supabase
-              .from('bookings')
-              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
-              .eq('id', bookingId);
+          // Pix paliativo (Stripe Pix desabilitado): não cobra. Abre a tela de Pix; aos 40s a
+          // reserva é efetivada (criada como pendente, igual ao dinheiro) e o motorista é
+          // notificado — não antes ("sem pagar o pix"). O botão só navega para "Solicitação enviada".
+          const pixInsertRow = {
+            user_id: user.id,
+            scheduled_trip_id: scheduledTripId,
+            origin_address: origin.address,
+            origin_lat: origin.latitude,
+            origin_lng: origin.longitude,
+            destination_address: destination.address,
+            destination_lat: destination.latitude,
+            destination_lng: destination.longitude,
+            passenger_count,
+            bags_count: bagsCount,
+            passenger_data,
+            ...pricingInsert,
+            status: 'pending',
+            payment_method: 'pix',
+            amount_cents: previewToUse.totalCents,
+            platform_fee_extra_debit_cents: 0,
           };
-          if (!stripeCtx.ok) {
-            await cancelBooking();
-            showAlert('Pagamento', stripeCtx.message);
-            return;
-          }
-          const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke(
-            'charge-booking',
-            {
-              headers: { Authorization: `Bearer ${stripeCtx.accessToken}` },
-              body: { booking_id: bookingId, payment_method_kind: 'pix' },
+          let pixBookingId = '';
+          const pixRequestId = registerPalliativePix({
+            amountCents: previewToUse.totalCents,
+            effectivate: async () => {
+              const { data: pixRow, error: pixErr } = await supabase
+                .from('bookings')
+                .insert(pixInsertRow)
+                .select('id')
+                .single();
+              if (pixErr) throw pixErr;
+              pixBookingId =
+                pixRow && typeof pixRow === 'object' && 'id' in pixRow
+                  ? String((pixRow as { id: string }).id)
+                  : '';
             },
-          );
-          if (chargeFnError) {
-            const raw = await describeInvokeFailure(chargeData, chargeFnError);
-            const chargeErrMsg = getUserErrorMessage({ message: raw }, raw);
-            await cancelBooking();
-            showAlert(
-              'Pagamento',
-              chargeErrMsg || 'Não foi possível iniciar o Pix; a reserva foi cancelada.',
-            );
-            return;
-          }
-          const pixBody = chargeData as {
-            ok?: boolean;
-            pix_requires_payment?: boolean;
-            image_url_png?: string | null;
-            hosted_voucher_url?: string | null;
-            pix_copy_paste?: string | null;
-          } | null;
-          if (pixBody?.pix_requires_payment) {
-            const paste = typeof pixBody.pix_copy_paste === 'string' ? pixBody.pix_copy_paste.trim() : '';
-            if (paste) {
-              try {
-                await Clipboard.setString(paste);
-              } catch {
-                /* ignore */
-              }
-            }
-            const hosted = typeof pixBody.hosted_voucher_url === 'string' ? pixBody.hosted_voucher_url.trim() : '';
-            await new Promise<void>((resolve) => {
-              const msg = paste
-                ? 'Copiamos o código Pix para a área de transferência. Abra o comprovante no navegador se preferir; depois pague no app do banco. Quando concluir, toque em Continuar.'
-                : 'Abra o comprovante Pix no navegador, pague no app do banco e toque em Continuar.';
-              const buttons: { text: string; onPress?: () => void }[] = [];
-              if (hosted) {
-                buttons.push({
-                  text: 'Abrir comprovante',
-                  onPress: () => {
-                    void Linking.openURL(hosted);
-                  },
-                });
-              }
-              buttons.push({ text: 'Continuar', onPress: () => resolve() });
-              Alert.alert('Pix', msg, buttons, { cancelable: false });
-            });
-            const paid = await waitForShipmentStripePaymentIntentId('bookings', bookingId);
-            if (!paid) {
-              await cancelBooking();
-              showAlert(
-                'Pix',
-                'Não detectamos o pagamento a tempo. A reserva foi cancelada; você pode tentar novamente.',
-              );
-              return;
-            }
-            chargedAmountCents = previewToUse.totalCents;
-          } else if (pixBody?.ok !== true) {
-            await cancelBooking();
-            showAlert('Pagamento', 'Resposta inesperada do servidor ao iniciar Pix.');
-            return;
-          }
+            navigateSuccess: () => {
+              const pixSummary: PaymentConfirmedBookingParam = {
+                booking_id: pixBookingId,
+                origin_address: origin.address,
+                destination_address: destination.address,
+                departure: driver.departure,
+                arrival: driver.arrival,
+                amount_cents: previewToUse.totalCents,
+                driver_name: driver.name,
+              };
+              const pixTripLive: TripLiveDriverDisplay = {
+                driverName: driver.name,
+                rating: driver.rating,
+                vehicleLabel: formatVehicleDescription(driver.vehicle_model, driver.vehicle_year, driver.vehicle_plate),
+                amountCents: previewToUse.totalCents,
+                bookingId: pixBookingId || undefined,
+                scheduledTripId: scheduledTripId,
+                origin: origin
+                  ? { latitude: origin.latitude, longitude: origin.longitude, address: origin.address }
+                  : undefined,
+                destination: destination
+                  ? { latitude: destination.latitude, longitude: destination.longitude, address: destination.address }
+                  : undefined,
+              };
+              navigation.replace('PaymentConfirmed', {
+                booking: pixSummary,
+                immediateTrip: route.params?.immediateTrip,
+                tripLive: pixTripLive,
+                paymentMethod: 'pix',
+              });
+            },
+          });
+          navigation.navigate('PixPaliativo', { requestId: pixRequestId });
+          return;
         } else if (params.method === 'dinheiro') {
           const { data: row, error } = await supabase
             .from('bookings')

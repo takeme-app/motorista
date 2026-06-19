@@ -14,6 +14,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { DependentShipmentStackParamList } from '../../navigation/types';
 import { PaymentMethodSection, type PaymentMethodType } from '../../components/PaymentMethodSection';
 import { supabase } from '../../lib/supabase';
+import { registerPalliativePix } from '../../lib/palliativePixStore';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
 import {
@@ -137,9 +138,10 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
   }, [amountCents]);
 
   const allowedPaymentMethods = useMemo((): PaymentMethodType[] => {
-    if (connectStatusLoading) return ['dinheiro'];
+    // Pix paliativo não depende do Stripe Connect do motorista — fica disponível como o dinheiro.
+    if (connectStatusLoading) return ['pix', 'dinheiro'];
     if (connectChargesEnabled === true) return ['credito', 'debito', 'pix', 'dinheiro'];
-    return ['dinheiro'];
+    return ['pix', 'dinheiro'];
   }, [connectChargesEnabled, connectStatusLoading]);
 
   useEffect(() => {
@@ -317,30 +319,57 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
             };
           }
         }
+        const dependentInsertPayload = {
+          user_id: user.id,
+          dependent_id: dependentId ?? null,
+          full_name: fullName,
+          contact_phone: contactPhone,
+          bags_count: bagsCount,
+          instructions: instructions ?? null,
+          origin_address: origin.address,
+          origin_lat: origin.latitude,
+          origin_lng: origin.longitude,
+          destination_address: destination.address,
+          destination_lat: destination.latitude,
+          destination_lng: destination.longitude,
+          when_option: whenOption,
+          scheduled_at: whenOption === 'later' ? null : null,
+          payment_method: paymentMethodDb,
+          ...pricingFields,
+          ...(scheduledTripId ? { scheduled_trip_id: scheduledTripId } : {}),
+          status,
+          photo_url: photoUrl,
+          photo_paths: uploadedPaths,
+        };
+
+        // Pix paliativo: cria o envio do dependente só aos 40s (na tela de Pix).
+        if (params.method === 'pix') {
+          let pixDepId = '';
+          const reqId = registerPalliativePix({
+            amountCents,
+            effectivate: async () => {
+              const { data: pixRow, error: pixErr } = await supabase
+                .from('dependent_shipments')
+                .insert(dependentInsertPayload)
+                .select('id')
+                .single();
+              if (pixErr) throw pixErr;
+              pixDepId = String((pixRow as { id: string }).id);
+            },
+            navigateSuccess: () => {
+              navigation.replace('DependentShipmentSuccess', {
+                orderId: pixDepId ? orderIdFromUuid(pixDepId) : '----',
+                shipmentId: pixDepId || undefined,
+              });
+            },
+          });
+          navigation.navigate('PixPaliativo', { requestId: reqId });
+          return;
+        }
+
         const { data: row, error } = await supabase
           .from('dependent_shipments')
-          .insert({
-            user_id: user.id,
-            dependent_id: dependentId ?? null,
-            full_name: fullName,
-            contact_phone: contactPhone,
-            bags_count: bagsCount,
-            instructions: instructions ?? null,
-            origin_address: origin.address,
-            origin_lat: origin.latitude,
-            origin_lng: origin.longitude,
-            destination_address: destination.address,
-            destination_lat: destination.latitude,
-            destination_lng: destination.longitude,
-            when_option: whenOption,
-            scheduled_at: whenOption === 'later' ? null : null,
-            payment_method: paymentMethodDb,
-            ...pricingFields,
-            ...(scheduledTripId ? { scheduled_trip_id: scheduledTripId } : {}),
-            status,
-            photo_url: photoUrl,
-            photo_paths: uploadedPaths,
-          })
+          .insert(dependentInsertPayload)
           .select('id')
           .single();
         if (error) {

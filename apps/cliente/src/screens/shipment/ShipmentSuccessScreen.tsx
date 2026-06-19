@@ -31,7 +31,9 @@ export function ShipmentSuccessScreen({ navigation, route }: Props) {
   const openEncomendasChat = () => {
     navigation.getParent()?.navigate('Main', {
       screen: 'Activities',
-      params: { screen: 'Chat', params: { contactName: 'Time de Encomendas' } },
+      // supportBackoffice: true abre/recupera o ticket real de suporte (open_support_ticket);
+      // sem isso o ChatScreen não resolve conversa e mostra o placeholder vazio.
+      params: { screen: 'Chat', params: { contactName: 'Time de Encomendas', supportBackoffice: true } },
     });
   };
 

@@ -15,6 +15,8 @@ import {
   BackHandler,
   Vibration,
   Linking,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
@@ -868,7 +870,36 @@ type GeoNavTarget = {
   coord: LatLng;
   label: string;
   address: string | null;
+  /** Fase da rota (mesma escala de `useTripStops`): coleta/embarque(0) < entrega/desembarque(1) < excursão(2) < destino(3). */
+  tier: number;
 };
+
+/**
+ * Fase operacional da parada: coletas/embarques (0) antes de entregas/desembarques (1),
+ * excursão (2) e destino (3). Espelha `reorderStopsPickupPhaseBeforeDeliveryPhase` (useTripStops).
+ * Usado para travar a busca do "mais próximo" dentro da fase pendente (coletar antes de entregar).
+ */
+function navPhaseTier(stopType: string): number {
+  switch (stopType) {
+    case 'passenger_pickup':
+    case 'dependent_pickup':
+    case 'package_pickup':
+    case 'shipment_pickup':
+      return 0;
+    case 'passenger_dropoff':
+    case 'dependent_dropoff':
+    case 'package_dropoff':
+    case 'shipment_dropoff':
+      return 1;
+    case 'excursion_stop':
+      return 2;
+    case 'trip_destination':
+    case 'base_dropoff':
+      return 3;
+    default:
+      return 2;
+  }
+}
 
 function stopLatLngForGeographicNav(s: TripStop): LatLng | null {
   if (s.stopType === 'driver_origin') return null;
@@ -896,6 +927,7 @@ function collectGeographicNavTargets(
       coord,
       label: s.label,
       address: s.address ?? null,
+      tier: navPhaseTier(s.stopType),
     });
   }
   if (tripDest && isValidGlobeCoordinate(tripDest.latitude, tripDest.longitude)) {
@@ -911,6 +943,7 @@ function collectGeographicNavTargets(
         coord: tripDest,
         label,
         address: tripDestAddress ?? null,
+        tier: 3,
       });
     }
   }
@@ -922,8 +955,13 @@ function pickGeographicNearestNavTarget(
   targets: GeoNavTarget[],
 ): GeoNavTarget | null {
   if (targets.length === 0) return null;
+  // Respeita a sequência principal de rota: o "mais próximo" só vale DENTRO da fase
+  // pendente mais antiga (todas as coletas/embarques antes de qualquer entrega/desembarque).
+  // Assim nunca aponta uma entrega enquanto houver coleta pendente, mesmo que esteja mais perto.
+  const minTier = Math.min(...targets.map((t) => t.tier));
+  const inPhase = targets.filter((t) => t.tier === minTier);
   const routeRank = (x: GeoNavTarget) => (x.kind === 'stop' ? x.stopIndex : 1_000_000);
-  const sorted = [...targets].sort((a, b) => {
+  const sorted = [...inPhase].sort((a, b) => {
     const da = distanceMetersApprox(driver, a.coord);
     const db = distanceMetersApprox(driver, b.coord);
     if (Math.abs(da - db) > GEO_NAV_TIE_METERS) return da - db;
@@ -4344,6 +4382,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       {/* ── Confirmar coleta / entrega (um bottom sheet, um translateY) ─ */}
       {confirmPickupVisible || confirmDeliveryVisible ? (
         <View style={styles.fullScreenMapOverlay} accessibilityViewIsModal>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
         <KeyboardAvoidingView
           style={styles.modalRoot}
           behavior="height"
@@ -4529,6 +4568,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             )}
           </Animated.View>
         </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
         </View>
       ) : null}
 
@@ -4645,6 +4685,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       {/* ── Viagem concluída + avaliação (bottom sheet sobre o mapa) ─ */}
       {completedVisible ? (
         <View style={styles.fullScreenMapOverlay} accessibilityViewIsModal>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
         <KeyboardAvoidingView style={styles.modalRoot} behavior="height">
           <View style={styles.overlayBackdrop} />
           <Animated.View
@@ -4662,7 +4703,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             <ScrollView
               contentContainerStyle={styles.completedScroll}
               showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="always"
+              keyboardShouldPersistTaps="handled"
             >
               <View style={styles.completedIconCircle}>
                 <MaterialIcons name="check" size={40} color="#fff" />
@@ -4733,6 +4774,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             </ScrollView>
           </Animated.View>
         </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
         </View>
       ) : null}
       <AppConfirmModal

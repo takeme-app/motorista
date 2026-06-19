@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -17,7 +17,9 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ShipmentStackParamList } from '../../navigation/types';
 import { PaymentMethodSection, type PaymentMethodType, type CardPaymentConfirmParams } from '../../components/PaymentMethodSection';
+import { fetchDriverStripeChargesEnabled } from '../../lib/driverStripeConnect';
 import { supabase } from '../../lib/supabase';
+import { registerPalliativePix } from '../../lib/palliativePixStore';
 import { tryOpenSupportTicket } from '../../lib/supportTickets';
 import { resolveShipmentBaseId } from '../../lib/resolveShipmentBase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
@@ -79,6 +81,43 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
   } = route.params;
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Mesma regra da corrida: o motorista é selecionado antes do checkout
+  // (clientPreferredDriverId). Se ele não tem Stripe Connect habilitado
+  // (charges_enabled), só "dinheiro" fica disponível.
+  const [connectChargesEnabled, setConnectChargesEnabled] = useState<boolean | null>(null);
+  const [connectStatusLoading, setConnectStatusLoading] = useState(() => Boolean(clientPreferredDriverId?.trim()));
+  const connectFetchGen = useRef(0);
+
+  useEffect(() => {
+    const wid = clientPreferredDriverId?.trim();
+    if (!wid) {
+      setConnectChargesEnabled(false);
+      setConnectStatusLoading(false);
+      return;
+    }
+    const gen = ++connectFetchGen.current;
+    setConnectStatusLoading(true);
+    void fetchDriverStripeChargesEnabled(wid).then((ok) => {
+      if (connectFetchGen.current !== gen) return;
+      setConnectChargesEnabled(ok);
+      setConnectStatusLoading(false);
+    });
+  }, [clientPreferredDriverId]);
+
+  const allowedPaymentMethods = useMemo((): PaymentMethodType[] => {
+    // Pix paliativo não depende do Stripe Connect do motorista — fica disponível como o dinheiro.
+    if (connectStatusLoading) return ['pix', 'dinheiro'];
+    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix', 'dinheiro'];
+    return ['pix', 'dinheiro'];
+  }, [connectChargesEnabled, connectStatusLoading]);
+
+  useEffect(() => {
+    if (selectedPaymentMethod == null) return;
+    if (!allowedPaymentMethods.includes(selectedPaymentMethod)) {
+      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'dinheiro');
+    }
+  }, [allowedPaymentMethods, selectedPaymentMethod]);
 
   /** Há base na região: coleta pode ser na base (motorista vê no mapa / paradas) após aceitar. */
   const hubColetaNaBase = Boolean(resolvedBaseIdParam);
@@ -202,33 +241,72 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
               });
         const originCityResolved =
           (origin.city?.trim() || guessCityFromPtAddress(origin.address)).trim() || null;
+        const shipmentInsertPayload = {
+          user_id: user.id,
+          origin_address: origin.address,
+          origin_lat: origin.latitude,
+          origin_lng: origin.longitude,
+          origin_city: originCityResolved,
+          ...(clientPreferredDriverId ? { client_preferred_driver_id: clientPreferredDriverId } : {}),
+          ...(scheduledTripId ? { scheduled_trip_id: scheduledTripId } : {}),
+          destination_address: destination.address,
+          destination_lat: destination.latitude,
+          destination_lng: destination.longitude,
+          when_option: whenOption,
+          scheduled_at: whenOption === 'later' ? null : null,
+          package_size: packageSize,
+          recipient_name: recipient.name,
+          recipient_email: (recipient.email?.trim() || user.email || '').trim() || 'nao-informado@take-me.local',
+          recipient_phone: recipient.phone,
+          instructions: recipient.instructions ?? null,
+          photo_url: photoUrl,
+          photo_paths: photoPathsJson,
+          payment_method: paymentMethodDb,
+          ...pricingInsertRow,
+          status,
+          ...(baseIdForInsert ? { base_id: baseIdForInsert } : {}),
+        };
+        // Encomenda grande NÃO abre fila na criação: aguarda aprovação do admin (o trigger
+        // trg_shipment_auto_open_driver_offer_queue abre a fila quando admin_approved_at é setado).
+        const canStartQueueForPix =
+          Boolean(clientPreferredDriverId) && status === 'confirmed';
+
+        // Pix paliativo (Stripe Pix desabilitado): não cobra. A encomenda é criada e
+        // ofertada ao motorista só aos 40s (na tela de Pix) — não antes ("sem pagar o pix").
+        if (params.method === 'pix') {
+          let pixShipmentId = '';
+          const pixAmountCents = Number((pricingInsertRow as { amount_cents?: number }).amount_cents ?? 0);
+          const reqId = registerPalliativePix({
+            amountCents: pixAmountCents,
+            effectivate: async () => {
+              const { data: pixRow, error: pixErr } = await supabase
+                .from('shipments')
+                .insert(shipmentInsertPayload)
+                .select('id')
+                .single();
+              if (pixErr) throw pixErr;
+              pixShipmentId = String((pixRow as { id: string }).id);
+              if (packageSize === 'grande') void tryOpenSupportTicket('encomendas', { shipment_id: pixShipmentId });
+              if (canStartQueueForPix) {
+                await supabase.rpc('shipment_begin_driver_offering', { p_shipment_id: pixShipmentId });
+              }
+            },
+            navigateSuccess: () => {
+              navigation.replace('ShipmentSuccess', {
+                orderId: pixShipmentId ? orderIdFromUuid(pixShipmentId) : '----',
+                shipmentId: pixShipmentId || undefined,
+                isLargePackage: packageSize === 'grande',
+                paymentProcessed: true,
+              });
+            },
+          });
+          navigation.navigate('PixPaliativo', { requestId: reqId });
+          return;
+        }
+
         const { data: row, error } = await supabase
           .from('shipments')
-          .insert({
-            user_id: user.id,
-            origin_address: origin.address,
-            origin_lat: origin.latitude,
-            origin_lng: origin.longitude,
-            origin_city: originCityResolved,
-            ...(clientPreferredDriverId ? { client_preferred_driver_id: clientPreferredDriverId } : {}),
-            ...(scheduledTripId ? { scheduled_trip_id: scheduledTripId } : {}),
-            destination_address: destination.address,
-            destination_lat: destination.latitude,
-            destination_lng: destination.longitude,
-            when_option: whenOption,
-            scheduled_at: whenOption === 'later' ? null : null,
-            package_size: packageSize,
-            recipient_name: recipient.name,
-            recipient_email: (recipient.email?.trim() || user.email || '').trim() || 'nao-informado@take-me.local',
-            recipient_phone: recipient.phone,
-            instructions: recipient.instructions ?? null,
-            photo_url: photoUrl,
-            photo_paths: photoPathsJson,
-            payment_method: paymentMethodDb,
-            ...pricingInsertRow,
-            status,
-            ...(baseIdForInsert ? { base_id: baseIdForInsert } : {}),
-          })
+          .insert(shipmentInsertPayload)
           .select('id')
           .single();
         if (error) {
@@ -378,10 +456,12 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
           }
         }
 
+        // Encomenda grande NÃO abre fila na criação: aguarda aprovação do admin (o trigger
+        // trg_shipment_auto_open_driver_offer_queue abre a fila quando admin_approved_at é setado).
         const canStartDriverOfferQueue =
           Boolean(shipmentId) &&
           Boolean(clientPreferredDriverId) &&
-          (status === 'confirmed' || (packageSize === 'grande' && status === 'pending_review'));
+          status === 'confirmed';
 
         if (canStartDriverOfferQueue && shipmentId) {
           const { data: beginData, error: beginErr } = await supabase.rpc('shipment_begin_driver_offering', {
@@ -555,6 +635,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
           onConfirmPayment={handleConfirmPayment}
           confirmLabel="Confirmar envio"
           cancellationPolicyVariant={cancellationVariant}
+          allowedMethods={allowedPaymentMethods}
           loading={submitting}
         />
       </ScrollView>

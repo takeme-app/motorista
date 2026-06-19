@@ -8,6 +8,7 @@ import { DefineDependentTripScreen } from '../screens/dependentShipment/DefineDe
 import { SelectDependentTripDriverScreen } from '../screens/dependentShipment/SelectDependentTripDriverScreen';
 import { ConfirmDependentShipmentScreen } from '../screens/dependentShipment/ConfirmDependentShipmentScreen';
 import { DependentShipmentSuccessScreen } from '../screens/dependentShipment/DependentShipmentSuccessScreen';
+import { PixPaliativoScreen } from '../screens/payment/PixPaliativoScreen';
 
 const Stack = createNativeStackNavigator<DependentShipmentStackParamList>();
 
@@ -38,6 +39,7 @@ export function DependentShipmentStack() {
       <Stack.Screen name="DefineDependentTrip" component={DefineDependentTripScreen} />
       <Stack.Screen name="SelectDependentTripDriver" component={SelectDependentTripDriverScreen} />
       <Stack.Screen name="ConfirmDependentShipment" component={ConfirmDependentShipmentScreen} />
+      <Stack.Screen name="PixPaliativo" component={PixPaliativoScreen} />
       <Stack.Screen name="DependentShipmentSuccess" component={DependentShipmentSuccessScreen} />
     </Stack.Navigator>
   );

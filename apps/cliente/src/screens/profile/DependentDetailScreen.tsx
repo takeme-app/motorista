@@ -79,7 +79,10 @@ export function DependentDetailScreen({ navigation, route }: Props) {
   );
 
   const openDoc = (url: string | null) => {
-    if (!url) return;
+    if (!url) {
+      showAlert('Documento indisponível', 'Não foi possível carregar este documento. Tente novamente mais tarde.');
+      return;
+    }
     Linking.openURL(url).catch(() => showAlert('Erro', 'Não foi possível abrir o documento.'));
   };
 
@@ -164,7 +167,6 @@ export function DependentDetailScreen({ navigation, route }: Props) {
           <Text style={styles.noObs}>Nenhuma observação</Text>
         )}
 
-        <Text style={styles.sectionTitle}>Geral</Text>
         <TouchableOpacity
           style={styles.deleteRow}
           onPress={() => navigation.navigate('DeleteDependent', { dependentId: dep.id })}
@@ -232,6 +234,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 18,
+    marginTop: 20,
   },
   deleteRowText: { fontSize: 15, fontWeight: '600', color: COLORS.danger, marginLeft: 14 },
   title: { fontSize: 22, fontWeight: '700', color: COLORS.black, marginHorizontal: 24, marginTop: 16 },

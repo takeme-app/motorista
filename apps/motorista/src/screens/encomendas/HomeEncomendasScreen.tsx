@@ -132,6 +132,7 @@ export function HomeEncomendasScreen() {
       origin_address: string;
       package_size: string;
       amount_cents: number;
+      preparer_payout_cents: number | null;
       instructions: string | null;
       scheduled_at: string | null;
       created_at: string;
@@ -153,7 +154,9 @@ export function HomeEncomendasScreen() {
         .from('profiles').select('full_name').eq('id', uid).maybeSingle();
       const cp = clientProf as { full_name?: string | null } | null;
       const clientName = cp?.full_name ?? 'Cliente';
-      const totalCents = group.reduce((sum, g) => sum + (g.amount_cents ?? 0), 0);
+      // Valor exibido ao preparador = soma das parcelas dele (preparer_payout_cents),
+      // nao o total pago pelo cliente (amount_cents).
+      const totalCents = group.reduce((sum, g) => sum + (g.preparer_payout_cents ?? 0), 0);
       list.push({
         id: rep.id,
         shipmentIds: group.map((g) => g.id),

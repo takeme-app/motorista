@@ -14,10 +14,10 @@ import {
   clientViagemStatusBadge,
   clientDependentActivityStatusBadge,
   clientShipmentActivityStatusBadge,
-  excursionRequestStatusToBadge,
   type ActivitySectionBadge,
-  type TripStatusBadge,
+  type StatusBadgeVariant,
 } from '../components/StatusBadge';
+import { excursionClientStatus, isExcursionConfirmed, type ExcursionStatusFields } from '../lib/excursionStatus';
 import { SupportSheet } from '../components/SupportSheet';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ActivitiesList'>;
@@ -40,7 +40,7 @@ export type ActivityItem = {
   /** Label do badge para excursões (Em análise, Agendado, Concluída, etc.) */
   excursionStatusLabel?: string;
   /** Status exibido no cartão (cores alinhadas a `StatusBadge` / Histórico de viagens). */
-  statusBadgeVariant: TripStatusBadge;
+  statusBadgeVariant: StatusBadgeVariant;
   /** Sobrescreve o texto padrão do variant (ex.: excursões). */
   statusBadgeLabel?: string;
 };
@@ -156,7 +156,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('shipments')
         .select(
-          'id, origin_address, destination_address, amount_cents, status, created_at, package_size, scheduled_trip_id, driver_id, cancellation_reason, scheduled_trips(status, driver_journey_started_at)',
+          'id, origin_address, destination_address, amount_cents, status, created_at, package_size, admin_approved_at, scheduled_trip_id, driver_id, cancellation_reason, scheduled_trips(status, driver_journey_started_at)',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -172,7 +172,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('excursion_requests')
         .select(
-          'id, destination, excursion_date, status, total_amount_cents, created_at, people_count',
+          'id, destination, excursion_date, status, total_amount_cents, created_at, people_count, check_in_ida_started_at, check_in_volta_started_at, boarding_ida_done_at, boarding_volta_done_at',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -284,6 +284,8 @@ export function ActivitiesScreen({ navigation }: Props) {
         tripStatusShip ?? null,
         undefined,
         tripJourneyStartedShip ?? null,
+        pkg,
+        (s as { admin_approved_at?: string | null }).admin_approved_at ?? null,
       );
       return {
         id: (s as { id: string }).id,
@@ -339,17 +341,13 @@ export function ActivitiesScreen({ navigation }: Props) {
         statusBadgeVariant,
       };
     });
-    const excursionItems: ActivityItem[] = (excursionsRes.data ?? []).map((e) => {
+    // Cast: colunas de embarque (check_in_*, boarding_*) ainda não estão nos tipos
+    // gerados em @take-me/shared; sem o cast o supabase-js infere SelectQueryError.
+    const excursionRows = (excursionsRes.data ?? []) as unknown as Record<string, unknown>[];
+    const excursionItems: ActivityItem[] = excursionRows.map((e) => {
       const status = (e as { status?: string }).status?.toLowerCase() ?? '';
-      const isConfirmed = ['quoted', 'contacted', 'approved', 'scheduled', 'in_progress', 'completed'].includes(status);
-      const sectionBadge: ActivitySectionBadge = isConfirmed ? 'confirmada' : 'planejada';
-      const excursionStatusLabel =
-        status === 'completed' ? 'Concluída'
-        : status === 'cancelled' ? 'Cancelada'
-        : status === 'in_progress' ? 'Em andamento'
-        : ['scheduled', 'approved'].includes(status) ? 'Agendado'
-        : ['quoted', 'in_analysis', 'pending', 'contacted'].includes(status) ? 'Em análise'
-        : 'Planejada';
+      const sectionBadge: ActivitySectionBadge = isExcursionConfirmed(status) ? 'confirmada' : 'planejada';
+      const clientStatus = excursionClientStatus(e as ExcursionStatusFields);
       const dest = (e as { destination?: string }).destination ?? 'Excursão';
       const excursionDate = (e as { excursion_date?: string }).excursion_date;
       const createdAt = (e as { created_at: string }).created_at;
@@ -374,11 +372,11 @@ export function ActivitiesScreen({ navigation }: Props) {
         priceFormatted,
         categoryLabel: 'Excursão',
         sectionBadge,
-        excursionStatusLabel,
+        excursionStatusLabel: clientStatus.label,
         created_at: createdAt,
         summaryLine: `${people} ${people === 1 ? 'pessoa' : 'pessoas'}`,
-        statusBadgeVariant: excursionRequestStatusToBadge(status),
-        statusBadgeLabel: excursionStatusLabel,
+        statusBadgeVariant: clientStatus.variant,
+        statusBadgeLabel: clientStatus.label,
       };
     });
     const combined = [...bookingItems, ...shipmentItems, ...dependentItems, ...excursionItems].sort(

@@ -261,6 +261,8 @@ export type EncomendaEditDetail =
       whenOption: string;
       createdAt: string;
       scheduledAt: string | null;
+      /** Encomenda grande: quando o admin aprovou (NULL = aguardando aprovação). */
+      adminApprovedAt: string | null;
     }
   | {
       kind: 'dependent_shipment';
