@@ -250,10 +250,10 @@ export function CheckoutScreen({ navigation, route }: Props) {
   const [primaryPassenger, setPrimaryPassenger] = useState<{ name: string; cpf: string } | null>(null);
 
   const allowedPaymentMethods = useMemo((): PaymentMethodType[] => {
-    // Pix paliativo não depende do Stripe Connect do motorista — fica disponível como o dinheiro.
-    if (connectStatusLoading) return ['pix', 'dinheiro'];
-    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix', 'dinheiro'];
-    return ['pix', 'dinheiro'];
+    // Dinheiro ocultado de todos os checkouts. Pix paliativo não depende do Stripe Connect.
+    if (connectStatusLoading) return ['pix'];
+    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix'];
+    return ['pix'];
   }, [connectChargesEnabled, connectStatusLoading]);
 
   useEffect(() => {
@@ -275,7 +275,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (selectedPaymentMethod == null) return;
     if (!allowedPaymentMethods.includes(selectedPaymentMethod)) {
-      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'dinheiro');
+      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'pix');
     }
   }, [allowedPaymentMethods, selectedPaymentMethod]);
 
