@@ -49,6 +49,43 @@ function formatPhoneDisplay(digits: string): string {
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7, 11)}`;
 }
 
+const applyTimeSurcharge = (baseCents: number, pct: number): number =>
+  Math.round(baseCents * (1 + (Number.isFinite(pct) ? pct : 0) / 100));
+
+/**
+ * Adicionais da VIAGEM (fim de semana / noturno / feriado + adicionais de rota) — o envio de
+ * dependente viaja numa corrida agendada, então segue a MESMA regra da viagem comum (não a de
+ * encomenda). Espelha resolveBookingPricingExtras do CheckoutScreen.
+ */
+async function resolveDependentPricingExtras(
+  scheduledTripId: string | null | undefined,
+): Promise<{ timeSurchargePct: number; surchargesCents: number }> {
+  let timeSurchargePct = 0;
+  let surchargesCents = 0;
+  try {
+    if (scheduledTripId) {
+      const { data } = await supabase.rpc('resolve_trip_time_surcharge_pct', {
+        p_scheduled_trip_id: scheduledTripId,
+      });
+      const pct = Number(data);
+      if (Number.isFinite(pct) && pct > 0) timeSurchargePct = pct;
+    }
+  } catch {
+    /* sem adicional de horário */
+  }
+  try {
+    // Envio de dependente não tem pricing_route próprio; adicionais de rota não se aplicam (null).
+    const { data } = await supabase.rpc('resolve_booking_surcharges_cents', {
+      p_pricing_route_id: null,
+    });
+    const cents = Number(data);
+    if (Number.isFinite(cents) && cents > 0) surchargesCents = Math.floor(cents);
+  } catch {
+    /* sem adicionais */
+  }
+  return { timeSurchargePct, surchargesCents };
+}
+
 export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const bottomInset = useBottomSafeInset();
@@ -112,10 +149,13 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         }
       }
 
+      // Mesma regra da viagem: adicionais de horário (fds/noturno/feriado) + rota.
+      const { timeSurchargePct, surchargesCents } = await resolveDependentPricingExtras(driver?.id);
+
       try {
         const preview = computeOrderPricing({
-          baseCents: amountCents,
-          surchargesCents: 0,
+          baseCents: applyTimeSurcharge(amountCents, timeSurchargePct),
+          surchargesCents,
           adminPct,
           gainPct,
           discountPct,
@@ -135,7 +175,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [amountCents]);
+  }, [amountCents, driver?.id]);
 
   const allowedPaymentMethods = useMemo((): PaymentMethodType[] => {
     // Dinheiro ocultado de todos os checkouts. Pix paliativo não depende do Stripe Connect.
@@ -294,11 +334,14 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         let pricingFields = pricingInsertRow;
         if (!pricingFields) {
           const fallbackAdminPct = await fetchPlatformFeePctForService('dependent_shipment');
+          // Mesma regra da viagem (fds/noturno/feriado + rota) também no fallback.
+          const { timeSurchargePct: fbTimePct, surchargesCents: fbSurchargesCents } =
+            await resolveDependentPricingExtras(scheduledTripId);
           try {
             pricingFields = snapshotFromPricingResult(
               computeOrderPricing({
-                baseCents: amountCents,
-                surchargesCents: 0,
+                baseCents: applyTimeSurcharge(amountCents, fbTimePct),
+                surchargesCents: fbSurchargesCents,
                 adminPct: fallbackAdminPct,
                 gainPct: 0,
                 discountPct: 0,

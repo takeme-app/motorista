@@ -18,6 +18,7 @@ import {
   fetchMotoristas,
   fetchBases,
   createBase,
+  updateBasePreparerPricing,
   deletePricingRoute,
   updatePricingRoute,
   fetchPreparadores,
@@ -248,22 +249,33 @@ export default function PagamentosGestaoScreen() {
   const [editEncValor, setEditEncValor] = useState('');
   const abrirEditEnc = useCallback((row: EncomendaTrechoRow) => {
     setEditEncRow(row);
-    setEditEncTipo(row.tipo);
-    setEditEncValor(row.valor);
+    setEditEncTipo(row.tipo === 'Não definido' ? 'Por KM' : row.tipo);
+    setEditEncValor(row.valor === '—' ? '' : row.valor);
     setEditEncOpen(true);
   }, []);
   const fecharEditEnc = useCallback(() => setEditEncOpen(false), []);
   const salvarEditEnc = useCallback(async () => {
     if (editEncRow?.id) {
-      const modeMap: Record<string, string> = { 'Pequena': 'fixed', 'Média': 'fixed', 'Grande': 'fixed', 'Por KM': 'per_km', 'Fixo': 'fixed', 'Diária': 'daily_rate' };
-      const valNum = parseFloat(editEncValor.replace('R$', '').replace('.', '').replace(',', '.').trim()) * 100;
-      await updatePricingRoute(editEncRow.id, { price_cents: Math.round(valNum) });
-      // Refresh data
-      const updated = await fetchPricingRoutes('preparer_shipments');
-      setPricingEncRoutes(updated);
+      const valNum = Math.round(parseFloat(editEncValor.replace('R$', '').replace(/\./g, '').replace(',', '.').trim()) * 100);
+      if (activeTab === 'Encomenda') {
+        // Aba Encomenda = pagamento POR BASE (editEncRow.id é o id da base).
+        const mode = editEncTipo === 'Por KM' ? 'per_km' : 'fixed';
+        if (Number.isFinite(valNum) && valNum > 0) {
+          await updateBasePreparerPricing(editEncRow.id, {
+            mode,
+            kmCents: mode === 'per_km' ? valNum : null,
+            fixedCents: mode === 'fixed' ? valNum : null,
+          });
+          setBasesData(await fetchBases());
+        }
+      } else {
+        // Aba Trecho (motorista) = pricing_routes.
+        await updatePricingRoute(editEncRow.id, { price_cents: valNum });
+        setPricingDriverRoutes(await fetchPricingRoutes('driver'));
+      }
     }
     setEditEncOpen(false);
-  }, [editEncRow, editEncTipo, editEncValor]);
+  }, [editEncRow, editEncTipo, editEncValor, activeTab]);
   const confirmarRemoveEnc = useCallback(async () => {
     if (editEncRow?.id) {
       await deletePricingRoute(editEncRow.id);
@@ -442,15 +454,33 @@ export default function PagamentosGestaoScreen() {
 
   // ── Computed rows from real Supabase data ─────────────────────────────
   const fmtCents = (c: number) => `R$ ${(c / 100).toFixed(2).replace('.', ',')}`;
+  // Máscara de moeda: só dígitos → R$ X,XX (impede letras/símbolos no campo de valor).
+  const maskBRL = (raw: string): string => {
+    const digits = raw.replace(/\D/g, '');
+    if (!digits) return '';
+    return (parseInt(digits, 10) / 100).toLocaleString('pt-BR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  };
+  // Pagamento do preparador de encomendas é POR BASE: a aba "Encomenda" lista as bases
+  // e o valor (por km / fixo) configurado em cada uma. "Origem"=Base, "Destino"=Cidade.
   const realEncRows: EncomendaTrechoRow[] = useMemo(() =>
-    pricingEncRoutes.map(r => ({
-      id: r.id,
-      codigo: `#${r.id.slice(0, 5)}`,
-      origem: r.origin_address || '—',
-      destino: r.destination_address,
-      tipo: r.pricing_mode === 'per_km' ? 'Por KM' : r.pricing_mode === 'fixed' ? 'Fixo' : 'Diária',
-      valor: fmtCents(r.price_cents),
-    })), [pricingEncRoutes]);
+    basesData.map(b => {
+      const cents = b.preparerPricingMode === 'fixed'
+        ? b.preparerFixedCents
+        : b.preparerPricingMode === 'per_km'
+          ? b.preparerKmPriceCents
+          : null;
+      return {
+        id: b.id,
+        codigo: `#${b.id.slice(0, 5)}`,
+        origem: b.name,
+        destino: b.city || '—',
+        tipo: b.preparerPricingMode === 'per_km' ? 'Por KM' : b.preparerPricingMode === 'fixed' ? 'Fixo' : 'Não definido',
+        valor: cents != null ? fmtCents(cents) : '—',
+      };
+    }), [basesData]);
 
   const realTrechoRows: EncomendaTrechoRow[] = useMemo(() =>
     pricingDriverRoutes.map(r => ({
@@ -1027,13 +1057,21 @@ export default function PagamentosGestaoScreen() {
 
   const encTableToolbar = React.createElement('div', {
     style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 64, padding: '16px 28px', background: '#f6f6f6', borderRadius: '16px 16px 0 0' },
-  }, React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Lista de trechos de encomendas'));
+  }, React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Pagamento do preparador por base'));
 
   const encTableHeader = React.createElement('div', {
     style: { display: 'flex', height: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9', padding: '0 16px', alignItems: 'center' },
   }, ...encomendaCols.map((c) => React.createElement('div', {
     key: c.label, style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 6px', display: 'flex', alignItems: 'center', height: '100%' },
   }, c.label)));
+
+  // Cabeçalho da aba Encomenda (por base): "Origem"→Base, "Destino"→Cidade, sem Remover.
+  const baseEncColLabels = ['Código (ID)', 'Base', 'Cidade', 'Tipo', 'Valor', 'Editar'];
+  const encBaseTableHeader = React.createElement('div', {
+    style: { display: 'flex', height: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9', padding: '0 16px', alignItems: 'center' },
+  }, ...encomendaCols.map((c, i) => React.createElement('div', {
+    key: c.label, style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 6px', display: 'flex', alignItems: 'center', height: '100%' },
+  }, baseEncColLabels[i])));
 
   const encTableRowEls = activeEncRows.map((row, idx) =>
     React.createElement('div', {
@@ -1045,14 +1083,13 @@ export default function PagamentosGestaoScreen() {
       React.createElement('div', { style: { ...cellBase, flex: encomendaCols[3].flex, minWidth: encomendaCols[3].minWidth, fontWeight: 500 } }, row.tipo),
       React.createElement('div', { style: { ...cellBase, flex: encomendaCols[4].flex, minWidth: encomendaCols[4].minWidth, fontWeight: 600 } }, row.valor),
       React.createElement('div', { style: { flex: encomendaCols[5].flex, minWidth: encomendaCols[5].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 } },
-        React.createElement('button', { type: 'button', onClick: () => abrirEditEnc(row), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Editar' }, pencilSvg),
-        React.createElement('button', { type: 'button', onClick: () => abrirRemoveEnc(row), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Remover' }, trashSvg))));
+        React.createElement('button', { type: 'button', onClick: () => abrirEditEnc(row), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Editar valor da base' }, pencilSvg))));
 
   const encTableSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' },
   }, React.createElement('div', { style: { background: '#fff', borderRadius: 16, overflow: 'hidden', width: '100%' } },
     encTableToolbar,
-    React.createElement('div', { style: { width: '100%', overflowX: 'auto' as const } }, encTableHeader, ...encTableRowEls)));
+    React.createElement('div', { style: { width: '100%', overflowX: 'auto' as const } }, encBaseTableHeader, ...encTableRowEls)));
 
   // ── Trecho table (reuses encomenda cols but with trechoRows) ────────
   const trechoTableToolbar = React.createElement('div', {
@@ -1342,17 +1379,24 @@ export default function PagamentosGestaoScreen() {
                   onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setEditEncTipo(e.target.value),
                   style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', boxSizing: 'border-box' as const, appearance: 'none' as const, WebkitAppearance: 'none' as const, cursor: 'pointer', ...font },
                 },
-                  React.createElement('option', { value: 'Pequena' }, 'Pequena'),
-                  React.createElement('option', { value: 'Média' }, 'Média'),
-                  React.createElement('option', { value: 'Grande' }, 'Grande')),
+                  ...(activeTab === 'Encomenda'
+                    ? [
+                        React.createElement('option', { key: 'por_km', value: 'Por KM' }, 'Por KM'),
+                        React.createElement('option', { key: 'fixo', value: 'Fixo' }, 'Fixo'),
+                      ]
+                    : [
+                        React.createElement('option', { key: 'p', value: 'Pequena' }, 'Pequena'),
+                        React.createElement('option', { key: 'm', value: 'Média' }, 'Média'),
+                        React.createElement('option', { key: 'g', value: 'Grande' }, 'Grande'),
+                      ])),
                 React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { position: 'absolute' as const, right: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } },
                   React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })))),
             // Valor
             React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' } },
               React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Valor'),
               React.createElement('input', {
-                type: 'text', value: editEncValor,
-                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEditEncValor(e.target.value),
+                type: 'text', inputMode: 'decimal', value: editEncValor,
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEditEncValor(maskBRL(e.target.value)),
                 placeholder: 'R$ 75,00',
                 style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: editEncValor ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
               }))),

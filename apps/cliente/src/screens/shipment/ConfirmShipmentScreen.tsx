@@ -28,8 +28,9 @@ import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
 import {
   shipmentPricingSnapshotFromParams,
   shipmentOrderInsertFromQuoteParams,
+  snapshotFromPricingResult,
 } from '../../lib/orderPricingSnapshot';
-import { formatPricingBreakdown, computeOrderPricing, PricingDenominatorOverflowError, formatShipmentCode } from '@take-me/shared';
+import { formatPricingBreakdown, computeOrderPricing, normalizeApplyPromotion, PricingDenominatorOverflowError, formatShipmentCode } from '@take-me/shared';
 import { guessCityFromPtAddress } from '../../lib/shipmentOriginCity';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
@@ -130,37 +131,72 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
     priceRouteBaseCents,
   });
 
-  // Reconstrói o breakdown gross-up (PDF) usando os parâmetros da cotação.
-  // Neste momento não aplicamos promoção — o desconto/ganho promocional
-  // é persistido pelo edge `charge-shipments` após o checkout.
+  // Promoção da encomenda (order_type 'shipments') — desconto incide no preço do cliente,
+  // igual viagem/dependente. Antes a encomenda não aplicava promoção nenhuma.
+  const [promoGainPct, setPromoGainPct] = useState(0);
+  const [promoDiscountPct, setPromoDiscountPct] = useState(0);
+  const [promotionId, setPromotionId] = useState<string | null>(null);
+  const [promoWorkerRouteId, setPromoWorkerRouteId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      try {
+        const { data } = await supabase.rpc('apply_active_promotion', {
+          p_order_type: 'shipments',
+          p_user_id: user.id,
+          p_amount_cents: amountCents,
+        } as never);
+        const applied = normalizeApplyPromotion(Array.isArray(data) ? (data[0] as any) : (data as any));
+        if (cancelled) return;
+        setPromoGainPct(applied.gainPct);
+        setPromoDiscountPct(applied.discountPct);
+        setPromotionId(applied.promotionId);
+        setPromoWorkerRouteId(applied.promoWorkerRouteId);
+      } catch {
+        /* sem promoção */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [amountCents]);
+
+  // Breakdown gross-up (PDF) com a promoção aplicada (desconto reduz o total do cliente).
   const pricingPreview = useMemo(() => {
     try {
       return computeOrderPricing({
         baseCents: priceRouteBaseCents,
         surchargesCents: Math.max(0, amountCents - priceRouteBaseCents - platformFeeCents),
         adminPct: adminPctApplied,
-        gainPct: 0,
-        discountPct: 0,
+        gainPct: promoGainPct,
+        discountPct: promoDiscountPct,
       });
     } catch (err) {
       if (err instanceof PricingDenominatorOverflowError) return null;
       return null;
     }
-  }, [priceRouteBaseCents, platformFeeCents, amountCents, adminPctApplied]);
+  }, [priceRouteBaseCents, platformFeeCents, amountCents, adminPctApplied, promoGainPct, promoDiscountPct]);
 
   const pricingInsertRow = useMemo(
     () =>
-      shipmentOrderInsertFromQuoteParams({
-        pricingRouteId,
-        priceRouteBaseCents,
-        pricingSubtotalCents,
-        platformFeeCents,
-        amountCents,
-        adminPctApplied,
-        surchargesCents: pricingPreview?.surchargesCents ?? 0,
-        workerEarningCents: pricingPreview?.workerEarningCents,
-        adminEarningCents: pricingPreview?.adminEarningCents,
-      }),
+      // Com a promoção aplicada (pricingPreview), grava o snapshot do resultado (amount já com
+      // desconto + promotion_id). Sem preview (config inválida), usa o fallback da cotação.
+      pricingPreview
+        ? snapshotFromPricingResult(pricingPreview, {
+            promotionId,
+            pricingRouteId,
+            promoWorkerRouteId,
+          })
+        : shipmentOrderInsertFromQuoteParams({
+            pricingRouteId,
+            priceRouteBaseCents,
+            pricingSubtotalCents,
+            platformFeeCents,
+            amountCents,
+            adminPctApplied,
+            surchargesCents: 0,
+          }),
     [
       pricingRouteId,
       priceRouteBaseCents,
@@ -169,9 +205,13 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
       amountCents,
       adminPctApplied,
       pricingPreview,
+      promotionId,
+      promoWorkerRouteId,
     ]
   );
-  const amountFormatted = `R$ ${(pricingSnapshot.amount_cents / 100).toFixed(2).replace('.', ',')}`;
+  // Total exibido/cobrado = total com promoção (quando há preview); senão o da cotação.
+  const displayTotalCents = pricingPreview?.totalCents ?? pricingSnapshot.amount_cents;
+  const amountFormatted = `R$ ${(displayTotalCents / 100).toFixed(2).replace('.', ',')}`;
   const formatBRL = (cents: number) => `R$ ${(cents / 100).toFixed(2).replace('.', ',')}`;
   const cancellationVariant =
     selectedPaymentMethod === 'credito'
@@ -629,7 +669,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
         </View>
 
         <PaymentMethodSection
-          amountCents={pricingSnapshot.amount_cents}
+          amountCents={displayTotalCents}
           selectedMethod={selectedPaymentMethod}
           onSelectMethod={setSelectedPaymentMethod}
           onConfirmPayment={handleConfirmPayment}

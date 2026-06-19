@@ -129,6 +129,28 @@ Deno.serve(async (req) => {
 
     const now = new Date().toISOString();
 
+    // Promoção de excursão: registra o desconto ao cliente (plataforma absorve; repasse do
+    // worker intacto). Cap no resíduo da plataforma (total − worker_payout).
+    let discountCents = 0;
+    let promotionId: string | null = null;
+    try {
+      const { data: promo } = await admin.rpc("apply_active_promotion", {
+        p_order_type: "excursions",
+        p_user_id: userId,
+        p_amount_cents: amountCents,
+      });
+      const promoRow = (Array.isArray(promo) ? promo[0] : promo) as
+        | { promotion_id?: string | null; promo_discount_cents?: number | null }
+        | null;
+      if (promoRow) {
+        const adminCap = Math.max(0, amountCents - (Number(s.worker_payout_cents) || 0));
+        discountCents = Math.max(0, Math.min(Math.floor(Number(promoRow.promo_discount_cents) || 0), adminCap));
+        promotionId = promoRow.promotion_id ?? null;
+      }
+    } catch (_e) {
+      /* sem promoção ativa */
+    }
+
     // 1) Marca orçamento como pago/aprovado. Guard em status='quoted' garante
     //    idempotência (segunda chamada não reaprova nem duplica payouts).
     const { data: updated, error: updErr } = await admin
@@ -137,6 +159,9 @@ Deno.serve(async (req) => {
         status: "approved",
         payment_method: "cash",
         confirmed_at: now,
+        ...(discountCents > 0
+          ? { promo_discount_cents: discountCents, ...(promotionId ? { promotion_id: promotionId } : {}) }
+          : {}),
         updated_at: now,
       } as never)
       .eq("id", excursionId)

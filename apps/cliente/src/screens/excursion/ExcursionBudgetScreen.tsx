@@ -163,6 +163,8 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('pix');
   const [pixPaymentInfo, setPixPaymentInfo] = useState<PixPaymentInfo | null>(null);
   const [downloading, setDownloading] = useState(false);
+  // Desconto promocional de excursão (espelha o que os edges charge/confirm aplicam).
+  const [promoDiscountCents, setPromoDiscountCents] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -174,7 +176,7 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
       }
       const { data, error } = await supabase
         .from('excursion_requests')
-        .select('id, destination, excursion_date, people_count, total_amount_cents, budget_lines, payment_method, status')
+        .select('id, destination, excursion_date, people_count, total_amount_cents, admin_earning_cents, budget_lines, payment_method, status')
         .eq('id', excursionRequestId)
         .eq('user_id', user.id)
         .single();
@@ -183,8 +185,28 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
         setLoading(false);
         return;
       }
-      setDetail(data as ExcursionBudgetDetail);
-      const savedMethod = (data as ExcursionBudgetDetail).payment_method;
+      // Tipos Database desatualizados: caste via unknown (admin_earning_cents não está nos tipos).
+      const row = data as unknown as ExcursionBudgetDetail & { admin_earning_cents?: number | null };
+      setDetail(row);
+      // Promoção de excursão: desconto ao cliente (cap no admin_earning, plataforma absorve).
+      try {
+        const total0 = Number(row.total_amount_cents ?? 0);
+        const adminCap = Math.max(0, Number(row.admin_earning_cents ?? 0));
+        if (total0 > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: promo } = await (supabase as any).rpc('apply_active_promotion', {
+            p_order_type: 'excursions',
+            p_user_id: user.id,
+            p_amount_cents: total0,
+          });
+          const promoRow = Array.isArray(promo) ? (promo[0] as any) : (promo as any);
+          const d = Math.floor(Number(promoRow?.promo_discount_cents) || 0);
+          if (!cancelled) setPromoDiscountCents(Math.max(0, Math.min(d, adminCap)));
+        }
+      } catch {
+        /* sem promoção ativa */
+      }
+      const savedMethod = row.payment_method;
       if (savedMethod === 'credit_card') setSelectedPaymentMethod('credito');
       else if (savedMethod === 'debit_card') setSelectedPaymentMethod('debito');
       else if (savedMethod === 'pix') setSelectedPaymentMethod('pix');
@@ -290,7 +312,7 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
     // reusando confirm-excursion-cash (aprova + cria payouts). Sem cobrança real.
     if (params.method === 'pix') {
       const reqId = registerPalliativePix({
-        amountCents: total,
+        amountCents: Math.max(1, total - promoDiscountCents),
         effectivate: async () => {
           const { data: refreshData } = await supabase.auth.refreshSession();
           const { data: { session } } = await supabase.auth.getSession();
@@ -458,6 +480,7 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
 
   const lines = normalizeBudgetLines(detail.budget_lines);
   const total = detail.total_amount_cents ?? 0;
+  const discountedTotal = Math.max(0, total - promoDiscountCents);
   const hasBudget = lines.length > 0;
 
   return (
@@ -501,9 +524,15 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
                   <Text style={styles.budgetValue}>{formatCents(line.amount_cents)}</Text>
                 </View>
               ))}
+              {promoDiscountCents > 0 ? (
+                <View style={styles.budgetRow}>
+                  <Text style={styles.budgetLabel}>Desconto promocional</Text>
+                  <Text style={styles.budgetValue}>- {formatCents(promoDiscountCents)}</Text>
+                </View>
+              ) : null}
               <View style={[styles.budgetRow, styles.totalRow]}>
                 <Text style={styles.totalLabel}>Total</Text>
-                <Text style={styles.totalValue}>{formatCents(total)}</Text>
+                <Text style={styles.totalValue}>{formatCents(discountedTotal)}</Text>
               </View>
             </View>
 
@@ -569,7 +598,7 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
 
         {detail.status === 'quoted' ? (
           <PaymentMethodSection
-            amountCents={total}
+            amountCents={discountedTotal}
             selectedMethod={selectedPaymentMethod}
             onSelectMethod={(method) => {
               setSelectedPaymentMethod(method);

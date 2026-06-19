@@ -110,22 +110,7 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
     setQuoteError(null);
     setQuote(null);
     (async () => {
-      const res = await quoteShipmentForClient({
-        originAddress: origin.address,
-        destinationAddress: destination.address,
-        originLat: origin.latitude,
-        originLng: origin.longitude,
-        destinationLat: destination.latitude,
-        destinationLng: destination.longitude,
-        packageSize,
-      });
-      if (cancelled) return;
-      if (!res.ok) {
-        setQuoteError(res.error);
-        setQuote(null);
-      } else {
-        setQuote(res.quote);
-      }
+      // Resolve a base ANTES do quote: a tarifa da base sobrepõe o global no preço.
       let base: string | null = null;
       try {
         const resolved = await resolveShipmentBaseId({
@@ -137,6 +122,24 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
         base = null;
       }
       if (!cancelled) setResolvedBaseId(base);
+
+      const res = await quoteShipmentForClient({
+        originAddress: origin.address,
+        destinationAddress: destination.address,
+        originLat: origin.latitude,
+        originLng: origin.longitude,
+        destinationLat: destination.latitude,
+        destinationLng: destination.longitude,
+        packageSize,
+        baseId: base,
+      });
+      if (cancelled) return;
+      if (!res.ok) {
+        setQuoteError(res.error);
+        setQuote(null);
+      } else {
+        setQuote(res.quote);
+      }
       setQuoteLoading(false);
     })();
     return () => {
@@ -176,6 +179,9 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
         destinationLng: destination.longitude,
         packageSize,
         preparerId,
+        baseId: resolvedBaseId,
+        // O item selecionado é a viagem (rota) escolhida → aplica os ajustes da rota (fds/noturno/feriado).
+        scheduledTripId: selectedId,
       });
       if (cancelled) return;
       setSelectedQuote(res.ok ? res.quote : null);
@@ -194,6 +200,7 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
     destination.latitude,
     destination.longitude,
     packageSize,
+    resolvedBaseId,
   ]);
 
   const effectiveQuote = selectedQuote ?? quote;

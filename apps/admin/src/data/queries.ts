@@ -3370,13 +3370,19 @@ export type BaseListItem = {
   lng: number | null;
   isActive: boolean;
   createdAt: string;
+  /** Pagamento do preparador de encomendas desta base (NULL = usa taxa global por km). */
+  preparerPricingMode: 'per_km' | 'fixed' | null;
+  preparerKmPriceCents: number | null;
+  preparerFixedCents: number | null;
 };
 
 export async function fetchBases(): Promise<BaseListItem[]> {
   if (!isSupabaseConfigured) return [];
   const { data, error } = await sb
     .from('bases')
-    .select('id, name, address, city, state, lat, lng, is_active, created_at')
+    .select(
+      'id, name, address, city, state, lat, lng, is_active, created_at, preparer_pricing_mode, preparer_km_price_cents, preparer_fixed_cents',
+    )
     .order('created_at', { ascending: false });
 
   if (error || !data) return [];
@@ -3390,7 +3396,26 @@ export async function fetchBases(): Promise<BaseListItem[]> {
     lng: b.lng,
     isActive: b.is_active,
     createdAt: fmtDate(b.created_at),
+    preparerPricingMode: (b.preparer_pricing_mode as 'per_km' | 'fixed' | null) ?? null,
+    preparerKmPriceCents: b.preparer_km_price_cents ?? null,
+    preparerFixedCents: b.preparer_fixed_cents ?? null,
   }));
+}
+
+/** Atualiza o pagamento do preparador de encomendas de uma base (por km ou valor fixo). */
+export async function updateBasePreparerPricing(
+  id: string,
+  input: { mode: 'per_km' | 'fixed'; kmCents?: number | null; fixedCents?: number | null },
+): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const { error } = await (sb.from('bases') as any)
+    .update({
+      preparer_pricing_mode: input.mode,
+      preparer_km_price_cents: input.mode === 'per_km' ? (input.kmCents ?? null) : null,
+      preparer_fixed_cents: input.mode === 'fixed' ? (input.fixedCents ?? null) : null,
+    })
+    .eq('id', id);
+  return { error: error ? (error as Error).message : null };
 }
 
 export type CreateBaseInput = {
@@ -3428,6 +3453,9 @@ export async function createBase(input: CreateBaseInput): Promise<BaseListItem |
     lng: data.lng,
     isActive: data.is_active,
     createdAt: fmtDate(data.created_at),
+    preparerPricingMode: (data.preparer_pricing_mode as 'per_km' | 'fixed' | null) ?? null,
+    preparerKmPriceCents: data.preparer_km_price_cents ?? null,
+    preparerFixedCents: data.preparer_fixed_cents ?? null,
   };
 }
 

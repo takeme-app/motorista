@@ -244,6 +244,12 @@ type PricingDefaults = {
   routes: PreparerShipmentPricingRoute[];
   /** Adicionais automáticos aplicáveis a encomendas (qualquer papel). */
   surcharges: ShipmentSurcharge[];
+  /** Tarifa da BASE da encomenda (sobrepõe o global; global vira default). */
+  baseTariff: {
+    mode: 'per_km' | 'fixed';
+    km_price_cents: number | null;
+    fixed_cents: number | null;
+  } | null;
 };
 
 type PlatformSettingRow = { key: string; value: unknown };
@@ -278,8 +284,8 @@ function parsePackageMultipliers(raw: unknown): PackageSizeMultipliers {
   return fallback;
 }
 
-/** Lê em paralelo: override do preparador + padrões globais + catálogo. */
-async function readPricingDefaults(preparerId?: string): Promise<PricingDefaults> {
+/** Lê em paralelo: override do preparador + padrões globais + catálogo + tarifa da base. */
+async function readPricingDefaults(preparerId?: string, baseId?: string | null): Promise<PricingDefaults> {
   const sb = supabase as { from: (t: string) => any };
 
   const settingsPromise = sb
@@ -303,7 +309,7 @@ async function readPricingDefaults(preparerId?: string): Promise<PricingDefaults
 
   const surchargesPromise = sb
     .from('surcharge_catalog')
-    .select('id, name, value_cents, surcharge_mode, surcharge_type, is_active')
+    .select('id, name, default_value_cents, surcharge_mode, surcharge_type, is_active')
     .eq('surcharge_type', 'encomenda')
     .eq('surcharge_mode', 'automatic')
     .eq('is_active', true);
@@ -316,11 +322,20 @@ async function readPricingDefaults(preparerId?: string): Promise<PricingDefaults
         .maybeSingle()
     : Promise.resolve({ data: null });
 
-  const [settingsRes, routesRes, surchargesRes, prepRes] = await Promise.all([
+  const basePromise = baseId
+    ? sb
+        .from('bases')
+        .select('preparer_pricing_mode, preparer_km_price_cents, preparer_fixed_cents')
+        .eq('id', baseId)
+        .maybeSingle()
+    : Promise.resolve({ data: null });
+
+  const [settingsRes, routesRes, surchargesRes, prepRes, baseRes] = await Promise.all([
     settingsPromise,
     routesPromise,
     surchargesPromise,
     preparerPromise,
+    basePromise,
   ]);
 
   const settingsRows = ((settingsRes.data ?? []) as PlatformSettingRow[]) || [];
@@ -343,15 +358,15 @@ async function readPricingDefaults(preparerId?: string): Promise<PricingDefaults
   const surchargeRows = (surchargesRes.data ?? []) as Array<{
     id: string;
     name: string;
-    value_cents: number | null;
+    default_value_cents: number | null;
     surcharge_mode: 'automatic' | 'manual';
   }>;
   const surcharges: ShipmentSurcharge[] = surchargeRows
-    .filter((r) => Number.isFinite(Number(r.value_cents)) && Number(r.value_cents) > 0)
+    .filter((r) => Number.isFinite(Number(r.default_value_cents)) && Number(r.default_value_cents) > 0)
     .map((r) => ({
       id: r.id,
       name: r.name,
-      value_cents: Math.max(0, Math.round(Number(r.value_cents))),
+      value_cents: Math.max(0, Math.round(Number(r.default_value_cents))),
       surcharge_mode: r.surcharge_mode,
     }));
 
@@ -363,7 +378,21 @@ async function readPricingDefaults(preparerId?: string): Promise<PricingDefaults
       }
     : null;
 
-  return { preparer, globals, routes, surcharges };
+  const baseRow = (baseRes.data ?? null) as {
+    preparer_pricing_mode: 'per_km' | 'fixed' | null;
+    preparer_km_price_cents: number | null;
+    preparer_fixed_cents: number | null;
+  } | null;
+  const baseTariff =
+    baseRow && (baseRow.preparer_pricing_mode === 'per_km' || baseRow.preparer_pricing_mode === 'fixed')
+      ? {
+          mode: baseRow.preparer_pricing_mode,
+          km_price_cents: baseRow.preparer_km_price_cents ?? null,
+          fixed_cents: baseRow.preparer_fixed_cents ?? null,
+        }
+      : null;
+
+  return { preparer, globals, routes, surcharges, baseTariff };
 }
 
 export type ShipmentQuoteOk = {
@@ -401,10 +430,14 @@ export async function quoteShipmentForClient(params: {
   packageSize: 'pequeno' | 'medio' | 'grande';
   /** Quando informado, aplica override do preparador (nível 1 da hierarquia). */
   preparerId?: string;
+  /** Base resolvida da encomenda; se a base tiver tarifa, ela SOBREPÕE o global (global vira default). */
+  baseId?: string | null;
+  /** Viagem (rota) que levará a encomenda; aplica os ajustes da rota (fds/noturno/feriado) sobre a base. */
+  scheduledTripId?: string | null;
 }): Promise<ShipmentQuoteResponse> {
   let defaults: PricingDefaults;
   try {
-    defaults = await readPricingDefaults(params.preparerId);
+    defaults = await readPricingDefaults(params.preparerId, params.baseId);
   } catch {
     return { ok: false, error: 'Não foi possível carregar a tabela de preços. Tente novamente.' };
   }
@@ -443,7 +476,20 @@ export async function quoteShipmentForClient(params: {
   let baseCents: number;
   let adminPctApplied: number;
 
-  if (hasOverride) {
+  // Tarifa da BASE da encomenda tem precedência (sobrepõe override do preparador e global).
+  // por km: km(coleta→destino) × tarifa da base; fixo: valor fixo da base. Global vira default.
+  const baseTariff = defaults.baseTariff;
+  const baseTariffCents =
+    baseTariff?.mode === 'fixed'
+      ? baseTariff.fixed_cents
+      : baseTariff?.mode === 'per_km'
+        ? baseTariff.km_price_cents
+        : null;
+
+  if (baseTariff && baseTariffCents != null && baseTariffCents > 0) {
+    baseCents = baseTariff.mode === 'fixed' ? clampInt(baseTariffCents) : clampInt(km * baseTariffCents);
+    adminPctApplied = resolvedAdminPct;
+  } else if (hasOverride) {
     baseCents = clampInt((effDelivery ?? 0) + km * (effPerKm ?? 0));
     adminPctApplied = resolvedAdminPct;
   } else if (bestRoute) {
@@ -458,7 +504,23 @@ export async function quoteShipmentForClient(params: {
   }
 
   const pkgMul = defaults.globals.package_size_multipliers[params.packageSize];
-  const basePricedCents = clampInt(baseCents * pkgMul);
+  const basePricedRaw = clampInt(baseCents * pkgMul);
+
+  // Ajustes da ROTA definidos pelo motorista (fim de semana / noturno / feriado) — mesma regra
+  // de corrida/dependente: incidem como % sobre a base da encomenda que viaja nessa rota.
+  let timeSurchargePct = 0;
+  if (params.scheduledTripId) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (supabase as any)
+        .rpc('resolve_trip_time_surcharge_pct', { p_scheduled_trip_id: params.scheduledTripId });
+      const pct = Number(data);
+      if (Number.isFinite(pct) && pct > 0) timeSurchargePct = pct;
+    } catch {
+      /* sem ajuste de horário */
+    }
+  }
+  const basePricedCents = clampInt(basePricedRaw * (1 + timeSurchargePct / 100));
 
   const surchargesCents = defaults.surcharges.reduce((acc, s) => acc + s.value_cents, 0);
 
