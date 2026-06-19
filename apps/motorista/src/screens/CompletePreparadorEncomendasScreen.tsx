@@ -199,12 +199,13 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
     const expNum = parseInt(onlyDigits(experienceYears), 10);
     if (!expNum || expNum < 1 || expNum > 60) { showAlert('Atenção', 'Informe os anos de experiência (1–60).'); return; }
 
+    const phoneDigits = onlyDigits(vehiclePhone);
+    if (phoneDigits.length < 10) { showAlert('Atenção', 'Informe um telefone válido com DDD.'); return; }
+
     if (ownsVehicle) {
       if (!vehicleYear.trim() || onlyDigits(vehicleYear).length !== 4) { showAlert('Atenção', 'Informe o ano do veículo.'); return; }
       if (!vehicleModel.trim()) { showAlert('Atenção', 'Preencha o modelo do veículo.'); return; }
       if (!licensePlate.trim()) { showAlert('Atenção', 'Preencha a placa do veículo.'); return; }
-      const phoneDigits = onlyDigits(vehiclePhone);
-      if (phoneDigits.length < 10) { showAlert('Atenção', 'Informe um telefone válido com DDD.'); return; }
       if (!vehicleCapacity.trim()) { showAlert('Atenção', 'Preencha a capacidade do veículo.'); return; }
       if (!vehicleDocUri) { showAlert('Atenção', 'Envie o documento do veículo.'); return; }
       if (vehiclePhotosUris.length < 2) { showAlert('Atenção', 'Envie ao menos 2 fotos do veículo.'); return; }
@@ -250,6 +251,7 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
         full_name: fullName.trim(),
         cpf: cpfDigits,
         city: city.trim(),
+        phone: phoneDigits,
         updated_at: nowIso,
       }).eq('id', userId);
 
@@ -442,6 +444,18 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
           />
         </FieldBlock>
 
+        <FieldBlock label="Telefone">
+          <TextInput
+            style={styles.input}
+            placeholder="Ex: (11) 98765-4321"
+            placeholderTextColor="#767676"
+            value={vehiclePhone}
+            onChangeText={(t) => setVehiclePhone(formatPhoneBR(t))}
+            keyboardType="phone-pad"
+            maxLength={16}
+          />
+        </FieldBlock>
+
         <Text style={styles.sectionTitle}>Veículo de entrega</Text>
         <Text style={styles.fieldLabel}>Possui veículo próprio? (opcional)</Text>
         <View style={styles.radioGroup}>
@@ -480,17 +494,6 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
                 onChangeText={(t) => setLicensePlate(t.toUpperCase())}
                 autoCapitalize="characters"
                 maxLength={10}
-              />
-            </FieldBlock>
-            <FieldBlock label="Telefone">
-              <TextInput
-                style={styles.input}
-                placeholder="Ex: (11) 98765-4321"
-                placeholderTextColor="#767676"
-                value={vehiclePhone}
-                onChangeText={(t) => setVehiclePhone(formatPhoneBR(t))}
-                keyboardType="phone-pad"
-                maxLength={16}
               />
             </FieldBlock>
             <FieldBlock label="Capacidade de carga (volumes)">

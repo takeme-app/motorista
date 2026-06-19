@@ -1108,6 +1108,19 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
       createdAt: r.created_at ?? '',
       scheduledAt: r.scheduled_at ?? null,
       adminApprovedAt: r.admin_approved_at ?? null,
+      // PINs de handoff (para o painel exibir a cadeia A→B→C→D ou coleta/entrega). select('*') já traz.
+      baseId: r.base_id ?? null,
+      pickupCode: r.pickup_code ?? null,
+      deliveryCode: r.delivery_code ?? null,
+      passengerToPreparerCode: r.passenger_to_preparer_code ?? null,
+      preparerToBaseCode: r.preparer_to_base_code ?? null,
+      baseToDriverCode: r.base_to_driver_code ?? null,
+      pickedUpAt: r.picked_up_at ?? null,
+      deliveredAt: r.delivered_at ?? null,
+      pickedUpByPreparerAt: r.picked_up_by_preparer_at ?? null,
+      deliveredToBaseAt: r.delivered_to_base_at ?? null,
+      pickedUpByDriverFromBaseAt: r.picked_up_by_driver_from_base_at ?? null,
+      baseToDriverConfirmedAt: r.base_to_driver_confirmed_at ?? null,
     };
   }
   const { data: d, error: e2 } = await supabase.from('dependent_shipments').select('*').eq('id', id).maybeSingle();
@@ -3238,10 +3251,17 @@ export async function fetchSupportHistoryForClient(
     const shortId = String(r.id).replace(/-/g, '').slice(0, 8).toUpperCase();
     const cat = catLabel[r.category] || r.category || 'Atendimento';
     const closed = String(r.status) === 'closed';
+    // Placeholders automáticos de encomenda (trigger 20260412020000) → rótulo de tipo limpo.
+    const cleanLastMessage = (() => {
+      const m = typeof r.last_message === 'string' ? r.last_message.trim() : '';
+      if (m === 'Encomenda dependente aguardando aprovação') return 'Encomenda de dependente';
+      if (m === 'Encomenda grande aguardando aprovação') return 'Encomenda grande';
+      return m;
+    })();
     const preview = typeof r.finish_note === 'string' && r.finish_note.trim()
       ? r.finish_note.trim()
-      : typeof r.last_message === 'string' && r.last_message.trim()
-        ? r.last_message.trim()
+      : cleanLastMessage
+        ? cleanLastMessage
         : closed
           ? 'Atendimento encerrado.'
           : 'Solicitação em andamento.';

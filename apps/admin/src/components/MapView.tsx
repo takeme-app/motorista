@@ -35,6 +35,8 @@ export interface MapWaypoint extends MapCoord {
   /** Metadados opcionais para waypoints sintéticos de encomenda. */
   entityId?: string;
   shipmentLeg?: 'pickup' | 'dropoff';
+  /** PIN da parada (encomenda): coleta usa `pickup_code`, entrega usa `delivery_code`. */
+  code?: string | null;
 }
 
 export interface MapViewProps {
@@ -250,9 +252,9 @@ function createRoteiroWaypointMarkerElement(wp: MapWaypoint): HTMLDivElement {
   return createViagemAtivaStyleMarkerElement(bg, kind, wp.label, Boolean(wp.isNext));
 }
 
-/** Estilo claro minimal (referência de produto). */
-const MAPBOX_STYLE_LIGHT = 'mapbox://styles/mapbox/light-v11';
-const MAPBOX_STATIC_STYLE_LIGHT = 'mapbox/light-v11';
+/** Estilo de ruas colorido (alinhado ao app motorista, referência de produto). */
+const MAPBOX_STYLE_STREETS = 'mapbox://styles/mapbox/streets-v12';
+const MAPBOX_STATIC_STYLE_STREETS = 'mapbox/streets-v12';
 
 /**
  * No web, `mapbox://...` + token só em `mapboxgl.accessToken` por vezes resulta em mapa cinza
@@ -260,8 +262,8 @@ const MAPBOX_STATIC_STYLE_LIGHT = 'mapbox/light-v11';
  */
 function mapboxGlStyleUrl(token: string): string {
   const t = token.trim();
-  if (!t) return MAPBOX_STYLE_LIGHT;
-  return `https://api.mapbox.com/styles/v1/${MAPBOX_STATIC_STYLE_LIGHT}?access_token=${encodeURIComponent(t)}`;
+  if (!t) return MAPBOX_STYLE_STREETS;
+  return `https://api.mapbox.com/styles/v1/${MAPBOX_STATIC_STYLE_STREETS}?access_token=${encodeURIComponent(t)}`;
 }
 
 /** Padding na Static API: mais margem interna ajuda a não colar atribuição Mapbox na borda do PNG. */
@@ -393,6 +395,35 @@ function carMarkerOffsetPx(
   return dup ? [-22, 0] : [0, 0];
 }
 
+/**
+ * Desloca em px waypoints que partilham coordenadas mas são de encomendas diferentes
+ * (ex.: 2 envios do mesmo passageiro coletados no mesmo endereço) — assim os pins não
+ * se sobrepõem e cada PIN/#id fica visível. Retorna um offset [x,y] por índice.
+ */
+function overlapOffsetsForWaypoints(waypoints: MapWaypoint[]): Array<[number, number]> {
+  const offsets: Array<[number, number]> = waypoints.map(() => [0, 0]);
+  const seenAt: number[] = [];
+  for (let i = 0; i < waypoints.length; i += 1) {
+    const wp = waypoints[i];
+    // Quantos waypoints anteriores partilham coordenada e têm entidade distinta.
+    let rank = 0;
+    for (const j of seenAt) {
+      if (coordsNearlyEqual(waypoints[j], wp) && (waypoints[j].entityId ?? '') !== (wp.entityId ?? '')) {
+        rank += 1;
+      }
+    }
+    if (rank > 0) {
+      // Espalha em diagonal: 1ª colisão sobe-direita, 2ª desce-esquerda, etc.
+      const step = 18;
+      const dir = rank % 2 === 1 ? 1 : -1;
+      const mag = Math.ceil(rank / 2);
+      offsets[i] = [dir * step * mag, -dir * step * mag];
+    }
+    seenAt.push(i);
+  }
+  return offsets;
+}
+
 /** Inclui a polyline e todos os pins relevantes — evita cortar o motorista fora do viewport. */
 function fitMapToRouteAndMarkers(
   map: any,
@@ -451,13 +482,13 @@ function buildStaticUrl(origin?: MapCoord, destination?: MapCoord, width = 600, 
     // @see https://docs.mapbox.com/api/maps/static-images/#example-request-static-map-with-a-polyline-overlay
     const overlay = markers.join(',');
     // `STATIC_MAP_API_PADDING`: afasta o enquadramento da borda do tile e dá folga à atribuição no PNG.
-    return `https://api.mapbox.com/styles/v1/${MAPBOX_STATIC_STYLE_LIGHT}/static/${overlay}/auto/${width}x${height}@2x` +
+    return `https://api.mapbox.com/styles/v1/${MAPBOX_STATIC_STYLE_STREETS}/static/${overlay}/auto/${width}x${height}@2x` +
       `?access_token=${encodeURIComponent(token)}&padding=${STATIC_MAP_API_PADDING}`;
   }
 
   const center = origin || destination;
   if (center) {
-    return `https://api.mapbox.com/styles/v1/${MAPBOX_STATIC_STYLE_LIGHT}/static/${markers.join(',')}/${r6(center.lng)},${r6(center.lat)},11/` +
+    return `https://api.mapbox.com/styles/v1/${MAPBOX_STATIC_STYLE_STREETS}/static/${markers.join(',')}/${r6(center.lng)},${r6(center.lat)},11/` +
       `${width}x${height}@2x?access_token=${encodeURIComponent(token)}`;
   }
   return '';
@@ -483,7 +514,7 @@ function buildStaticUrlWithRoutePolyline(
   const pathOverlay = `path-4+c9a227-1(${enc})`;
   const overlay = `${pathOverlay},${pins}`;
   const u =
-    `https://api.mapbox.com/styles/v1/${MAPBOX_STATIC_STYLE_LIGHT}/static/${overlay}/auto/${width}x${height}@2x` +
+    `https://api.mapbox.com/styles/v1/${MAPBOX_STATIC_STYLE_STREETS}/static/${overlay}/auto/${width}x${height}@2x` +
     `?access_token=${encodeURIComponent(token)}&padding=${STATIC_MAP_API_PADDING}`;
   if (u.length > 7200) return '';
   return u;
@@ -874,7 +905,7 @@ export default function MapView(props: MapViewProps) {
         const accessToken = token.trim();
         (mapboxgl as any).accessToken = accessToken;
         const styleUrl =
-          Platform.OS === 'web' ? mapboxGlStyleUrl(accessToken) : MAPBOX_STYLE_LIGHT;
+          Platform.OS === 'web' ? mapboxGlStyleUrl(accessToken) : MAPBOX_STYLE_STREETS;
 
         const initialCenter =
           driverStart && Number.isFinite(driverStart.lat) && Number.isFinite(driverStart.lng)
@@ -991,10 +1022,11 @@ export default function MapView(props: MapViewProps) {
           }
 
           if (routeWaypoints.length > 0) {
-            routeWaypoints.forEach((wp) => {
+            const wpOffsets = overlapOffsetsForWaypoints(routeWaypoints);
+            routeWaypoints.forEach((wp, i) => {
               const el = createRoteiroWaypointMarkerElement(wp);
               markersRef.current.push(
-                new (mapboxgl as any).Marker({ element: el, anchor: MAP_MARKER_ANCHOR })
+                new (mapboxgl as any).Marker({ element: el, anchor: MAP_MARKER_ANCHOR, offset: wpOffsets[i] })
                   .setLngLat([wp.lng, wp.lat])
                   .addTo(m),
               );
@@ -1222,10 +1254,11 @@ export default function MapView(props: MapViewProps) {
     }
 
     if (routeWaypoints.length > 0) {
-      routeWaypoints.forEach((wp) => {
+      const wpOffsets = overlapOffsetsForWaypoints(routeWaypoints);
+      routeWaypoints.forEach((wp, i) => {
         const el = createRoteiroWaypointMarkerElement(wp);
         markersRef.current.push(
-          new mapboxgl.Marker({ element: el, anchor: MAP_MARKER_ANCHOR })
+          new mapboxgl.Marker({ element: el, anchor: MAP_MARKER_ANCHOR, offset: wpOffsets[i] })
             .setLngLat([wp.lng, wp.lat])
             .addTo(m),
         );

@@ -56,7 +56,32 @@ type ShipmentMapRow = {
   destination_lat?: unknown;
   destination_lng?: unknown;
   recipient_name?: string | null;
+  pickup_code?: string | null;
+  delivery_code?: string | null;
 };
+
+/** `#abcd1234` — identificador curto da encomenda no mapa. */
+function shortId(id: string | null | undefined): string {
+  const s = String(id ?? '').trim();
+  return s ? `#${s.slice(0, 8)}` : '';
+}
+
+/** Label distinto por envio: `Coleta/Entrega · <destinatário> · PIN <code> · #<id8>`. */
+function formatShipmentStopLabel(
+  leg: 'pickup' | 'dropoff',
+  shipment: { id: string; recipient_name?: string | null; pickup_code?: string | null; delivery_code?: string | null; origin_address?: string | null; destination_address?: string | null },
+): string {
+  const who =
+    (shipment.recipient_name && String(shipment.recipient_name).trim()) ||
+    ((leg === 'pickup' ? shipment.origin_address : shipment.destination_address) ?? '').split(',')[0]?.trim() ||
+    'Encomenda';
+  const code = (leg === 'pickup' ? shipment.pickup_code : shipment.delivery_code)?.trim();
+  const parts = [leg === 'pickup' ? 'Coleta' : 'Entrega', who];
+  if (code) parts.push(`PIN ${code}`);
+  const sid = shortId(shipment.id);
+  if (sid) parts.push(sid);
+  return parts.join(' · ');
+}
 
 type BookingMapRow = {
   id: string;
@@ -255,7 +280,7 @@ async function fetchSupplementalWaypointsForTrip(tripId: string, stops: TripStop
   const { data: shipRows, error: shipErr } = await supabase
     .from('shipments')
     .select(
-      'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, recipient_name, status',
+      'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, recipient_name, pickup_code, delivery_code, status',
     )
     .eq('scheduled_trip_id', tripId)
     .not('status', 'eq', 'cancelled');
@@ -269,7 +294,7 @@ async function fetchSupplementalWaypointsForTrip(tripId: string, stops: TripStop
           (async () => {
             const ll = await coordFromColumnsOrGeocode(s.origin_lat, s.origin_lng, s.origin_address ?? '');
             if (!ll) return null;
-            const label = (s.origin_address ?? '').split(',')[0]?.trim() || 'Recolha encomenda';
+            const label = formatShipmentStopLabel('pickup', s);
             return {
               lat: ll.lat,
               lng: ll.lng,
@@ -280,6 +305,7 @@ async function fetchSupplementalWaypointsForTrip(tripId: string, stops: TripStop
               completed: shipmentLegCompletedInStops(stops, sid, 'pickup'),
               entityId: sid,
               shipmentLeg: 'pickup' as const,
+              code: s.pickup_code ?? null,
             } satisfies MapWaypoint;
           })(),
         );
@@ -294,10 +320,7 @@ async function fetchSupplementalWaypointsForTrip(tripId: string, stops: TripStop
               s.destination_address ?? '',
             );
             if (!ll) return null;
-            const label =
-              (s.recipient_name && String(s.recipient_name).trim()) ||
-              (s.destination_address ?? '').split(',')[0]?.trim() ||
-              'Entrega encomenda';
+            const label = formatShipmentStopLabel('dropoff', s);
             return {
               lat: ll.lat,
               lng: ll.lng,
@@ -308,6 +331,7 @@ async function fetchSupplementalWaypointsForTrip(tripId: string, stops: TripStop
               completed: shipmentLegCompletedInStops(stops, sid, 'dropoff'),
               entityId: sid,
               shipmentLeg: 'dropoff' as const,
+              code: s.delivery_code ?? null,
             } satisfies MapWaypoint;
           })(),
         );
@@ -411,6 +435,7 @@ export function useTripStops(tripId: string | null | undefined): UseTripStopsRet
         type: s.stop_type,
         sortOrder: s.sequence_order ?? 0,
         completed: isTripStopStatusDone(s.status),
+        entityId: s.entity_id ?? undefined,
       }));
     const merged = [...fromStops, ...supplementalWaypoints].sort(
       (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0),

@@ -263,6 +263,19 @@ export type EncomendaEditDetail =
       scheduledAt: string | null;
       /** Encomenda grande: quando o admin aprovou (NULL = aguardando aprovação). */
       adminApprovedAt: string | null;
+      /** PINs de handoff (cadeia A→B→C→D com base, ou coleta/entrega direta). */
+      baseId: string | null;
+      pickupCode: string | null;
+      deliveryCode: string | null;
+      passengerToPreparerCode: string | null;
+      preparerToBaseCode: string | null;
+      baseToDriverCode: string | null;
+      pickedUpAt: string | null;
+      deliveredAt: string | null;
+      pickedUpByPreparerAt: string | null;
+      deliveredToBaseAt: string | null;
+      pickedUpByDriverFromBaseAt: string | null;
+      baseToDriverConfirmedAt: string | null;
     }
   | {
       kind: 'dependent_shipment';
