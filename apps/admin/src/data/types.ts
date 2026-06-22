@@ -633,6 +633,10 @@ export interface PricingRouteRow {
   accepted_payment_methods: string[];
   is_active: boolean;
   created_at: string;
+  /** Valor fixo por tamanho da ROTA (sobrepõe o global; null = usa global). Só driver. */
+  size_price_pequeno_cents?: number | null;
+  size_price_medio_cents?: number | null;
+  size_price_grande_cents?: number | null;
 }
 
 export type SurchargeType =

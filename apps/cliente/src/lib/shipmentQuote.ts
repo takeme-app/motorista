@@ -197,6 +197,41 @@ async function billableKmForShipment(
   return Math.max(0, haversineKm(originLat, originLng, destLat, destLng));
 }
 
+/**
+ * Valor fixo por tamanho da ROTA (pricing_routes do trecho do motorista), em centavos.
+ * Resolve scheduled_trip → worker_routes.pricing_route_id → pricing_routes.size_price_*.
+ * Retorna null quando não há override para o tamanho (o chamador cai no global).
+ */
+async function resolveRouteSizePriceCents(
+  scheduledTripId: string,
+  packageSize: 'pequeno' | 'medio' | 'grande',
+): Promise<number | null> {
+  try {
+    const sb = supabase as { from: (t: string) => any };
+    const { data: trip } = await sb
+      .from('scheduled_trips').select('route_id').eq('id', scheduledTripId).maybeSingle();
+    const routeId = trip?.route_id;
+    if (!routeId) return null;
+    const { data: wr } = await sb
+      .from('worker_routes').select('pricing_route_id').eq('id', routeId).maybeSingle();
+    const pricingRouteId = wr?.pricing_route_id;
+    if (!pricingRouteId) return null;
+    const { data: pr } = await sb
+      .from('pricing_routes')
+      .select('size_price_pequeno_cents, size_price_medio_cents, size_price_grande_cents')
+      .eq('id', pricingRouteId)
+      .maybeSingle();
+    if (!pr) return null;
+    const col =
+      packageSize === 'pequeno' ? pr.size_price_pequeno_cents
+        : packageSize === 'medio' ? pr.size_price_medio_cents
+          : pr.size_price_grande_cents;
+    return Number.isFinite(Number(col)) && Number(col) >= 0 ? Math.round(Number(col)) : null;
+  } catch {
+    return null;
+  }
+}
+
 function catalogBaseCentsFixed(route: PreparerShipmentPricingRoute): number {
   return clampInt(route.price_cents);
 }
@@ -252,8 +287,6 @@ type PricingDefaults = {
   /** Coordenadas da base (para as pernas Origem→Base e Base→Destino). */
   baseLat: number | null;
   baseLng: number | null;
-  /** Valor fixo por tamanho POR BASE (sobrepõe o global); null por tamanho = usa global. */
-  baseSizePrices: { pequeno: number | null; medio: number | null; grande: number | null } | null;
 };
 
 type PlatformSettingRow = { key: string; value: unknown };
@@ -329,7 +362,7 @@ async function readPricingDefaults(preparerId?: string, baseId?: string | null):
   const basePromise = baseId
     ? sb
         .from('bases')
-        .select('preparer_pricing_mode, preparer_km_price_cents, preparer_fixed_cents, lat, lng, size_price_pequeno_cents, size_price_medio_cents, size_price_grande_cents')
+        .select('preparer_pricing_mode, preparer_km_price_cents, preparer_fixed_cents, lat, lng')
         .eq('id', baseId)
         .maybeSingle()
     : Promise.resolve({ data: null });
@@ -388,19 +421,7 @@ async function readPricingDefaults(preparerId?: string, baseId?: string | null):
     preparer_fixed_cents: number | null;
     lat: number | null;
     lng: number | null;
-    size_price_pequeno_cents: number | null;
-    size_price_medio_cents: number | null;
-    size_price_grande_cents: number | null;
   } | null;
-  const sizeCentOrNull = (v: unknown): number | null =>
-    Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.round(Number(v)) : null;
-  const baseSizePrices = baseRow
-    ? {
-        pequeno: sizeCentOrNull(baseRow.size_price_pequeno_cents),
-        medio: sizeCentOrNull(baseRow.size_price_medio_cents),
-        grande: sizeCentOrNull(baseRow.size_price_grande_cents),
-      }
-    : null;
   const baseTariff =
     baseRow && (baseRow.preparer_pricing_mode === 'per_km' || baseRow.preparer_pricing_mode === 'fixed')
       ? {
@@ -412,7 +433,7 @@ async function readPricingDefaults(preparerId?: string, baseId?: string | null):
   const baseLat = baseRow && Number.isFinite(Number(baseRow.lat)) ? Number(baseRow.lat) : null;
   const baseLng = baseRow && Number.isFinite(Number(baseRow.lng)) ? Number(baseRow.lng) : null;
 
-  return { preparer, globals, routes, surcharges, baseTariff, baseLat, baseLng, baseSizePrices };
+  return { preparer, globals, routes, surcharges, baseTariff, baseLat, baseLng };
 }
 
 export type ShipmentQuoteOk = {
@@ -490,11 +511,13 @@ export async function quoteShipmentForClient(params: {
   const tsMul = 1 + timeSurchargePct / 100;
 
   // Valor fixo por tamanho do pacote (somado ao repasse do motorista).
-  // Override POR BASE sobrepõe o global; null/ausente por tamanho → usa o global.
-  const baseSizeOverride = defaults.baseSizePrices?.[params.packageSize] ?? null;
+  // Override POR ROTA do motorista (trecho) sobrepõe o global; sem viagem/override → global.
+  const routeSizeOverride = params.scheduledTripId
+    ? await resolveRouteSizePriceCents(params.scheduledTripId, params.packageSize)
+    : null;
   const sizeFixedCents =
-    baseSizeOverride != null
-      ? baseSizeOverride
+    routeSizeOverride != null
+      ? routeSizeOverride
       : defaults.globals.package_size_prices_cents[params.packageSize] ?? 0;
 
   // Modelo de pernas só quando há base com coordenadas.

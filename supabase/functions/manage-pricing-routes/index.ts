@@ -113,6 +113,13 @@ Deno.serve(async (req) => {
         accepted_payment_methods?: string[];
         departure_at?: string;
         return_at?: string;
+        origin_lat?: number;
+        origin_lng?: number;
+        destination_lat?: number;
+        destination_lng?: number;
+        size_price_pequeno_cents?: number | null;
+        size_price_medio_cents?: number | null;
+        size_price_grande_cents?: number | null;
         surcharges?: Array<{
           surcharge_id: string;
           value_cents?: number;
@@ -155,6 +162,9 @@ Deno.serve(async (req) => {
           origin_lng: typeof body.origin_lng === "number" ? body.origin_lng : null,
           destination_lat: typeof body.destination_lat === "number" ? body.destination_lat : null,
           destination_lng: typeof body.destination_lng === "number" ? body.destination_lng : null,
+          size_price_pequeno_cents: typeof body.size_price_pequeno_cents === "number" ? body.size_price_pequeno_cents : null,
+          size_price_medio_cents: typeof body.size_price_medio_cents === "number" ? body.size_price_medio_cents : null,
+          size_price_grande_cents: typeof body.size_price_grande_cents === "number" ? body.size_price_grande_cents : null,
           created_by: user.id,
         })
         .select()
@@ -246,6 +256,9 @@ Deno.serve(async (req) => {
         "origin_lng",
         "destination_lat",
         "destination_lng",
+        "size_price_pequeno_cents",
+        "size_price_medio_cents",
+        "size_price_grande_cents",
       ];
       const updates: Record<string, unknown> = {};
       for (const key of allowedFields) {

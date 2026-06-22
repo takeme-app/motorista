@@ -247,6 +247,10 @@ export default function PagamentosGestaoScreen() {
   const [editEncRow, setEditEncRow] = useState<EncomendaTrechoRow | null>(null);
   const [editEncTipo, setEditEncTipo] = useState('');
   const [editEncValor, setEditEncValor] = useState('');
+  // Valor fixo por tamanho da rota (só linhas de Motorista); vazio = usa o global.
+  const [editEncSizeP, setEditEncSizeP] = useState('');
+  const [editEncSizeM, setEditEncSizeM] = useState('');
+  const [editEncSizeG, setEditEncSizeG] = useState('');
   const abrirEditEnc = useCallback((row: EncomendaTrechoRow) => {
     setEditEncRow(row);
     setEditEncTipo(row.tipo === 'Não definido' ? 'Por KM' : row.tipo);
@@ -270,13 +274,27 @@ export default function PagamentosGestaoScreen() {
         }
       } else {
         // Aba Trecho = pricing_routes (3 categorias); propaga aos worker_routes vinculados (edge).
-        const { error } = await updatePricingRoute(editEncRow.id, { price_cents: valNum });
+        // Valor fixo por tamanho só faz sentido na rota do Motorista (vazio = usa global).
+        const parseSize = (s: string): number | null => {
+          const t = s.trim();
+          if (!t) return null;
+          const c = Math.round(parseFloat(t.replace('R$', '').replace(/\./g, '').replace(',', '.').trim()) * 100);
+          return Number.isFinite(c) && c > 0 ? c : null;
+        };
+        const sizePatch = editEncRow.tipo === 'Motorista'
+          ? {
+              size_price_pequeno_cents: parseSize(editEncSizeP),
+              size_price_medio_cents: parseSize(editEncSizeM),
+              size_price_grande_cents: parseSize(editEncSizeG),
+            }
+          : {};
+        const { error } = await updatePricingRoute(editEncRow.id, { price_cents: valNum, ...sizePatch });
         if (error) { window.alert(`Erro ao salvar valor do trecho: ${error}`); return; }
         await refreshTrechoRoutes();
       }
     }
     setEditEncOpen(false);
-  }, [editEncRow, editEncTipo, editEncValor, activeTab]);
+  }, [editEncRow, editEncTipo, editEncValor, editEncSizeP, editEncSizeM, editEncSizeG, activeTab]);
   const confirmarRemoveEnc = useCallback(async () => {
     if (editEncRow?.id) {
       // A lista de Trecho mistura as 3 categorias (driver/excursões/encomendas) — refazer todas.
@@ -436,6 +454,17 @@ export default function PagamentosGestaoScreen() {
     setPricingExcRoutes(x);
     setPricingEncRoutes(e);
   }, []);
+
+  // Prefill dos valores por tamanho ao abrir o modal de editar trecho (só linhas de Motorista).
+  useEffect(() => {
+    if (!editEncOpen || editEncRow?.tipo !== 'Motorista') return;
+    const r = pricingDriverRoutes.find((x) => x.id === editEncRow.id);
+    const toBRL = (c: number | null | undefined) =>
+      c != null && Number.isFinite(c) ? (c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
+    setEditEncSizeP(toBRL(r?.size_price_pequeno_cents));
+    setEditEncSizeM(toBRL(r?.size_price_medio_cents));
+    setEditEncSizeG(toBRL(r?.size_price_grande_cents));
+  }, [editEncOpen, editEncRow, pricingDriverRoutes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1401,7 +1430,21 @@ export default function PagamentosGestaoScreen() {
                 onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEditEncValor(maskBRL(e.target.value)),
                 placeholder: 'R$ 75,00',
                 style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: editEncValor ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
-              }))),
+              })),
+            // Valor fixo por tamanho (só rota de Motorista; vazio = usa o global)
+            editEncRow?.tipo === 'Motorista'
+              ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
+                React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Valor fixo por tamanho (sobrepõe o global)'),
+                React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Somado ao motorista por encomenda neste trecho. Em branco, usa o global.'),
+                ...([['Pequeno', editEncSizeP, setEditEncSizeP], ['Médio', editEncSizeM, setEditEncSizeM], ['Grande', editEncSizeG, setEditEncSizeG]] as const).map(([lbl, val, set]) =>
+                  React.createElement('input', {
+                    key: lbl,
+                    type: 'text', inputMode: 'decimal', value: val,
+                    onChange: (e: React.ChangeEvent<HTMLInputElement>) => set(maskBRL(e.target.value)),
+                    placeholder: `${lbl} — usa global`,
+                    style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: val ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
+                  })))
+              : null),
           // CTA
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
             React.createElement('button', {
