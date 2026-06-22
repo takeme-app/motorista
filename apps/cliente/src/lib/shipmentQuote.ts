@@ -198,9 +198,11 @@ async function billableKmForShipment(
 }
 
 /**
- * Valor fixo por tamanho da ROTA (pricing_routes do trecho do motorista), em centavos.
- * Resolve scheduled_trip → worker_routes.pricing_route_id → pricing_routes.size_price_*.
- * Retorna null quando não há override para o tamanho (o chamador cai no global).
+ * Valor fixo por tamanho da ROTA (trecho de Motorista), em centavos.
+ * Casa por ORIGEM/DESTINO: scheduled_trip → worker_routes(origin/destination) →
+ * melhor trecho `pricing_routes` role 'driver' com mesma origem→destino (não depende
+ * do vínculo de importação). Assim um trecho novo/editado vale para rotas já existentes.
+ * Retorna null quando não há trecho casado ou sem override p/ o tamanho (cai no global).
  */
 async function resolveRouteSizePriceCents(
   scheduledTripId: string,
@@ -213,19 +215,31 @@ async function resolveRouteSizePriceCents(
     const routeId = trip?.route_id;
     if (!routeId) return null;
     const { data: wr } = await sb
-      .from('worker_routes').select('pricing_route_id').eq('id', routeId).maybeSingle();
-    const pricingRouteId = wr?.pricing_route_id;
-    if (!pricingRouteId) return null;
-    const { data: pr } = await sb
+      .from('worker_routes').select('origin_address, destination_address').eq('id', routeId).maybeSingle();
+    if (!wr) return null;
+    const wOrigin = String(wr.origin_address ?? '');
+    const wDest = String(wr.destination_address ?? '');
+    if (!wDest.trim()) return null;
+    const { data: rows } = await sb
       .from('pricing_routes')
-      .select('size_price_pequeno_cents, size_price_medio_cents, size_price_grande_cents')
-      .eq('id', pricingRouteId)
-      .maybeSingle();
-    if (!pr) return null;
+      .select('origin_address, destination_address, size_price_pequeno_cents, size_price_medio_cents, size_price_grande_cents')
+      .eq('role_type', 'driver')
+      .eq('is_active', true);
+    if (!rows?.length) return null;
+    // Melhor casamento por origem (opcional) + destino (obrigatório).
+    let best: any = null;
+    let bestScore = 0;
+    for (const r of rows as any[]) {
+      const oScore = scoreAddressMatch(wOrigin, r.origin_address, true);
+      const dScore = scoreAddressMatch(wDest, r.destination_address, false);
+      const score = (oScore + dScore) / 2;
+      if (score > bestScore) { bestScore = score; best = r; }
+    }
+    if (!best || bestScore < MATCH_SCORE_STRICT) return null;
     const col =
-      packageSize === 'pequeno' ? pr.size_price_pequeno_cents
-        : packageSize === 'medio' ? pr.size_price_medio_cents
-          : pr.size_price_grande_cents;
+      packageSize === 'pequeno' ? best.size_price_pequeno_cents
+        : packageSize === 'medio' ? best.size_price_medio_cents
+          : best.size_price_grande_cents;
     return Number.isFinite(Number(col)) && Number(col) >= 0 ? Math.round(Number(col)) : null;
   } catch {
     return null;

@@ -637,9 +637,9 @@ export default function PagamentoCriarTrechoScreen() {
     React.createElement('p', { style: { margin: '0 0 4px', fontSize: 12, color: '#767676', lineHeight: 1.5, ...font } },
       'Somado ao repasse do motorista conforme o tamanho do pacote, para encomendas que rodam neste trecho. Em branco, usa o valor global definido em Configurações.'),
     React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
-      fieldText('Pacote pequeno (R$)', f.encSizePequeno, (v) => patch({ encSizePequeno: maskBRL(v) }), 'Usa global'),
-      fieldText('Pacote médio (R$)', f.encSizeMedio, (v) => patch({ encSizeMedio: maskBRL(v) }), 'Usa global'),
-      fieldText('Pacote grande (R$)', f.encSizeGrande, (v) => patch({ encSizeGrande: maskBRL(v) }), 'Usa global')));
+      fieldText('Encomenda pequena (R$)', f.encSizePequeno, (v) => patch({ encSizePequeno: maskBRL(v) }), 'Usa global'),
+      fieldText('Encomenda média (R$)', f.encSizeMedio, (v) => patch({ encSizeMedio: maskBRL(v) }), 'Usa global'),
+      fieldText('Encomenda grande (R$)', f.encSizeGrande, (v) => patch({ encSizeGrande: maskBRL(v) }), 'Usa global')));
 
   const cardDados = tab === 'prep_enc' ? cardDadosEnc : cardDadosStd;
 

@@ -1436,14 +1436,15 @@ export default function PagamentosGestaoScreen() {
               ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
                 React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Valor fixo por tamanho (sobrepõe o global)'),
                 React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Somado ao motorista por encomenda neste trecho. Em branco, usa o global.'),
-                ...([['Pequeno', editEncSizeP, setEditEncSizeP], ['Médio', editEncSizeM, setEditEncSizeM], ['Grande', editEncSizeG, setEditEncSizeG]] as const).map(([lbl, val, set]) =>
-                  React.createElement('input', {
-                    key: lbl,
-                    type: 'text', inputMode: 'decimal', value: val,
-                    onChange: (e: React.ChangeEvent<HTMLInputElement>) => set(maskBRL(e.target.value)),
-                    placeholder: `${lbl} — usa global`,
-                    style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: val ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
-                  })))
+                ...([['Encomenda pequena (R$)', editEncSizeP, setEditEncSizeP], ['Encomenda média (R$)', editEncSizeM, setEditEncSizeM], ['Encomenda grande (R$)', editEncSizeG, setEditEncSizeG]] as const).map(([lbl, val, set]) =>
+                  React.createElement('div', { key: lbl, style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+                    React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, lbl),
+                    React.createElement('input', {
+                      type: 'text', inputMode: 'decimal', value: val,
+                      onChange: (e: React.ChangeEvent<HTMLInputElement>) => set(maskBRL(e.target.value)),
+                      placeholder: 'Usa global',
+                      style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: val ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
+                    }))))
               : null),
           // CTA
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
