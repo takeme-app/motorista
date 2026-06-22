@@ -315,7 +315,6 @@ export default function ConfiguracoesScreen() {
   const { settings: platSettings, updateSetting, loading: platLoading } = usePlatformSettings();
   const [gasPrice, setGasPrice] = useState('');
   const [kmPrice, setKmPrice] = useState('');
-  const [baseDeliveryPrice, setBaseDeliveryPrice] = useState('');
   // Valor fixo por tamanho do pacote (somado à base por km nas encomendas).
   const [sizePequeno, setSizePequeno] = useState('');
   const [sizeMedio, setSizeMedio] = useState('');
@@ -333,9 +332,6 @@ export default function ConfiguracoesScreen() {
     if (!platLoading) {
       setGasPrice(String((platSettings.gas_price_cents ?? 599) / 100));
       setKmPrice(String((platSettings.km_price_cents ?? 150) / 100));
-      setBaseDeliveryPrice(
-        String((platSettings.shipment_base_delivery_fee_cents ?? 500) / 100),
-      );
       const sizePrices = (platSettings.shipment_package_size_prices_cents ?? {}) as Record<string, number>;
       setSizePequeno(String((Number(sizePrices.pequeno) || 0) / 100));
       setSizeMedio(String((Number(sizePrices.medio) || 0) / 100));
@@ -362,7 +358,6 @@ export default function ConfiguracoesScreen() {
   const savePlatformSettings = useCallback(async () => {
     const gasCents = Math.round(parseFloat(gasPrice || '0') * 100);
     const kmCents = Math.round(parseFloat(kmPrice || '0') * 100);
-    const baseDeliveryCents = Math.round(parseFloat(baseDeliveryPrice || '0') * 100);
     const sizePricesCents = {
       pequeno: Math.max(0, Math.round(parseFloat(sizePequeno || '0') * 100)),
       medio: Math.max(0, Math.round(parseFloat(sizeMedio || '0') * 100)),
@@ -404,7 +399,6 @@ export default function ConfiguracoesScreen() {
       updateSetting('platform_fee_pct_by_service', servicePayload.value),
       updateSetting('gas_price_cents', gasCents),
       updateSetting('km_price_cents', kmCents),
-      updateSetting('shipment_base_delivery_fee_cents', baseDeliveryCents),
       updateSetting('shipment_package_size_prices_cents', sizePricesCents),
       updateSetting('booking_cancellation_free_window_hours', cancelHours),
       updateSetting('driver_cancellation_penalty_pct', penaltyPct),
@@ -416,7 +410,6 @@ export default function ConfiguracoesScreen() {
   }, [
     gasPrice,
     kmPrice,
-    baseDeliveryPrice,
     sizePequeno,
     sizeMedio,
     sizeGrande,
@@ -693,13 +686,6 @@ export default function ConfiguracoesScreen() {
         kmPrice,
         setKmPrice,
         '1.50',
-        'Usado como padrão em encomendas. Preparadores podem sobrescrever no próprio cadastro.',
-      ),
-      platInput(
-        'Valor base por entrega (R$)',
-        baseDeliveryPrice,
-        setBaseDeliveryPrice,
-        '5.00',
         'Usado como padrão em encomendas. Preparadores podem sobrescrever no próprio cadastro.',
       )),
     React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: '8px 0 0 0', ...font } }, 'Valor fixo por tamanho do pacote'),

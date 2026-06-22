@@ -76,6 +76,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
     priceRouteBaseCents,
     pricingRouteId,
     adminPctApplied,
+    preparerPayoutCents,
     clientPreferredDriverId,
     resolvedBaseId: resolvedBaseIdParam,
     scheduledTripId,
@@ -303,6 +304,18 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
           photo_paths: photoPathsJson,
           payment_method: paymentMethodDb,
           ...pricingInsertRow,
+          // Modelo de pernas (encomenda com base): preparador = perna Origem→Base;
+          // motorista fica com o restante do repasse (perna Base→Destino + tamanho).
+          ...(preparerPayoutCents && preparerPayoutCents > 0
+            ? {
+                preparer_payout_cents: Math.round(preparerPayoutCents),
+                worker_earning_cents: Math.max(
+                  0,
+                  Math.round(Number((pricingInsertRow as { worker_earning_cents?: number }).worker_earning_cents ?? 0)) -
+                    Math.round(preparerPayoutCents),
+                ),
+              }
+            : {}),
           status,
           ...(baseIdForInsert ? { base_id: baseIdForInsert } : {}),
         };

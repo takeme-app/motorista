@@ -3394,6 +3394,10 @@ export type BaseListItem = {
   preparerPricingMode: 'per_km' | 'fixed' | null;
   preparerKmPriceCents: number | null;
   preparerFixedCents: number | null;
+  /** Valor fixo por tamanho POR BASE (sobrepõe o global; NULL = usa global). */
+  sizePricePequenoCents: number | null;
+  sizePriceMedioCents: number | null;
+  sizePriceGrandeCents: number | null;
 };
 
 export async function fetchBases(): Promise<BaseListItem[]> {
@@ -3401,7 +3405,7 @@ export async function fetchBases(): Promise<BaseListItem[]> {
   const { data, error } = await sb
     .from('bases')
     .select(
-      'id, name, address, city, state, lat, lng, is_active, created_at, preparer_pricing_mode, preparer_km_price_cents, preparer_fixed_cents',
+      'id, name, address, city, state, lat, lng, is_active, created_at, preparer_pricing_mode, preparer_km_price_cents, preparer_fixed_cents, size_price_pequeno_cents, size_price_medio_cents, size_price_grande_cents',
     )
     .order('created_at', { ascending: false });
 
@@ -3419,22 +3423,35 @@ export async function fetchBases(): Promise<BaseListItem[]> {
     preparerPricingMode: (b.preparer_pricing_mode as 'per_km' | 'fixed' | null) ?? null,
     preparerKmPriceCents: b.preparer_km_price_cents ?? null,
     preparerFixedCents: b.preparer_fixed_cents ?? null,
+    sizePricePequenoCents: b.size_price_pequeno_cents ?? null,
+    sizePriceMedioCents: b.size_price_medio_cents ?? null,
+    sizePriceGrandeCents: b.size_price_grande_cents ?? null,
   }));
 }
 
 /** Atualiza o pagamento do preparador de encomendas de uma base (por km ou valor fixo). */
 export async function updateBasePreparerPricing(
   id: string,
-  input: { mode: 'per_km' | 'fixed'; kmCents?: number | null; fixedCents?: number | null },
+  input: {
+    mode: 'per_km' | 'fixed';
+    kmCents?: number | null;
+    fixedCents?: number | null;
+    /** Valor fixo por tamanho POR BASE (sobrepõe o global). null = limpa override (usa global). */
+    sizePequenoCents?: number | null;
+    sizeMedioCents?: number | null;
+    sizeGrandeCents?: number | null;
+  },
 ): Promise<{ error: string | null }> {
   if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
-  const { error } = await (sb.from('bases') as any)
-    .update({
-      preparer_pricing_mode: input.mode,
-      preparer_km_price_cents: input.mode === 'per_km' ? (input.kmCents ?? null) : null,
-      preparer_fixed_cents: input.mode === 'fixed' ? (input.fixedCents ?? null) : null,
-    })
-    .eq('id', id);
+  const patch: Record<string, unknown> = {
+    preparer_pricing_mode: input.mode,
+    preparer_km_price_cents: input.mode === 'per_km' ? (input.kmCents ?? null) : null,
+    preparer_fixed_cents: input.mode === 'fixed' ? (input.fixedCents ?? null) : null,
+  };
+  if ('sizePequenoCents' in input) patch.size_price_pequeno_cents = input.sizePequenoCents ?? null;
+  if ('sizeMedioCents' in input) patch.size_price_medio_cents = input.sizeMedioCents ?? null;
+  if ('sizeGrandeCents' in input) patch.size_price_grande_cents = input.sizeGrandeCents ?? null;
+  const { error } = await (sb.from('bases') as any).update(patch).eq('id', id);
   return { error: error ? (error as Error).message : null };
 }
 
@@ -3476,6 +3493,9 @@ export async function createBase(input: CreateBaseInput): Promise<BaseListItem |
     preparerPricingMode: (data.preparer_pricing_mode as 'per_km' | 'fixed' | null) ?? null,
     preparerKmPriceCents: data.preparer_km_price_cents ?? null,
     preparerFixedCents: data.preparer_fixed_cents ?? null,
+    sizePricePequenoCents: data.size_price_pequeno_cents ?? null,
+    sizePriceMedioCents: data.size_price_medio_cents ?? null,
+    sizePriceGrandeCents: data.size_price_grande_cents ?? null,
   };
 }
 

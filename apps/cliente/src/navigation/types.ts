@@ -91,6 +91,8 @@ export type ShipmentStackParamList = {
     platformFeeCents?: number;
     amountCents?: number;
     adminPctApplied?: number;
+    /** Perna Origem→Base (repasse do preparador); 0 quando não há base. */
+    preparerPayoutCents?: number;
     clientPreferredDriverId?: string;
     resolvedBaseId?: string | null;
     scheduledTripDepartureAt?: string | null;
@@ -118,6 +120,8 @@ export type ShipmentStackParamList = {
     pricingRouteId: string | null;
     /** % admin aplicada (snapshot). */
     adminPctApplied: number;
+    /** Perna Origem→Base (repasse do preparador); 0 quando não há base. */
+    preparerPayoutCents?: number;
     /** Motorista/preparador escolhido pelo cliente (opcional). */
     clientPreferredDriverId?: string;
     /** Base operacional resolvida pelo hub (ou `null` quando não existe). */

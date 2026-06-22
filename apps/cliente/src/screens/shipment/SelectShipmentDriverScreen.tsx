@@ -223,6 +223,7 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
       priceRouteBaseCents: effectiveQuote.priceRouteBaseCents,
       pricingRouteId: effectiveQuote.pricingRouteId,
       adminPctApplied: effectiveQuote.adminPctApplied,
+      preparerPayoutCents: effectiveQuote.preparerPayoutCents,
       resolvedBaseId,
       clientPreferredDriverId: sel.driver_id,
       scheduledTripDepartureAt: sel.departure_at,

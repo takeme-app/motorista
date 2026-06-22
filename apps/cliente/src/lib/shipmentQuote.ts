@@ -249,6 +249,11 @@ type PricingDefaults = {
     km_price_cents: number | null;
     fixed_cents: number | null;
   } | null;
+  /** Coordenadas da base (para as pernas Origem→Base e Base→Destino). */
+  baseLat: number | null;
+  baseLng: number | null;
+  /** Valor fixo por tamanho POR BASE (sobrepõe o global); null por tamanho = usa global. */
+  baseSizePrices: { pequeno: number | null; medio: number | null; grande: number | null } | null;
 };
 
 type PlatformSettingRow = { key: string; value: unknown };
@@ -324,7 +329,7 @@ async function readPricingDefaults(preparerId?: string, baseId?: string | null):
   const basePromise = baseId
     ? sb
         .from('bases')
-        .select('preparer_pricing_mode, preparer_km_price_cents, preparer_fixed_cents')
+        .select('preparer_pricing_mode, preparer_km_price_cents, preparer_fixed_cents, lat, lng, size_price_pequeno_cents, size_price_medio_cents, size_price_grande_cents')
         .eq('id', baseId)
         .maybeSingle()
     : Promise.resolve({ data: null });
@@ -381,7 +386,21 @@ async function readPricingDefaults(preparerId?: string, baseId?: string | null):
     preparer_pricing_mode: 'per_km' | 'fixed' | null;
     preparer_km_price_cents: number | null;
     preparer_fixed_cents: number | null;
+    lat: number | null;
+    lng: number | null;
+    size_price_pequeno_cents: number | null;
+    size_price_medio_cents: number | null;
+    size_price_grande_cents: number | null;
   } | null;
+  const sizeCentOrNull = (v: unknown): number | null =>
+    Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.round(Number(v)) : null;
+  const baseSizePrices = baseRow
+    ? {
+        pequeno: sizeCentOrNull(baseRow.size_price_pequeno_cents),
+        medio: sizeCentOrNull(baseRow.size_price_medio_cents),
+        grande: sizeCentOrNull(baseRow.size_price_grande_cents),
+      }
+    : null;
   const baseTariff =
     baseRow && (baseRow.preparer_pricing_mode === 'per_km' || baseRow.preparer_pricing_mode === 'fixed')
       ? {
@@ -390,8 +409,10 @@ async function readPricingDefaults(preparerId?: string, baseId?: string | null):
           fixed_cents: baseRow.preparer_fixed_cents ?? null,
         }
       : null;
+  const baseLat = baseRow && Number.isFinite(Number(baseRow.lat)) ? Number(baseRow.lat) : null;
+  const baseLng = baseRow && Number.isFinite(Number(baseRow.lng)) ? Number(baseRow.lng) : null;
 
-  return { preparer, globals, routes, surcharges, baseTariff };
+  return { preparer, globals, routes, surcharges, baseTariff, baseLat, baseLng, baseSizePrices };
 }
 
 export type ShipmentQuoteOk = {
@@ -410,8 +431,10 @@ export type ShipmentQuoteOk = {
   platformFeeCents: number;
   /** Valor final cobrado (já com gross-up da taxa admin). */
   amountCents: number;
-  /** Parte do preparador/motorista na cobrança (= base, sem promoção nesta etapa). */
+  /** Parte do MOTORISTA na cobrança (com base: perna Base→Destino + tamanho; sem base: base inteira). */
   workerEarningCents: number;
+  /** Parte do PREPARADOR (perna Origem→Base). 0 quando não há base. */
+  preparerPayoutCents: number;
   /** Parte da plataforma (= admin_fee + adicionais). */
   adminEarningCents: number;
   adminPctApplied: number;
@@ -441,12 +464,6 @@ export async function quoteShipmentForClient(params: {
     return { ok: false, error: 'Não foi possível carregar a tabela de preços. Tente novamente.' };
   }
 
-  const km = await billableKmForShipment(
-    params.originLat,
-    params.originLng,
-    params.destinationLat,
-    params.destinationLng,
-  );
   const serviceType: PlatformFeeServiceType = params.preparerId
     ? 'shipment_preparer'
     : 'shipment_driver';
@@ -455,59 +472,9 @@ export async function quoteShipmentForClient(params: {
     serviceType,
     defaults.globals.default_admin_pct ?? DEFAULT_ADMIN_PCT_FALLBACK,
   );
+  const adminPctApplied = resolvedAdminPct;
 
-  // Tarifas efetivas após precedência (preparador > admin global).
-  const effPerKm =
-    defaults.preparer?.shipment_per_km_fee_cents ?? defaults.globals.km_price_cents ?? null;
-  const effDelivery =
-    defaults.preparer?.shipment_delivery_fee_cents ??
-    defaults.globals.shipment_base_delivery_fee_cents ??
-    null;
-  const hasOverride = effPerKm != null || effDelivery != null;
-
-  // Route do catálogo (pode ser usada como base ou apenas como FK/âncora histórica).
-  const bestRoute = pickBestRoutePreferPerKm(
-    defaults.routes,
-    params.originAddress,
-    params.destinationAddress,
-  );
-
-  let baseCents: number;
-  let adminPctApplied: number;
-
-  // Tarifa da BASE da encomenda tem precedência (sobrepõe override do preparador e global).
-  // por km: km(coleta→destino) × tarifa da base; fixo: valor fixo da base. Global vira default.
-  const baseTariff = defaults.baseTariff;
-  const baseTariffCents =
-    baseTariff?.mode === 'fixed'
-      ? baseTariff.fixed_cents
-      : baseTariff?.mode === 'per_km'
-        ? baseTariff.km_price_cents
-        : null;
-
-  if (baseTariff && baseTariffCents != null && baseTariffCents > 0) {
-    baseCents = baseTariff.mode === 'fixed' ? clampInt(baseTariffCents) : clampInt(km * baseTariffCents);
-    adminPctApplied = resolvedAdminPct;
-  } else if (hasOverride) {
-    baseCents = clampInt((effDelivery ?? 0) + km * (effPerKm ?? 0));
-    adminPctApplied = resolvedAdminPct;
-  } else if (bestRoute) {
-    baseCents = await catalogBaseCentsAsync(bestRoute, km);
-    adminPctApplied = resolvedAdminPct;
-  } else {
-    return {
-      ok: false,
-      error:
-        'Ainda não há preços de encomenda configurados. Peça ao administrador para definir os valores padrão em Configurações.',
-    };
-  }
-
-  // Tamanho do pacote = valor fixo (em centavos) SOMADO à base por km — não multiplicador.
-  const sizeFixedCents = defaults.globals.package_size_prices_cents[params.packageSize] ?? 0;
-  const basePricedRaw = clampInt(baseCents + sizeFixedCents);
-
-  // Ajustes da ROTA definidos pelo motorista (fim de semana / noturno / feriado) — mesma regra
-  // de corrida/dependente: incidem como % sobre a base da encomenda que viaja nessa rota.
+  // Ajuste de horário da ROTA (fim de semana / noturno / feriado) — % sobre a base.
   let timeSurchargePct = 0;
   if (params.scheduledTripId) {
     try {
@@ -520,7 +487,91 @@ export async function quoteShipmentForClient(params: {
       /* sem ajuste de horário */
     }
   }
-  const basePricedCents = clampInt(basePricedRaw * (1 + timeSurchargePct / 100));
+  const tsMul = 1 + timeSurchargePct / 100;
+
+  // Valor fixo por tamanho do pacote (somado ao repasse do motorista).
+  // Override POR BASE sobrepõe o global; null/ausente por tamanho → usa o global.
+  const baseSizeOverride = defaults.baseSizePrices?.[params.packageSize] ?? null;
+  const sizeFixedCents =
+    baseSizeOverride != null
+      ? baseSizeOverride
+      : defaults.globals.package_size_prices_cents[params.packageSize] ?? 0;
+
+  // Modelo de pernas só quando há base com coordenadas.
+  const hasBaseLeg =
+    params.baseId != null &&
+    defaults.baseLat != null && defaults.baseLng != null &&
+    Number.isFinite(params.originLat) && Number.isFinite(params.originLng) &&
+    Number.isFinite(params.destinationLat) && Number.isFinite(params.destinationLng);
+
+  let basePricedCents: number;                  // base p/ gross-up (= soma dos repasses)
+  let preparerPayoutCents = 0;                  // perna Origem→Base (preparador)
+  let workerOverrideCents: number | null = null; // motorista (perna Base→Destino + tamanho)
+  let pricingRouteIdUsed: string | null = null;
+
+  if (hasBaseLeg) {
+    // Pernas: preparador = Origem→Base; motorista = Base→Destino (+ valor do tamanho).
+    const rate =
+      (defaults.baseTariff?.mode === 'per_km' ? defaults.baseTariff.km_price_cents : null) ??
+      defaults.globals.km_price_cents ??
+      null;
+    if (rate == null || rate <= 0) {
+      return {
+        ok: false,
+        error:
+          'Ainda não há preço por km configurado para encomendas. Peça ao administrador para definir em Configurações ou na base.',
+      };
+    }
+    const legOBkm = await billableKmForShipment(
+      params.originLat, params.originLng, defaults.baseLat as number, defaults.baseLng as number,
+    );
+    const legBDkm = await billableKmForShipment(
+      defaults.baseLat as number, defaults.baseLng as number, params.destinationLat, params.destinationLng,
+    );
+    preparerPayoutCents = clampInt(rate * legOBkm * tsMul);
+    const motoristaLegCents = clampInt(rate * legBDkm * tsMul);
+    const sizeTsCents = clampInt(sizeFixedCents * tsMul);
+    workerOverrideCents = motoristaLegCents + sizeTsCents;
+    basePricedCents = preparerPayoutCents + workerOverrideCents;
+  } else {
+    // Sem base (coleta direta): modelo atual — distância única origem→destino.
+    const km = await billableKmForShipment(
+      params.originLat, params.originLng, params.destinationLat, params.destinationLng,
+    );
+    const effPerKm =
+      defaults.preparer?.shipment_per_km_fee_cents ?? defaults.globals.km_price_cents ?? null;
+    const effDelivery =
+      defaults.preparer?.shipment_delivery_fee_cents ??
+      defaults.globals.shipment_base_delivery_fee_cents ??
+      null;
+    const hasOverride = effPerKm != null || effDelivery != null;
+    const bestRoute = pickBestRoutePreferPerKm(
+      defaults.routes, params.originAddress, params.destinationAddress,
+    );
+    pricingRouteIdUsed = bestRoute?.id ?? null;
+    const baseTariff = defaults.baseTariff;
+    const baseTariffCents =
+      baseTariff?.mode === 'fixed'
+        ? baseTariff.fixed_cents
+        : baseTariff?.mode === 'per_km'
+          ? baseTariff.km_price_cents
+          : null;
+    let baseCents: number;
+    if (baseTariff && baseTariffCents != null && baseTariffCents > 0) {
+      baseCents = baseTariff.mode === 'fixed' ? clampInt(baseTariffCents) : clampInt(km * baseTariffCents);
+    } else if (hasOverride) {
+      baseCents = clampInt((effDelivery ?? 0) + km * (effPerKm ?? 0));
+    } else if (bestRoute) {
+      baseCents = await catalogBaseCentsAsync(bestRoute, km);
+    } else {
+      return {
+        ok: false,
+        error:
+          'Ainda não há preços de encomenda configurados. Peça ao administrador para definir os valores padrão em Configurações.',
+      };
+    }
+    basePricedCents = clampInt(clampInt(baseCents + sizeFixedCents) * tsMul);
+  }
 
   const surchargesCents = defaults.surcharges.reduce((acc, s) => acc + s.value_cents, 0);
 
@@ -538,7 +589,9 @@ export async function quoteShipmentForClient(params: {
     });
     totalCents = pricing.totalCents;
     platformFeeCents = pricing.adminFeeCents;
-    workerEarningCents = pricing.workerEarningCents;
+    // No modelo de pernas, o motorista fica só com a perna Base→Destino (+ tamanho);
+    // a perna Origem→Base é do preparador. Sem base, mantém a base inteira.
+    workerEarningCents = workerOverrideCents != null ? workerOverrideCents : pricing.workerEarningCents;
     adminEarningCents = pricing.adminEarningCents;
   } catch (e) {
     if (e instanceof PricingDenominatorOverflowError) {
@@ -554,12 +607,13 @@ export async function quoteShipmentForClient(params: {
   return {
     ok: true,
     quote: {
-      pricingRouteId: bestRoute?.id ?? null,
+      pricingRouteId: pricingRouteIdUsed,
       priceRouteBaseCents: basePricedCents,
       pricingSubtotalCents: basePricedCents,
       surchargesCents,
       surcharges: defaults.surcharges,
       platformFeeCents,
+      preparerPayoutCents,
       amountCents: totalCents,
       workerEarningCents,
       adminEarningCents,

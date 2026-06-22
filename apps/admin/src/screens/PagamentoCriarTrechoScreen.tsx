@@ -33,6 +33,10 @@ type TrechoFormSlice = {
   encTipoValor: 'por_km' | 'fixo';
   encValorKm: string;
   encValorFixo: string;
+  /** Só aba encomendas: valor fixo por tamanho POR BASE (sobrepõe o global; vazio = usa global). */
+  encSizePequeno: string;
+  encSizeMedio: string;
+  encSizeGrande: string;
   ida: string;
   retorno: string;
   pctWorker: string;
@@ -90,6 +94,9 @@ function initialForms(): Record<TabTrecho, TrechoFormSlice> {
       encTipoValor: 'por_km',
       encValorKm: '',
       encValorFixo: '',
+      encSizePequeno: '',
+      encSizeMedio: '',
+      encSizeGrande: '',
       ida: '2025-09-05T15:30',
       retorno: '2025-09-15T16:30',
       pctWorker: '',
@@ -104,6 +111,9 @@ function initialForms(): Record<TabTrecho, TrechoFormSlice> {
       encTipoValor: 'por_km',
       encValorKm: '',
       encValorFixo: '',
+      encSizePequeno: '',
+      encSizeMedio: '',
+      encSizeGrande: '',
       ida: '2025-10-06T10:30',
       retorno: '2025-10-12T14:30',
       pctWorker: '',
@@ -118,6 +128,9 @@ function initialForms(): Record<TabTrecho, TrechoFormSlice> {
       encTipoValor: 'por_km',
       encValorKm: '',
       encValorFixo: '',
+      encSizePequeno: '',
+      encSizeMedio: '',
+      encSizeGrande: '',
       ida: '2025-11-11T11:40',
       retorno: '2025-10-19T15:40',
       pctWorker: '',
@@ -258,11 +271,21 @@ export default function PagamentoCriarTrechoScreen() {
         setSaveErr('Indique um valor válido.');
         return;
       }
+      // Valor por tamanho (sobrepõe o global): vazio → null (usa global); preenchido → centavos.
+      const sizeOrNull = (s: string): number | null => {
+        const t = s.trim();
+        if (!t) return null;
+        const c = parseBRLToCents(t);
+        return c > 0 ? c : null;
+      };
       setSaving(true);
       const { error } = await updateBasePreparerPricing(selectedBaseId, {
         mode,
         kmCents: cents,
         fixedCents: null,
+        sizePequenoCents: sizeOrNull(f.encSizePequeno),
+        sizeMedioCents: sizeOrNull(f.encSizeMedio),
+        sizeGrandeCents: sizeOrNull(f.encSizeGrande),
       });
       setSaving(false);
       if (error) {
@@ -571,10 +594,16 @@ export default function PagamentoCriarTrechoScreen() {
     const b = bases.find((x) => x.id === id);
     if (!b) return;
     // Só por km (valor fixo foi removido). Bases antigas com fixed caem no campo vazio.
+    // Valor por tamanho: prefill com o override da base (vazio = usa global).
+    const sizePrefill = {
+      encSizePequeno: centsToBRLInput(b.sizePricePequenoCents),
+      encSizeMedio: centsToBRLInput(b.sizePriceMedioCents),
+      encSizeGrande: centsToBRLInput(b.sizePriceGrandeCents),
+    };
     if (b.preparerPricingMode === 'per_km') {
-      patch({ encTipoValor: 'por_km', encValorKm: centsToBRLInput(b.preparerKmPriceCents), encValorFixo: '' });
+      patch({ encTipoValor: 'por_km', encValorKm: centsToBRLInput(b.preparerKmPriceCents), encValorFixo: '', ...sizePrefill });
     } else {
-      patch({ encTipoValor: 'por_km', encValorKm: '', encValorFixo: '' });
+      patch({ encTipoValor: 'por_km', encValorKm: '', encValorFixo: '', ...sizePrefill });
     }
   };
 
@@ -600,6 +629,16 @@ export default function PagamentoCriarTrechoScreen() {
         React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', lineHeight: 1.4, ...font } }, 'Valor por KM'),
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, width: '100%' } },
           radioValorEncRow('por_km', 'Valor por KM', f.encValorKm, (v) => patch({ encValorKm: maskBRL(v) }), 'Ex: R$ 1,80')))));
+
+  // Card de valor fixo por tamanho POR BASE (sobrepõe o global de Configurações).
+  const cardSizesEnc = React.createElement('div', { style: card },
+    React.createElement('h2', { style: tituloCard }, 'Valor fixo por tamanho (sobrepõe o global)'),
+    React.createElement('p', { style: { margin: '0 0 4px', fontSize: 12, color: '#767676', lineHeight: 1.5, ...font } },
+      'Somado ao repasse do motorista conforme o tamanho do pacote, para entregas desta base. Em branco, usa o valor global definido em Configurações.'),
+    React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
+      fieldText('Pacote pequeno (R$)', f.encSizePequeno, (v) => patch({ encSizePequeno: maskBRL(v) }), 'Usa global'),
+      fieldText('Pacote médio (R$)', f.encSizeMedio, (v) => patch({ encSizeMedio: maskBRL(v) }), 'Usa global'),
+      fieldText('Pacote grande (R$)', f.encSizeGrande, (v) => patch({ encSizeGrande: maskBRL(v) }), 'Usa global')));
 
   const cardDados = tab === 'prep_enc' ? cardDadosEnc : cardDadosStd;
 
@@ -718,7 +757,7 @@ export default function PagamentoCriarTrechoScreen() {
   // Preparador de encomendas: só o card de pagamento por base (sem Horários/Percentuais/Custos,
   // que pertencem ao modelo por trecho).
   const formStack = tab === 'prep_enc'
-    ? [cardDados]
+    ? [cardDados, cardSizesEnc]
     : [
         cardDados,
         cardHorarios,
