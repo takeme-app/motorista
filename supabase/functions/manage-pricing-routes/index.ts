@@ -272,6 +272,22 @@ Deno.serve(async (req) => {
         );
       }
 
+      // Propaga o novo valor para as rotas de motorista que importaram este trecho.
+      // worker_routes.price_per_person_cents é um snapshot do template (pricing_route_id);
+      // sem isto, editar o trecho não refletiria no que o motorista cobra no app.
+      if (typeof body.price_cents === "number") {
+        const { error: propErr } = await admin
+          .from("worker_routes")
+          .update({
+            price_per_person_cents: body.price_cents,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("pricing_route_id", routeId);
+        if (propErr) {
+          console.error("[manage-pricing-routes] propagate worker_routes:", propErr);
+        }
+      }
+
       // Atualizar surcharges (replace all)
       if (Array.isArray(body.surcharges)) {
         await admin

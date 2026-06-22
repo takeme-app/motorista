@@ -252,8 +252,8 @@ export default function PagamentoCriarTrechoScreen() {
         setSaveErr('Selecione uma base.');
         return;
       }
-      const mode = f.encTipoValor === 'por_km' ? 'per_km' : 'fixed';
-      const cents = mode === 'per_km' ? parseBRLToCents(f.encValorKm) : parseBRLToCents(f.encValorFixo);
+      const mode = 'per_km' as const;
+      const cents = parseBRLToCents(f.encValorKm);
       if (cents <= 0) {
         setSaveErr('Indique um valor válido.');
         return;
@@ -261,8 +261,8 @@ export default function PagamentoCriarTrechoScreen() {
       setSaving(true);
       const { error } = await updateBasePreparerPricing(selectedBaseId, {
         mode,
-        kmCents: mode === 'per_km' ? cents : null,
-        fixedCents: mode === 'fixed' ? cents : null,
+        kmCents: cents,
+        fixedCents: null,
       });
       setSaving(false);
       if (error) {
@@ -291,8 +291,8 @@ export default function PagamentoCriarTrechoScreen() {
       price_cents = parseBRLToCents(f.diaria);
     } else {
       role_type = 'preparer_shipments';
-      pricing_mode = f.encTipoValor === 'por_km' ? 'per_km' : 'fixed';
-      price_cents = f.encTipoValor === 'por_km' ? parseBRLToCents(f.encValorKm) : parseBRLToCents(f.encValorFixo);
+      pricing_mode = 'per_km';
+      price_cents = parseBRLToCents(f.encValorKm);
     }
     if (price_cents <= 0) {
       setSaveErr('Indique um valor válido (preço / diária).');
@@ -563,16 +563,15 @@ export default function PagamentoCriarTrechoScreen() {
       React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
         fieldPlaces('Origem', f.origem, (v) => patch({ origem: v }), (p) => { patch({ origem: p.formattedAddress }); setOriginCoord({ lat: p.lat, lng: p.lng }); }, ph.origem),
         fieldPlaces('Destino', f.destino, (v) => patch({ destino: v }), (p) => { patch({ destino: p.formattedAddress }); setDestCoord({ lat: p.lat, lng: p.lng }); }, ph.destino)),
-      fieldText('Valor da diária (R$)', f.diaria, (v) => patch({ diaria: maskBRL(v) }), ph.diaria, true)));
+      fieldText(tab === 'motorista' ? 'Valor por passageiro (R$)' : 'Valor da diária (R$)', f.diaria, (v) => patch({ diaria: maskBRL(v) }), ph.diaria, true)));
 
   // Ao escolher a base, pré-preenche o tipo/valor com a config atual dela.
   const onSelectBase = (id: string) => {
     setSelectedBaseId(id);
     const b = bases.find((x) => x.id === id);
     if (!b) return;
-    if (b.preparerPricingMode === 'fixed') {
-      patch({ encTipoValor: 'fixo', encValorFixo: centsToBRLInput(b.preparerFixedCents), encValorKm: '' });
-    } else if (b.preparerPricingMode === 'per_km') {
+    // Só por km (valor fixo foi removido). Bases antigas com fixed caem no campo vazio.
+    if (b.preparerPricingMode === 'per_km') {
       patch({ encTipoValor: 'por_km', encValorKm: centsToBRLInput(b.preparerKmPriceCents), encValorFixo: '' });
     } else {
       patch({ encTipoValor: 'por_km', encValorKm: '', encValorFixo: '' });
@@ -591,17 +590,16 @@ export default function PagamentoCriarTrechoScreen() {
         ...bases.map((b) => React.createElement('option', { key: b.id, value: b.id }, b.city ? `${b.name} — ${b.city}` : b.name))),
       React.createElement('div', { style: { position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } }, chevronDownSvg)),
     React.createElement('p', { style: { margin: '4px 0 0', fontSize: 12, color: '#767676', lineHeight: 1.5, ...font } },
-      'O preparador de encomendas só atua em uma base. Defina aqui quanto ele recebe por entrega dessa base — por km (distância base↔coleta, ida/volta, limitada à taxa da plataforma) ou valor fixo.'));
+      'O preparador de encomendas só atua em uma base. Defina aqui quanto ele recebe por entrega dessa base — por km (distância base↔coleta, ida/volta, limitada à taxa da plataforma).'));
 
   const cardDadosEnc = React.createElement('div', { style: card },
     React.createElement('h2', { style: tituloCard }, 'Pagamento por base'),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' } },
       baseSelect,
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', lineHeight: 1.4, ...font } }, 'Tipo de valor'),
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', lineHeight: 1.4, ...font } }, 'Valor por KM'),
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, width: '100%' } },
-          radioValorEncRow('por_km', 'Valor por KM', f.encValorKm, (v) => patch({ encValorKm: maskBRL(v) }), 'Ex: R$ 1,80'),
-          radioValorEncRow('fixo', 'Valor fixo', f.encValorFixo, (v) => patch({ encValorFixo: maskBRL(v) }), 'Ex: R$ 180,00')))));
+          radioValorEncRow('por_km', 'Valor por KM', f.encValorKm, (v) => patch({ encValorKm: maskBRL(v) }), 'Ex: R$ 1,80')))));
 
   const cardDados = tab === 'prep_enc' ? cardDadosEnc : cardDadosStd;
 

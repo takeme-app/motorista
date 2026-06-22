@@ -10,10 +10,9 @@
  * surcharge_type='encomenda') entram como `surchargesCents` e não sofrem
  * gross-up — somam-se diretamente ao admin_earning.
  *
- * Multiplicador por tamanho do pacote:
- *   - Lido de platform_settings.shipment_package_size_multipliers (JSON
- *     `{"pequeno":1,"medio":1.12,"grande":1.28}`) quando disponível; senão
- *     usa o fallback hardcoded.
+ * Valor fixo por tamanho do pacote (somado à base por km, NÃO multiplicador):
+ *   - Lido de platform_settings.shipment_package_size_prices_cents (JSON em centavos
+ *     `{"pequeno":0,"medio":500,"grande":1000}`) quando disponível; senão usa 0.
  *
  * A função `computeOrderPricing` (shared) aplica gross-up literal:
  *   Total = (base + adicionais) / (1 − ganho% + desconto% − admin%)
@@ -48,14 +47,14 @@ const MATCH_SCORE_STRICT = 0.32;
 const MATCH_SCORE_RELAXED = 0.12;
 
 /**
- * Multiplicador por tamanho (sobre o valor base do trecho).
- * Usado como fallback quando `platform_settings.shipment_package_size_multipliers`
- * não estiver configurado.
+ * Valor fixo por tamanho (em centavos), SOMADO à base por km do trecho.
+ * Fallback (0) quando `platform_settings.shipment_package_size_prices_cents`
+ * não estiver configurado — o admin define os valores em Configurações.
  */
-const PACKAGE_SIZE_MULT_FALLBACK: Record<'pequeno' | 'medio' | 'grande', number> = {
-  pequeno: 1,
-  medio: 1.12,
-  grande: 1.28,
+const PACKAGE_SIZE_PRICE_FALLBACK_CENTS: Record<'pequeno' | 'medio' | 'grande', number> = {
+  pequeno: 0,
+  medio: 0,
+  grande: 0,
 };
 
 /** Fallback para `default_admin_pct` quando a linha não existir — espelha o seed da plataforma. */
@@ -217,7 +216,7 @@ async function catalogBaseCentsAsync(
   return clampInt(pc);
 }
 
-type PackageSizeMultipliers = Record<'pequeno' | 'medio' | 'grande', number>;
+type PackageSizePricesCents = Record<'pequeno' | 'medio' | 'grande', number>;
 
 type ShipmentSurcharge = {
   id: string;
@@ -238,7 +237,7 @@ type PricingDefaults = {
     shipment_base_delivery_fee_cents: number | null;
     default_admin_pct: number | null;
     platform_fee_pct_by_service: unknown;
-    package_size_multipliers: PackageSizeMultipliers;
+    package_size_prices_cents: PackageSizePricesCents;
   };
   /** Catálogo antigo (fallback). */
   routes: PreparerShipmentPricingRoute[];
@@ -269,16 +268,16 @@ function parseIntValue(raw: unknown, field = 'value'): number | null {
   return null;
 }
 
-function parsePackageMultipliers(raw: unknown): PackageSizeMultipliers {
-  const fallback = PACKAGE_SIZE_MULT_FALLBACK;
+function parsePackageSizePricesCents(raw: unknown): PackageSizePricesCents {
+  const fallback = PACKAGE_SIZE_PRICE_FALLBACK_CENTS;
   if (raw && typeof raw === 'object') {
     const obj = raw as Record<string, unknown>;
     const src = (obj.value && typeof obj.value === 'object' ? (obj.value as Record<string, unknown>) : obj);
     const p = Number(src.pequeno);
     const m = Number(src.medio);
     const g = Number(src.grande);
-    if ([p, m, g].every((n) => Number.isFinite(n) && n > 0)) {
-      return { pequeno: p, medio: m, grande: g };
+    if ([p, m, g].every((n) => Number.isFinite(n) && n >= 0)) {
+      return { pequeno: Math.round(p), medio: Math.round(m), grande: Math.round(g) };
     }
   }
   return fallback;
@@ -296,7 +295,7 @@ async function readPricingDefaults(preparerId?: string, baseId?: string | null):
       'shipment_base_delivery_fee_cents',
       'default_admin_pct',
       'platform_fee_pct_by_service',
-      'shipment_package_size_multipliers',
+      'shipment_package_size_prices_cents',
     ]);
 
   const routesPromise = sb
@@ -348,8 +347,8 @@ async function readPricingDefaults(preparerId?: string, baseId?: string | null):
     ),
     default_admin_pct: parseIntValue(settingMap.get('default_admin_pct'), 'percentage'),
     platform_fee_pct_by_service: settingMap.get('platform_fee_pct_by_service'),
-    package_size_multipliers: parsePackageMultipliers(
-      settingMap.get('shipment_package_size_multipliers'),
+    package_size_prices_cents: parsePackageSizePricesCents(
+      settingMap.get('shipment_package_size_prices_cents'),
     ),
   };
 
@@ -503,8 +502,9 @@ export async function quoteShipmentForClient(params: {
     };
   }
 
-  const pkgMul = defaults.globals.package_size_multipliers[params.packageSize];
-  const basePricedRaw = clampInt(baseCents * pkgMul);
+  // Tamanho do pacote = valor fixo (em centavos) SOMADO à base por km — não multiplicador.
+  const sizeFixedCents = defaults.globals.package_size_prices_cents[params.packageSize] ?? 0;
+  const basePricedRaw = clampInt(baseCents + sizeFixedCents);
 
   // Ajustes da ROTA definidos pelo motorista (fim de semana / noturno / feriado) — mesma regra
   // de corrida/dependente: incidem como % sobre a base da encomenda que viaja nessa rota.
