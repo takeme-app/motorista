@@ -1,5 +1,6 @@
 import * as Location from 'expo-location';
 import { mapboxSearchBoxSuggest, mapboxSearchBoxRetrieve } from '@take-me/shared';
+import { supabase } from './supabase';
 
 export type Coords = { latitude: number; longitude: number };
 
@@ -256,6 +257,33 @@ function dedupeResults(list: AddressSearchResult[]): AddressSearchResult[] {
  * vêm depois, via `retrieveAddressCoords` no momento da seleção. Cai para
  * Nominatim apenas se o token estiver ausente (dev sem env).
  */
+/**
+ * Pontos nomeados globais (tabela `custom_places`) cadastrados pelo admin.
+ * Casa por nome e já traz lat/lng (a seleção usa as coords direto, sem retrieve).
+ */
+async function fetchCustomPlaceMatches(query: string): Promise<AddressSearchResult[]> {
+  try {
+    const { data } = await (supabase as { from: (t: string) => any })
+      .from('custom_places')
+      .select('id, name, city, latitude, longitude')
+      .eq('is_active', true)
+      .ilike('name', `%${query}%`)
+      .limit(6);
+    if (!Array.isArray(data) || data.length === 0) return [];
+    return data
+      .filter((p: any) => Number.isFinite(Number(p.latitude)) && Number.isFinite(Number(p.longitude)))
+      .map((p: any) => ({
+        id: `custom:${p.id}`,
+        address: String(p.name ?? '').trim(),
+        ...(p.city ? { city: String(p.city) } : {}),
+        latitude: Number(p.latitude),
+        longitude: Number(p.longitude),
+      }));
+  } catch {
+    return [];
+  }
+}
+
 export async function searchAddress(
   query: string,
   opts?: SearchAddressOptions,
@@ -263,22 +291,28 @@ export async function searchAddress(
   const trimmed = query.trim();
   if (trimmed.length < 2) return [];
 
+  // Pontos nomeados (custom_places) aparecem primeiro nas sugestões.
+  const custom = await fetchCustomPlaceMatches(trimmed);
+
   const token = (process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '').trim();
-  if (!token) return searchAddressNominatim(trimmed);
-
-  const items = await mapboxSearchBoxSuggest(trimmed, token, {
-    proximity: opts?.proximity ?? null,
-    sessionToken: opts?.sessionToken,
-  });
-  if (items.length === 0) return searchAddressNominatim(trimmed);
-
-  const mapped: AddressSearchResult[] = items.map((s) => ({
-    id: s.mapboxId,
-    address: s.address,
-    mapboxId: s.mapboxId,
-    ...(s.city ? { city: s.city } : {}),
-  }));
-  return dedupeResults(mapped);
+  let base: AddressSearchResult[];
+  if (!token) {
+    base = await searchAddressNominatim(trimmed);
+  } else {
+    const items = await mapboxSearchBoxSuggest(trimmed, token, {
+      proximity: opts?.proximity ?? null,
+      sessionToken: opts?.sessionToken,
+    });
+    base = items.length === 0
+      ? await searchAddressNominatim(trimmed)
+      : items.map((s) => ({
+          id: s.mapboxId,
+          address: s.address,
+          mapboxId: s.mapboxId,
+          ...(s.city ? { city: s.city } : {}),
+        }));
+  }
+  return dedupeResults([...custom, ...base]);
 }
 
 /**

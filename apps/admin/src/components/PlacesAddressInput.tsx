@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { getGoogleMapsApiKey } from '../lib/expoExtra';
+import { supabase } from '../lib/supabase';
 
 export type PlaceAddressComponent = { longName: string; shortName: string; types: string[] };
 
@@ -106,6 +107,8 @@ export default function PlacesAddressInput(props: PlacesAddressInputProps) {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const sessionTokenRef = useRef<any>(null);
+  // Cache dos pontos nomeados (custom_places) para resolver coords ao escolher.
+  const customCacheRef = useRef<Record<string, { name: string; lat: number; lng: number }>>({});
 
   const hasKey = Boolean(getGoogleMapsApiKey());
 
@@ -117,37 +120,71 @@ export default function PlacesAddressInput(props: PlacesAddressInputProps) {
     return () => document.removeEventListener('mousedown', onDoc);
   }, []);
 
+  /** Pontos nomeados globais (custom_places) que casam com o texto — aparecem no topo. */
+  const fetchCustomPreds = useCallback(async (q: string): Promise<Array<{ description: string; place_id: string }>> => {
+    try {
+      const { data } = await (supabase as unknown as { from: (t: string) => any })
+        .from('custom_places')
+        .select('id, name, city, latitude, longitude')
+        .eq('is_active', true)
+        .ilike('name', `%${q}%`)
+        .limit(6);
+      if (!Array.isArray(data)) return [];
+      const out: Array<{ description: string; place_id: string }> = [];
+      for (const p of data as any[]) {
+        const lat = Number(p.latitude);
+        const lng = Number(p.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        const key = `custom:${p.id}`;
+        customCacheRef.current[key] = { name: String(p.name ?? ''), lat, lng };
+        out.push({ description: p.city ? `${p.name} — ${p.city}` : String(p.name ?? ''), place_id: key });
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }, []);
+
   const runPredictions = useCallback((input: string) => {
     if (!hasKey || input.trim().length < 3) {
       setPreds([]);
       return;
     }
-    loadGooglePlacesScript()
-      .then(() => {
-        const g = (window as any).google;
-        if (!g?.maps?.places) return;
-        if (!sessionTokenRef.current) {
-          sessionTokenRef.current = new g.maps.places.AutocompleteSessionToken();
-        }
-        const svc = new g.maps.places.AutocompleteService();
-        svc.getPlacePredictions(
-          {
-            input: input.trim(),
-            componentRestrictions: { country: 'br' },
-            sessionToken: sessionTokenRef.current,
-          },
-          (list: Array<{ description: string; place_id: string }> | null, status: string) => {
-            if (status !== g.maps.places.PlacesServiceStatus.OK || !list?.length) {
-              setPreds([]);
-              return;
-            }
-            setPreds(list.map((p) => ({ description: p.description, place_id: p.place_id })));
-            setOpen(true);
-          },
-        );
-      })
-      .catch(() => setLoadErr('Não foi possível carregar o Google Places.'));
-  }, [hasKey]);
+    const q = input.trim();
+    void fetchCustomPreds(q).then((customPreds) => {
+      loadGooglePlacesScript()
+        .then(() => {
+          const g = (window as any).google;
+          if (!g?.maps?.places) {
+            if (customPreds.length) { setPreds(customPreds); setOpen(true); }
+            return;
+          }
+          if (!sessionTokenRef.current) {
+            sessionTokenRef.current = new g.maps.places.AutocompleteSessionToken();
+          }
+          const svc = new g.maps.places.AutocompleteService();
+          svc.getPlacePredictions(
+            {
+              input: q,
+              componentRestrictions: { country: 'br' },
+              sessionToken: sessionTokenRef.current,
+            },
+            (list: Array<{ description: string; place_id: string }> | null, status: string) => {
+              const googlePreds = (status === g.maps.places.PlacesServiceStatus.OK && list?.length)
+                ? list.map((p) => ({ description: p.description, place_id: p.place_id }))
+                : [];
+              const merged = [...customPreds, ...googlePreds];
+              setPreds(merged);
+              if (merged.length) setOpen(true);
+            },
+          );
+        })
+        .catch(() => {
+          if (customPreds.length) { setPreds(customPreds); setOpen(true); }
+          else setLoadErr('Não foi possível carregar o Google Places.');
+        });
+    });
+  }, [hasKey, fetchCustomPreds]);
 
   const onInputChange = useCallback((v: string) => {
     onChange(v);
@@ -157,6 +194,17 @@ export default function PlacesAddressInput(props: PlacesAddressInputProps) {
   }, [onChange, runPredictions]);
 
   const pickPrediction = useCallback((placeId: string, description: string) => {
+    // Ponto nomeado (custom_places): coords já em cache; não chama o Google.
+    if (placeId.startsWith('custom:')) {
+      const c = customCacheRef.current[placeId];
+      if (c) {
+        onChange(c.name);
+        onPlaceResolved({ formattedAddress: c.name, lat: c.lat, lng: c.lng, placeId });
+      }
+      setOpen(false);
+      setPreds([]);
+      return;
+    }
     const g = (window as any).google;
     if (!g?.maps?.places) return;
     const div = document.createElement('div');
