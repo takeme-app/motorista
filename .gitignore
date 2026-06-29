@@ -75,3 +75,6 @@ packages/expo-mapbox-navigation/ios/build/
 # Logs de build/release locais
 **/.last-release-build.log
 docs/xcode-build-*.log
+
+# Build artifacts (APKs) - não versionar
+apps/motorista/release/

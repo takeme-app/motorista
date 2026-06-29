@@ -5,7 +5,7 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
+import { resolveStorageDisplayUrl, resolveDependentDocumentUrl } from '../lib/storageDisplayUrl';
 import { useAuth } from '../contexts/AuthContext';
 import ChatPanel from '../components/ChatPanel';
 import {
@@ -17,6 +17,7 @@ import {
   updateWorkerStatus,
   updateShipmentStatus,
   updateDependentShipmentStatus,
+  approveLargeShipment,
 } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
@@ -217,6 +218,10 @@ export default function AtendimentoDetalheScreen() {
 
   const [minorAuthOpen, setMinorAuthOpen] = useState(false);
   const [minorData, setMinorData] = useState<any>(null);
+  // Signed URLs dos documentos do menor/responsável (bucket privado dependent-documents).
+  const [minorDocHref, setMinorDocHref] = useState<string | null>(null);
+  const [minorRepDocHref, setMinorRepDocHref] = useState<string | null>(null);
+  const [minorDocsLoading, setMinorDocsLoading] = useState(false);
 
   const labelToRaw = (lab: string) => {
     const e = Object.entries(categoryLabelPt).find(([, v]) => v === lab);
@@ -427,6 +432,34 @@ export default function AtendimentoDetalheScreen() {
     })();
     return () => { cancelled = true; };
   }, [documentosOpen, motoristaDocWorkerId]);
+
+  // Resolve signed URLs dos documentos do menor/responsável sempre que minorData muda
+  // (cobre os dois modais: Documentos e Autorizar menores).
+  useEffect(() => {
+    const docPath: string | null = minorData?.document_url ?? null;
+    const repPath: string | null = minorData?.representative_document_url ?? null;
+    if (!docPath && !repPath) {
+      setMinorDocHref(null);
+      setMinorRepDocHref(null);
+      setMinorDocsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setMinorDocsLoading(true);
+    setMinorDocHref(null);
+    setMinorRepDocHref(null);
+    void (async () => {
+      const [doc, rep] = await Promise.all([
+        docPath ? resolveDependentDocumentUrl(supabase, docPath) : Promise.resolve(null),
+        repPath ? resolveDependentDocumentUrl(supabase, repPath) : Promise.resolve(null),
+      ]);
+      if (cancelled) return;
+      setMinorDocHref(doc);
+      setMinorRepDocHref(rep);
+      setMinorDocsLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [minorData]);
 
   useEffect(() => {
     if (!isSupabaseConfigured || !conversationId) return;
@@ -1397,6 +1430,25 @@ export default function AtendimentoDetalheScreen() {
           ),
         );
 
+  // Linha de documento do menor/responsável com 3 estados (espelha o fluxo de motorista):
+  // sem path → "não enviado"; resolvendo → "Carregando…"; path sem href → "indisponível"; href → link.
+  const renderMinorDocRow = (label: string, rawPath: string | null | undefined, href: string | null) => {
+    if (!rawPath) {
+      return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 0' } },
+        docFileIcon, React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, `${label}: não enviado`));
+    }
+    return React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, label),
+      href
+        ? React.createElement('a', {
+            href, target: '_blank', rel: 'noopener noreferrer',
+            style: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 0', borderBottom: '1px solid #f1f1f1' },
+          }, docFileIcon, React.createElement('span', { style: { fontSize: 14, color: '#3b82f6', ...font } }, 'Abrir documento'))
+        : React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 0' } },
+            docFileIcon, React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } },
+              minorDocsLoading ? 'Carregando documento…' : 'Documento indisponível (permissões de storage)')));
+  };
+
   const documentosModal = documentosOpen ? React.createElement('div', {
     style: {
       position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0,
@@ -1424,24 +1476,8 @@ export default function AtendimentoDetalheScreen() {
       // Documentos do menor (autorizar_menores) ou do motorista (cadastro_transporte)
       isAutorizarMenores
         ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
-            minorData?.document_url
-              ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
-                  React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Documento do dependente'),
-                  React.createElement('a', {
-                    href: minorData.document_url, target: '_blank', rel: 'noopener noreferrer',
-                    style: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 0', borderBottom: '1px solid #f1f1f1' },
-                  }, docFileIcon, React.createElement('span', { style: { fontSize: 14, color: '#3b82f6', ...font } }, 'Abrir documento')))
-              : React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 0' } },
-                  docFileIcon, React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'Documento do dependente: não enviado')),
-            minorData?.representative_document_url
-              ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8 } },
-                  React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Documento do responsável'),
-                  React.createElement('a', {
-                    href: minorData.representative_document_url, target: '_blank', rel: 'noopener noreferrer',
-                    style: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 0', borderBottom: '1px solid #f1f1f1' },
-                  }, docFileIcon, React.createElement('span', { style: { fontSize: 14, color: '#3b82f6', ...font } }, 'Abrir documento')))
-              : React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 0' } },
-                  docFileIcon, React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, 'Documento do responsável: não enviado')))
+            renderMinorDocRow('Documento do dependente', minorData?.document_url, minorDocHref),
+            renderMinorDocRow('Documento do responsável', minorData?.representative_document_url, minorRepDocHref))
         : React.createElement(React.Fragment, null,
             supportDocsLoading
               ? React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: '0 0 16px', ...font } }, 'Carregando documentos…')
@@ -2168,6 +2204,14 @@ export default function AtendimentoDetalheScreen() {
                 : await updateShipmentStatus(String(sid), 'confirmed');
               setAutorizarSubmitting(false);
               if (error) { showToast(`Erro ao aprovar: ${error}`); return; }
+              // Encomenda grande (shipments): além de confirmar, marca admin_approved_at.
+              // É o que limpa o badge "Aguardando aprovação" no app do cliente E libera a
+              // oferta ao motorista (trigger abre a fila). Inócuo para encomendas não-grandes.
+              // dependent_shipments não tem esse fluxo (sem admin_approved_at/fila).
+              if (encomendaShipmentKind !== 'dependent_shipment') {
+                const { error: approveErr } = await approveLargeShipment(String(sid));
+                if (approveErr) { showToast(`Erro ao liberar oferta: ${approveErr}`); return; }
+              }
               setEncomendaShipmentStatus('confirmed');
               if (conversationId) {
                 await (supabase as any).rpc('close_support_conversation', { p_conversation_id: conversationId, p_finish_note: 'Encomenda aprovada' });

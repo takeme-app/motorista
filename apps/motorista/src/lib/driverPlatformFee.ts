@@ -5,6 +5,7 @@ export type DriverPlatformFeeLedgerKind = 'credit' | 'debit';
 export type DriverPlatformFeeLedgerEntry = {
   id: string;
   bookingId: string | null;
+  shipmentId: string | null;
   kind: DriverPlatformFeeLedgerKind;
   amountCents: number;
   note: string;
@@ -47,6 +48,7 @@ function normalizeEntry(row: unknown): DriverPlatformFeeLedgerEntry | null {
   return {
     id,
     bookingId: typeof raw.booking_id === 'string' ? raw.booking_id : null,
+    shipmentId: typeof raw.shipment_id === 'string' ? raw.shipment_id : null,
     kind: normalizeLedgerKind(raw.kind),
     amountCents,
     note: typeof raw.note === 'string' ? raw.note : '',
@@ -93,6 +95,7 @@ export async function fetchDriverPlatformFeeSummary(
 export function platformFeeLedgerTitle(entry: DriverPlatformFeeLedgerEntry): string {
   if (entry.kind === 'credit') {
     if (entry.note === 'cash_trip_completed') return 'Taxa de corrida em dinheiro';
+    if (entry.note === 'cash_shipment_completed') return 'Taxa de entrega em dinheiro';
     if (entry.note === 'refund_revert') return 'Abate revertido por estorno';
     return 'Saldo registrado';
   }

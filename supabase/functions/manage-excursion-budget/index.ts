@@ -369,19 +369,11 @@ Deno.serve(async (req) => {
       });
     }
 
-    if (action === "finalize" && excursion.user_id) {
-      const totalFmt = `R$ ${(totalCents / 100).toFixed(2).replace(".", ",")}`;
-      await admin.from("notifications").insert({
-        user_id: excursion.user_id,
-        title: wasQuoted
-          ? "Orçamento da excursão atualizado"
-          : "Orçamento da excursão pronto",
-        message: wasQuoted
-          ? `O orçamento da sua excursão foi revisado. Novo valor total: ${totalFmt}. Acesse o app para conferir e aceitar.`
-          : `O orçamento da sua excursão foi elaborado. Valor total: ${totalFmt}. Acesse o app para aceitar.`,
-        category: "excursion",
-      });
-    }
+    // NOTA: a notificação do CLIENTE sobre orçamento pronto NÃO é inserida aqui.
+    // Ela é criada pelo trigger `notify_client_excursion_phase_change` quando o
+    // status passa para 'quoted' (categoria 'excursions', com deeplink para
+    // ExcursionDetail e respeitando should_notify_user). Inserir aqui também
+    // gerava DUAS notificações/pushes para o mesmo evento (duplicado).
 
     return new Response(
       JSON.stringify({

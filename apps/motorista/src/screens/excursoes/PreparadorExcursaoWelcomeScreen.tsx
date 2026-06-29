@@ -10,6 +10,7 @@ import { Text } from '../../components/Text';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 
 const WELCOME_IMAGE = require('../../../assets/20251016_1011_Organized Travel Preparation_simple_compose_01k7pj8ng1fpwtvbw04vme6m1r 1.png');
 
@@ -20,6 +21,7 @@ type Props = {
 export function PreparadorExcursaoWelcomeScreen({ onContinue }: Props) {
   const insets = useSafeAreaInsets();
 
+  const bottomInset = useBottomSafeInset();
   return (
     <View style={styles.root}>
       <StatusBar style="light" />
@@ -31,7 +33,7 @@ export function PreparadorExcursaoWelcomeScreen({ onContinue }: Props) {
         <LinearGradient
           colors={['transparent', 'rgba(0,0,0,0.25)', 'rgba(0,0,0,0.82)']}
           locations={[0.35, 0.55, 1]}
-          style={[styles.gradient, { paddingBottom: Math.max(insets.bottom, 20) + 8 }]}
+          style={[styles.gradient, { paddingBottom: bottomInset + 8 }]}
         >
           <Text style={styles.title}>Bem-vindo!</Text>
           <Text style={styles.subtitle}>

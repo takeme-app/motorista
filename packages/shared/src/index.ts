@@ -7,6 +7,8 @@ export { createSupabaseClient } from './supabase';
 export type { Database, FiscalDocumentRow } from './types';
 export { mapboxForwardGeocode, mapboxGeocodeSuggest } from './mapboxForwardGeocode';
 export type { MapboxGeocodeResult } from './mapboxForwardGeocode';
+export { mapboxSearchBoxSuggest, mapboxSearchBoxRetrieve } from './mapboxSearchBox';
+export type { MapboxSuggestItem, MapboxSuggestOptions } from './mapboxSearchBox';
 export {
   googleForwardGeocode,
   googleGeocodeSuggest,
@@ -51,3 +53,4 @@ export {
   formatShipmentCode,
   formatTripCode,
 } from './orderCodes';
+export { useBottomSafeInset } from './useBottomSafeInset';

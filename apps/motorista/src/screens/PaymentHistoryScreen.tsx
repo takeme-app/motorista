@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -48,7 +49,20 @@ function formatShortDate(iso: string): string {
 
 function formatHour(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  // Hora LOCAL sem Intl (toLocaleTimeString é instável no Hermes e retornava hora errada).
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+// Rótulo da linha por origem do ganho. Só payout pago é repasse real "Pix"; o resto são
+// ganhos do serviço (ainda não transferidos), então rotulamos pelo serviço, não como "Pix".
+function transferLabel(source: DriverPaymentTransfer['source']): string {
+  switch (source) {
+    case 'completed_trip': return 'Viagem concluída';
+    case 'shipment': return 'Entrega de encomenda';
+    case 'booking': return 'Corrida';
+    case 'payout': return 'Pix';
+    default: return 'Corrida';
+  }
 }
 
 function getWeekGroups(transfers: Transfer[], year: number, month: number): WeekGroup[] {
@@ -87,6 +101,7 @@ function PixIcon() {
 }
 
 export function PaymentHistoryScreen({ navigation }: Props) {
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
@@ -202,9 +217,7 @@ export function PaymentHistoryScreen({ navigation }: Props) {
                       <View style={styles.transferInfo}>
                         <Text style={styles.transferAmount}>{formatCents(t.amount_cents)}</Text>
                         <Text style={styles.transferMeta}>
-                          {t.source === 'completed_trip'
-                            ? `Viagem concluída • ${formatHour(t.paid_at)}`
-                            : `Pix • ${formatHour(t.paid_at)}`}
+                          {`${transferLabel(t.source)} • ${formatHour(t.paid_at)}`}
                         </Text>
                       </View>
                       <Text style={styles.transferDate}>{formatShortDate(t.paid_at)}</Text>
@@ -230,7 +243,7 @@ export function PaymentHistoryScreen({ navigation }: Props) {
       <Modal visible={filterVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setFilterVisible(false)} />
-          <View style={styles.sheet}>
+          <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
             <View style={styles.sheetHandleRow}>
               <View style={styles.sheetHandle} />
             </View>

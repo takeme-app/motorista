@@ -7,13 +7,14 @@ import {
   ActivityIndicator,
   Modal,
   TextInput,
-  KeyboardAvoidingView,
-  Platform,
   Animated,
   Pressable,
-  Share,
   Alert,
 } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as XLSX from 'xlsx';
+import { shareLocalFile } from '../utils/shareLocalFile';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useBottomSheetDrag } from '../hooks/useBottomSheetDrag';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
@@ -26,8 +27,8 @@ import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { GooglePlacesAutocomplete } from '../components/GooglePlacesAutocomplete';
-import { googleForwardGeocode, type GoogleGeocodeResult } from '@take-me/shared';
-import { getGoogleMapsApiKey } from '../lib/googleMapsConfig';
+import { mapboxForwardGeocode, type MapboxGeocodeResult, useBottomSafeInset } from '@take-me/shared';
+import { getMapboxAccessToken } from '../lib/googleMapsConfig';
 import { formatCurrencyBRLInput, parseCurrencyBRLToNumber } from '../utils/formatCurrency';
 import { SwipeableRouteRow } from '../components/SwipeableRouteRow';
 
@@ -85,6 +86,7 @@ async function routeHasAcceptedServices(workerRouteId: string, workerId: string)
 
 export function WorkerRoutesScreen({ navigation, route }: Props) {
   const { showAlert } = useAppAlert();
+  const sheetBottom = useBottomSafeInset({ extra: 16 });
   const [rows, setRows] = useState<RouteRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -95,8 +97,8 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
   const [saving, setSaving] = useState(false);
   const [origin, setOrigin] = useState('');
   const [destination, setDestination] = useState('');
-  const [originPlace, setOriginPlace] = useState<GoogleGeocodeResult | null>(null);
-  const [destinationPlace, setDestinationPlace] = useState<GoogleGeocodeResult | null>(null);
+  const [originPlace, setOriginPlace] = useState<MapboxGeocodeResult | null>(null);
+  const [destinationPlace, setDestinationPlace] = useState<MapboxGeocodeResult | null>(null);
   const [price, setPrice] = useState('');
   const slideAnim = useRef(new Animated.Value(300)).current;
 
@@ -230,15 +232,45 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
     })();
   };
 
-  const handleExportPdf = async () => {
-    const now = new Date().toLocaleDateString('pt-BR');
-    const separator = '─'.repeat(40);
-    const lines = rows.map((r, i) =>
-      `${i + 1}. ${shortAddress(r.origin_address)} → ${shortAddress(r.destination_address)}\n   ${formatCents(r.price_per_person_cents)} por pessoa`
-    ).join('\n\n');
-    const message = `MINHAS ROTAS\nGerado em ${now}\n${separator}\n\n${lines}`;
+  const handleExportXlsx = async () => {
+    if (rows.length === 0) {
+      showAlert('Exportar', 'Nenhuma rota para exportar.');
+      return;
+    }
     try {
-      await Share.share({ title: 'Minhas Rotas', message });
+      const header = ['#', 'Origem', 'Destino', 'Preço por pessoa (R$)'];
+      const body = rows.map((r, i) => [
+        i + 1,
+        shortAddress(r.origin_address),
+        shortAddress(r.destination_address),
+        r.price_per_person_cents / 100,
+      ]);
+      const ws = XLSX.utils.aoa_to_sheet([header, ...body]);
+      ws['!cols'] = [{ wch: 4 }, { wch: 34 }, { wch: 34 }, { wch: 22 }];
+      // Formato monetário (R$) na coluna de preço (coluna D, a partir da linha 2).
+      for (let i = 0; i < body.length; i++) {
+        const cell = ws[`D${i + 2}`];
+        if (cell) cell.z = 'R$ #,##0.00';
+      }
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Minhas Rotas');
+      const base64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+
+      const stamp = new Date().toISOString().slice(0, 10);
+      const fileUri = `${FileSystem.cacheDirectory}minhas-rotas-${stamp}.xlsx`;
+      await FileSystem.writeAsStringAsync(fileUri, base64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      const shared = await shareLocalFile(fileUri, {
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        uti: 'org.openxmlformats.spreadsheetml.sheet',
+        dialogTitle: 'Exportar Minhas Rotas',
+        fallbackTitle: 'Minhas Rotas',
+      });
+      if (!shared.shared) {
+        showAlert('Exportar', 'Atualize o app para exportar as rotas em Excel neste dispositivo.');
+      }
     } catch {
       showAlert('Erro', 'Não foi possível exportar as rotas.');
     }
@@ -348,7 +380,7 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
     const priceCents = reais != null ? Math.round(reais * 100) : 0;
     if (!priceCents || priceCents <= 0) { showAlert('Atenção', 'Informe um valor válido.'); return; }
 
-    const apiKey = getGoogleMapsApiKey();
+    const apiKey = getMapboxAccessToken();
     setSaving(true);
     try {
       let oGeo = originPlace;
@@ -357,19 +389,19 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
         if (!apiKey) {
           showAlert(
             'Mapas',
-            'Escolha origem e destino na lista de sugestões ou configure EXPO_PUBLIC_GOOGLE_MAPS_API_KEY.',
+            'Escolha origem e destino na lista de sugestões ou configure EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN.',
           );
           return;
         }
         if (!oGeo) {
-          oGeo = await googleForwardGeocode(`${origin.trim()}, Brasil`, apiKey);
+          oGeo = await mapboxForwardGeocode(`${origin.trim()}, Brasil`, apiKey);
           if (!oGeo) {
             showAlert('Origem', 'Não encontramos esse local. Toque em uma sugestão da lista ou refine o texto.');
             return;
           }
         }
         if (!dGeo) {
-          dGeo = await googleForwardGeocode(`${destination.trim()}, Brasil`, apiKey);
+          dGeo = await mapboxForwardGeocode(`${destination.trim()}, Brasil`, apiKey);
           if (!dGeo) {
             showAlert('Destino', 'Não encontramos esse local. Toque em uma sugestão da lista ou refine o texto.');
             return;
@@ -414,7 +446,7 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
           <TouchableOpacity style={styles.iconBtn} onPress={openImportSheet} activeOpacity={0.7} accessibilityLabel="Importar rotas">
             <MaterialIcons name="cloud-download" size={22} color="#111827" />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.iconBtn} onPress={handleExportPdf} activeOpacity={0.7} accessibilityLabel="Compartilhar lista de rotas">
+          <TouchableOpacity style={styles.iconBtn} onPress={handleExportXlsx} activeOpacity={0.7} accessibilityLabel="Exportar rotas em Excel (.xlsx)">
             <MaterialIcons name="share" size={22} color="#111827" />
           </TouchableOpacity>
         </View>
@@ -494,11 +526,11 @@ export function WorkerRoutesScreen({ navigation, route }: Props) {
       <Modal visible={sheetMode !== null} transparent animationType="none" onRequestClose={closeSheet}>
         <KeyboardAvoidingView
           style={styles.modalContainer}
-          behavior="padding"
+          behavior="height"
         >
           <Pressable style={StyleSheet.absoluteFillObject} onPress={closeSheet} />
           <Animated.View
-            style={[styles.sheet, { transform: [{ translateY: Animated.add(slideAnim, dragY) }] }]}
+            style={[styles.sheet, { paddingBottom: sheetBottom, transform: [{ translateY: Animated.add(slideAnim, dragY) }] }]}
           >
             <View style={styles.handleArea} {...panHandlers}>
               <View style={styles.sheetHandle} />
@@ -696,7 +728,7 @@ const styles = StyleSheet.create({
   },
   sheet: {
     backgroundColor: '#FFFFFF', borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    paddingHorizontal: 20, paddingBottom: 36, maxHeight: '90%',
+    paddingHorizontal: 20, maxHeight: '90%',
   },
   handleArea: { paddingTop: 14, paddingBottom: 10, alignItems: 'center' },
   sheetHandle: {

@@ -2,6 +2,7 @@ import { View, StyleSheet, TouchableOpacity } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ShipmentStackParamList } from '../../navigation/types';
@@ -16,6 +17,7 @@ const COLORS = {
 
 export function ShipmentSuccessScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset();
   const { orderId, isLargePackage, paymentProcessed } = route.params;
 
   const goToActivities = () => {
@@ -29,14 +31,16 @@ export function ShipmentSuccessScreen({ navigation, route }: Props) {
   const openEncomendasChat = () => {
     navigation.getParent()?.navigate('Main', {
       screen: 'Activities',
-      params: { screen: 'Chat', params: { contactName: 'Time de Encomendas' } },
+      // supportBackoffice: true abre/recupera o ticket real de suporte (open_support_ticket);
+      // sem isso o ChatScreen não resolve conversa e mostra o placeholder vazio.
+      params: { screen: 'Chat', params: { contactName: 'Time de Encomendas', supportBackoffice: true } },
     });
   };
 
   const isReviewVariant = isLargePackage || !paymentProcessed;
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 24) }]}>
+    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: bottomInset }]}>
       <StatusBar style="dark" />
       <View style={styles.content}>
         <View style={styles.iconCircle}>

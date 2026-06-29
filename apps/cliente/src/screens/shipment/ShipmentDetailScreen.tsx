@@ -22,6 +22,7 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import {
   MapboxMap,
   MapboxMarker,
@@ -37,6 +38,8 @@ import { getRouteWithDuration, formatDuration, type RoutePoint } from '../../lib
 import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
 import { StatusBadge, shipmentStatusToBadge } from '../../components/StatusBadge';
 import { SupportSheet } from '../../components/SupportSheet';
+import { useAppAlert } from '../../contexts/AppAlertContext';
+import { tryOpenSupportTicket } from '../../lib/supportTickets';
 import { storageUrl } from '../../utils/storageUrl';
 import { TipModal } from '../../components/TipModal';
 import { CodeConfirmModal } from '../../components/CodeConfirmModal';
@@ -111,8 +114,14 @@ type ShipmentDetail = {
   base_id: string | null;
   picked_up_at: string | null;
   picked_up_by_preparer_at: string | null;
+  /** Quando o cron declara expirado o handoff de 1h, o preparador perde a vez
+   * e a coleta vira responsabilidade direta do motorista (mesmo com base_id). */
+  preparer_handoff_expired_at: string | null;
   /** Viagem associada — necessária para o acompanhamento em tempo real (mapa com posição do motorista). */
   scheduled_trip_id: string | null;
+  package_size: string | null;
+  /** Encomenda grande: quando o admin aprovou (NULL = aguardando aprovação). */
+  admin_approved_at: string | null;
 };
 
 type DriverProfileRow = { full_name: string | null; avatar_url: string | null };
@@ -132,6 +141,8 @@ type ShipmentRatingRow = { rating: number; comment: string | null } | null;
 export function ShipmentDetailScreen({ navigation, route }: Props) {
   const shipmentId = route.params?.shipmentId ?? '';
   const [detail, setDetail] = useState<ShipmentDetail | null>(null);
+  const [tripDepartureAt, setTripDepartureAt] = useState<string | null>(null);
+  const { showAlert } = useAppAlert();
   const [driverProfile, setDriverProfile] = useState<DriverProfileRow | null>(null);
   const [ratingRow, setRatingRow] = useState<ShipmentRatingRow>(null);
   const [loading, setLoading] = useState(true);
@@ -148,6 +159,8 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
   const [showPreparerPinModal, setShowPreparerPinModal] = useState(false);
   const [preparerPinSubmitting, setPreparerPinSubmitting] = useState(false);
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset({ extra: 24 });
+  const fabBottom = useBottomSafeInset({ extra: 16, androidMin: 24 });
   const ratingOverlayOpacity = useRef(new Animated.Value(0)).current;
   const ratingSheetTranslateY = useRef(new Animated.Value(SHEET_SLIDE_DISTANCE)).current;
 
@@ -166,7 +179,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
       const { data: shipment, error: shipErr } = await supabase
         .from('shipments')
         .select(
-          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents, tip_status, tip_paid_at, driver_id, pickup_code, delivery_code, cancellation_reason, base_id, picked_up_at, picked_up_by_preparer_at, scheduled_trip_id'
+          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents, tip_status, tip_paid_at, driver_id, pickup_code, delivery_code, cancellation_reason, base_id, picked_up_at, picked_up_by_preparer_at, preparer_handoff_expired_at, scheduled_trip_id, package_size, admin_approved_at'
         )
         .eq('id', shipmentId)
         .eq('user_id', user.id)
@@ -199,7 +212,10 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         base_id: string | null;
         picked_up_at: string | null;
         picked_up_by_preparer_at: string | null;
+        preparer_handoff_expired_at: string | null;
         scheduled_trip_id: string | null;
+        package_size: string | null;
+        admin_approved_at: string | null;
       };
       setDetail({
         id: row.id,
@@ -225,8 +241,23 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         base_id: row.base_id ?? null,
         picked_up_at: row.picked_up_at ?? null,
         picked_up_by_preparer_at: row.picked_up_by_preparer_at ?? null,
+        preparer_handoff_expired_at: row.preparer_handoff_expired_at ?? null,
         scheduled_trip_id: row.scheduled_trip_id ?? null,
+        package_size: row.package_size ?? null,
+        admin_approved_at: row.admin_approved_at ?? null,
       });
+      if (row.scheduled_trip_id) {
+        const { data: trip } = await supabase
+          .from('scheduled_trips')
+          .select('departure_at')
+          .eq('id', row.scheduled_trip_id)
+          .maybeSingle();
+        if (!cancelled) {
+          setTripDepartureAt(((trip as { departure_at?: string | null } | null)?.departure_at) ?? null);
+        }
+      } else if (!cancelled) {
+        setTripDepartureAt(null);
+      }
       if (row.driver_id) {
         const { data: prof } = await supabase
           .from('profiles')
@@ -355,6 +386,14 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
     return ['confirmed', 'in_progress'].includes(s);
   }, [shipmentTripLiveParams, detail?.driver_id, detail?.status, hasValidShipmentMapCoords]);
 
+  const isLargeAwaitingApproval = Boolean(
+    detail &&
+      (detail.package_size ?? '').toLowerCase() === 'grande' &&
+      !detail.admin_approved_at &&
+      detail.status !== 'cancelled' &&
+      detail.status !== 'delivered',
+  );
+
   const awaitingDriverMessage = (() => {
     if (!detail || hasAssignedDriver) return null;
     if (detail.status === 'cancelled' && detail.cancellation_reason === 'no_driver_accepted') {
@@ -362,6 +401,9 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
     }
     if (detail.status === 'cancelled') return null;
     if (detail.status === 'delivered') return null;
+    if (isLargeAwaitingApproval) {
+      return 'Sua encomenda grande está em avaliação pela nossa equipe. Após a aprovação, buscaremos um motorista para a coleta.';
+    }
     return 'Ainda não há motorista atribuído. Assim que um motorista aceitar, os dados dele aparecerão aqui e você poderá acompanhar o envio.';
   })();
 
@@ -430,11 +472,13 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
 
   // Coleta: quem está retirando (preparador com base ou motorista sem base)
   // informa o PIN; o cliente valida no próprio app.
+  // Quando o cron declara o handoff expirado (1h até partida), o preparador
+  // perde a vez e o motorista assume a coleta direta — mesmo com base_id setado.
   const handleSubmitPickupPin = async (code: string): Promise<boolean> => {
     if (!shipmentId || preparerPinSubmitting) return false;
     setPreparerPinSubmitting(true);
     try {
-      const hasBase = Boolean(detail?.base_id);
+      const hasBase = Boolean(detail?.base_id) && !detail?.preparer_handoff_expired_at;
       const { data, error } = await supabase.rpc(
         (hasBase ? 'complete_shipment_passenger_to_preparer' : 'complete_shipment_client_pickup') as never,
         { p_shipment_id: shipmentId, p_confirmation_code: code } as never,
@@ -479,24 +523,54 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
   const handleConfirmCancel = async () => {
     if (!shipmentId || !detail) return;
     setCancelling(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      setCancelling(false);
+    try {
+      const { data, error } = await supabase.functions.invoke('cancel-shipment', {
+        body: { shipment_id: shipmentId },
+      });
+      const payload = (data ?? {}) as { cancelled?: boolean; error?: string };
+      if (error || payload.error) {
+        const code = payload.error ?? '';
+        if (code === 'not_found') {
+          Alert.alert('Envio não encontrado', 'Esta encomenda não está mais disponível.');
+        } else if (code === 'forbidden') {
+          Alert.alert('Acesso negado', 'Esta encomenda não está vinculada à sua conta.');
+        } else if (code === 'invalid_status') {
+          Alert.alert('Envio indisponível', 'Esta encomenda não pode mais ser cancelada.');
+        } else {
+          Alert.alert('Erro', 'Não foi possível cancelar o envio. Tente novamente.');
+        }
+        return;
+      }
+      if (!payload.cancelled) {
+        Alert.alert('Erro', 'Não foi possível cancelar o envio. Tente novamente.');
+        return;
+      }
+      setDetail((d) =>
+        d
+          ? { ...d, status: 'cancelled', cancellation_reason: 'passenger_cancellation' }
+          : null,
+      );
       setShowCancelModal(false);
-      return;
+      void tryOpenSupportTicket('cancelamento_encomenda', { shipment_id: shipmentId });
+      showAlert(
+        'Envio cancelado',
+        'Sua encomenda foi cancelada. Para tratar de reembolso ou qualquer dúvida sobre esse envio, fale com o suporte da Take Me.',
+        {
+          buttonLabel: 'OK',
+          secondaryButton: {
+            label: 'Falar com suporte',
+            onPress: () => {
+              navigation.navigate('Chat', {
+                contactName: 'Suporte Take Me',
+                supportBackoffice: true,
+              });
+            },
+          },
+        },
+      );
+    } finally {
+      setCancelling(false);
     }
-    const { error } = await supabase
-      .from('shipments')
-      .update({ status: 'cancelled' })
-      .eq('id', shipmentId)
-      .eq('user_id', user.id);
-    setCancelling(false);
-    setShowCancelModal(false);
-    if (error) {
-      Alert.alert('Erro', 'Não foi possível cancelar o envio. Tente novamente.');
-      return;
-    }
-    setDetail((d) => (d ? { ...d, status: 'cancelled' } : null));
   };
 
   if (loading) {
@@ -537,6 +611,9 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
 
   const displayId = formatShipmentCode(detail.id);
   const driverAvatarUri = storageUrl('avatars', driverProfile?.avatar_url ?? null);
+  // Quando handoff de 1h expira, o preparador perde a vez: motorista assume a coleta.
+  const preparerHandoffExpired = Boolean(detail.preparer_handoff_expired_at);
+  const effectivelyHasBase = Boolean(detail.base_id) && !preparerHandoffExpired;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -551,7 +628,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(40, insets.bottom + 24) }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomInset + 16 }]}
         showsVerticalScrollIndicator={false}
       >
         {/* Mapa em bloco separado com altura fixa; botão abaixo do mapa, sem sobreposição */}
@@ -619,8 +696,9 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         )}
 
         {/* PIN de Coleta — quem retira informa o código; o cliente valida no app.
-            Sem base: motorista informa o PIN. Com base: preparador informa o PIN A. */}
-        {detail.base_id ? (
+            Sem base (ou handoff de 1h expirado): motorista informa o PIN.
+            Com base e handoff válido: preparador informa o PIN A. */}
+        {effectivelyHasBase ? (
           <View style={styles.pinSection}>
             <Text style={styles.pinLabel}>Coleta pelo preparador</Text>
             {detail.picked_up_by_preparer_at ? (
@@ -661,10 +739,18 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
               </View>
             ) : (
               <>
-                <Text style={styles.preparerHint}>
-                  Quando o motorista chegar para retirar a encomenda, ele informará
-                  um código de 4 dígitos. Digite esse código para confirmar a coleta.
-                </Text>
+                {preparerHandoffExpired ? (
+                  <Text style={styles.preparerHint}>
+                    O preparador não confirmou a tempo. O motorista buscará a
+                    encomenda direto com você — ele informará um código de 4
+                    dígitos no momento da coleta. Digite esse código para confirmar.
+                  </Text>
+                ) : (
+                  <Text style={styles.preparerHint}>
+                    Quando o motorista chegar para retirar a encomenda, ele informará
+                    um código de 4 dígitos. Digite esse código para confirmar a coleta.
+                  </Text>
+                )}
                 <TouchableOpacity
                   style={styles.preparerValidateButton}
                   activeOpacity={0.8}
@@ -720,8 +806,8 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
               <MaterialIcons name="inventory-2" size={28} color="#92400e" />
             </View>
           </View>
-          <Text style={styles.cardDate}>{formatDetailDate(detail.created_at)}</Text>
-          <Text style={styles.cardPrice}>R$ {(detail.amount_cents / 100).toFixed(2)} • {shipmentStatusMessage(detail.status)}</Text>
+          <Text style={styles.cardDate}>{formatDetailDate(tripDepartureAt ?? detail.created_at)}</Text>
+          <Text style={styles.cardPrice}>R$ {(detail.amount_cents / 100).toFixed(2)} • {isLargeAwaitingApproval ? 'Aguardando aprovação da nossa equipe' : shipmentStatusMessage(detail.status)}</Text>
           <TouchableOpacity style={styles.receiptButton} activeOpacity={0.8}>
             <MaterialIcons name="receipt" size={20} color={COLORS.neutral700} />
             <Text style={styles.receiptButtonText}>Recibo</Text>
@@ -813,7 +899,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         )}
       </ScrollView>
 
-      <TouchableOpacity style={[styles.fab, { bottom: Math.max(24, insets.bottom + 16) }]} onPress={() => setSupportSheetVisible(true)} activeOpacity={0.8}>
+      <TouchableOpacity style={[styles.fab, { bottom: fabBottom }]} onPress={() => setSupportSheetVisible(true)} activeOpacity={0.8}>
         <Image source={require('../../../assets/icons/icon-chat.png')} style={styles.fabIcon} />
       </TouchableOpacity>
 
@@ -883,7 +969,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
           <Pressable style={styles.sheetOverlayTouchable} onPress={closeRatingSheet} />
           <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
             <Animated.View
-              style={[styles.bottomSheet, { paddingBottom: insets.bottom + 24, transform: [{ translateY: ratingSheetTranslateY }] }]}
+              style={[styles.bottomSheet, { paddingBottom: bottomInset, transform: [{ translateY: ratingSheetTranslateY }] }]}
               pointerEvents="box-none"
             >
               <View style={styles.sheetHandle} />
@@ -948,7 +1034,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
           if (!preparerPinSubmitting) setShowPreparerPinModal(false);
         }}
         title="Confirmar coleta"
-        instruction={`Digite o código de 4 dígitos informado pelo ${detail.base_id ? 'preparador' : 'motorista'} para confirmar a coleta.`}
+        instruction={`Digite o código de 4 dígitos informado pelo ${effectivelyHasBase ? 'preparador' : 'motorista'} para confirmar a coleta.`}
         inputPlaceholder="Ex: 1234"
         submitLabel={preparerPinSubmitting ? 'Validando…' : 'Confirmar coleta'}
         onSubmit={(code) => {

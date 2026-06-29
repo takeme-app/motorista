@@ -4,6 +4,7 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TripStackParamList } from '../../navigation/types';
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
@@ -58,6 +59,7 @@ const COLORS = {
 };
 
 export function PlanRideScreen({ navigation, route }: Props) {
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const { showAlert } = useAppAlert();
   const { currentPlace, refreshLocation } = useCurrentLocation();
   const [origin, setOrigin] = useState<Place>(() => {
@@ -521,7 +523,7 @@ export function PlanRideScreen({ navigation, route }: Props) {
         <View style={styles.timeSheetOverlayContainer} pointerEvents="box-none">
           <Animated.View style={[styles.timeSheetOverlay, { opacity: timeSheetOverlayOpacity }]} pointerEvents="none" />
           <Pressable style={styles.timeSheetOverlayTouchable} onPress={closeTimeSheet} />
-          <Animated.View style={[styles.timeSheetContent, { transform: [{ translateY: timeSheetTranslateY }] }]} pointerEvents="box-none">
+          <Animated.View style={[styles.timeSheetContent, { paddingBottom: bottomInset }, { transform: [{ translateY: timeSheetTranslateY }] }]} pointerEvents="box-none">
             <View style={styles.timeSheetHandle} />
             <Text style={styles.timeSheetTitle}>Escolha o dia</Text>
             <ScrollView style={styles.timeSlotsScroll} contentContainerStyle={styles.timeSlotsContent}>

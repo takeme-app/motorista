@@ -543,10 +543,31 @@ Deno.serve(async (req) => {
         pricingRouteId
       );
       const baseAdminPct = await getBookingAdminPct(admin);
+      // Adicionais da viagem: vinculados ao trecho (pricing_route_surcharges) + automáticos
+      // do catálogo 'viagem'. Chamado SEMPRE (mesmo sem trecho, p/ os automáticos incidirem).
+      // Fonte única compartilhada com o preview do cliente → paridade exibido x cobrado.
+      let surchargesCents = 0;
+      {
+        const { data: surTotal } = await admin.rpc("resolve_booking_surcharges_cents", {
+          p_pricing_route_id: pricingRouteId,
+        });
+        const n = Number(surTotal);
+        if (Number.isFinite(n) && n > 0) surchargesCents = Math.floor(n);
+      }
+      // Adicional noturno/fim de semana (% da rota × departure_at) → aumenta a base.
+      let timeSurchargePct = 0;
+      {
+        const { data: pctData } = await admin.rpc("resolve_trip_time_surcharge_pct", {
+          p_scheduled_trip_id: sid,
+        });
+        const pct = Number(pctData);
+        if (Number.isFinite(pct) && pct > 0) timeSurchargePct = pct;
+      }
+      const adjustedBaseCents = Math.round(amountCents * (1 + timeSurchargePct / 100));
       const pricing = await computePricing(
         admin,
-        amountCents,
-        0,
+        adjustedBaseCents,
+        surchargesCents,
         baseAdminPct,
         promo.gain_pct,
         promo.discount_pct
@@ -668,7 +689,7 @@ Deno.serve(async (req) => {
         passenger_count: pax,
         bags_count: bags,
         passenger_data: passengerDataJson,
-        price_route_base_cents: amountCents,
+        price_route_base_cents: adjustedBaseCents,
         pricing_subtotal_cents: workerEarningCents,
         pricing_surcharges_cents: pricing.surcharges_cents,
         platform_fee_cents: platformFeeCents,

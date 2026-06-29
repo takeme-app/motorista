@@ -8,22 +8,36 @@ import {
   ScrollView,
 } from 'react-native';
 import { Text } from './Text';
-import { googleGeocodeSuggest, type GoogleGeocodeResult } from '@take-me/shared';
-import { getGoogleMapsApiKey } from '../lib/googleMapsConfig';
+import * as Crypto from 'expo-crypto';
+import {
+  mapboxSearchBoxSuggest,
+  mapboxSearchBoxRetrieve,
+  type MapboxGeocodeResult,
+  type MapboxSuggestItem,
+} from '@take-me/shared';
+import { getMapboxAccessToken } from '../lib/googleMapsConfig';
 import { MaterialIcons } from '@expo/vector-icons';
 
 const DEBOUNCE_MS = 380;
+
+function newSessionToken(): string {
+  try {
+    return Crypto.randomUUID();
+  } catch {
+    return `takeme-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+  }
+}
 
 type Props = {
   label: string;
   placeholder: string;
   value: string;
   onChangeText: (text: string) => void;
-  onSelectPlace: (place: GoogleGeocodeResult) => void;
+  onSelectPlace: (place: MapboxGeocodeResult) => void;
   hasResolvedCoords: boolean;
 };
 
-/** Autocomplete de endereço via Google Geocoding API. */
+/** Autocomplete de endereço via Mapbox Search Box (POIs: Shopping, Hospital...). */
 export function GooglePlacesAutocomplete({
   label,
   placeholder,
@@ -32,12 +46,13 @@ export function GooglePlacesAutocomplete({
   onSelectPlace,
   hasResolvedCoords,
 }: Props) {
-  const [suggestions, setSuggestions] = useState<GoogleGeocodeResult[]>([]);
+  const [suggestions, setSuggestions] = useState<MapboxSuggestItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionTokenRef = useRef<string>(newSessionToken());
 
-  const apiKey = getGoogleMapsApiKey();
+  const apiKey = getMapboxAccessToken();
 
   const runSuggest = useCallback(
     async (q: string) => {
@@ -47,7 +62,9 @@ export function GooglePlacesAutocomplete({
         return;
       }
       setLoading(true);
-      const list = await googleGeocodeSuggest(q, apiKey);
+      const list = await mapboxSearchBoxSuggest(q, apiKey, {
+        sessionToken: sessionTokenRef.current,
+      });
       setSuggestions(list);
       setLoading(false);
     },
@@ -76,15 +93,32 @@ export function GooglePlacesAutocomplete({
     };
   }, [value, runSuggest, hasResolvedCoords]);
 
-  const handlePick = (item: GoogleGeocodeResult) => {
+  const handlePick = async (item: MapboxSuggestItem) => {
     if (timerRef.current) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
     setSuggestions([]);
     setOpen(false);
-    /** Só o pai define texto + resolved; evita onChangeText resetar originResolved antes do select. */
-    onSelectPlace(item);
+    // Search Box não traz coords na lista; resolve via /retrieve antes de avisar o pai.
+    setLoading(true);
+    try {
+      const coords = await mapboxSearchBoxRetrieve(item.mapboxId, apiKey, {
+        sessionToken: sessionTokenRef.current,
+      });
+      if (coords) {
+        /** Só o pai define texto + resolved; evita onChangeText resetar antes do select. */
+        onSelectPlace({
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          placeName: item.address,
+        });
+      }
+    } finally {
+      setLoading(false);
+      // Encerra a sessão de billing; próxima busca usa novo token.
+      sessionTokenRef.current = newSessionToken();
+    }
   };
 
   return (
@@ -124,21 +158,21 @@ export function GooglePlacesAutocomplete({
         >
           {suggestions.map((item, index) => (
             <TouchableOpacity
-              key={`${item.longitude}-${item.latitude}-${index}`}
+              key={`${item.mapboxId}-${index}`}
               style={styles.suggestionRow}
-              onPress={() => handlePick(item)}
+              onPress={() => { void handlePick(item); }}
               activeOpacity={0.7}
             >
               <MaterialIcons name="place" size={18} color="#6B7280" style={styles.suggestionIcon} />
               <Text style={styles.suggestionText} numberOfLines={3}>
-                {item.placeName}
+                {item.address}
               </Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
       ) : null}
       {!apiKey ? (
-        <Text style={styles.warn}>Configure EXPO_PUBLIC_GOOGLE_MAPS_API_KEY para buscar endereços.</Text>
+        <Text style={styles.warn}>Configure EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN para buscar endereços.</Text>
       ) : null}
     </View>
   );

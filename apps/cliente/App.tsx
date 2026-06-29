@@ -25,7 +25,6 @@ import { AppAlertProvider } from './src/contexts/AppAlertContext';
 import { CurrentLocationProvider } from './src/contexts/CurrentLocationContext';
 import { supabase } from './src/lib/supabase';
 import { syncClienteProfileFcmToken } from './src/lib/clienteFcm';
-import { registerClienteForegroundNotifications } from './src/lib/foregroundNotificationHandler';
 
 const SPLASH_MIN_MS = 500;
 const SPLASH_MAX_MS = 10000; // Se passar disso, esconde a splash de qualquer forma (evita travar no Android)
@@ -91,20 +90,9 @@ export default function App() {
     };
   }, []);
 
-  // Exibe pushes quando o app está em foreground (FCM SDK não faz isso sozinho).
-  useEffect(() => {
-    let unsub: (() => void) | undefined;
-    void (async () => {
-      try {
-        unsub = await registerClienteForegroundNotifications();
-      } catch (_) {
-        /* módulo nativo indisponível (ex.: web) */
-      }
-    })();
-    return () => {
-      unsub?.();
-    };
-  }, []);
+  // Pushes em foreground + deeplink ao tocar (foreground/background/killed) são
+  // tratados pelo NotificationDeeplinkHandler montado no RootNavigator, que registra
+  // o onMessage/Notifee com o callback de navegação.
 
   const runSessionInit = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession();

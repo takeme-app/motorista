@@ -97,6 +97,41 @@ export async function resolveStorageDisplayUrl(client: SupabaseClient, pathOrUrl
   return data.publicUrl ?? null;
 }
 
+const DEPENDENT_DOCUMENTS_BUCKET = 'dependent-documents';
+
+/**
+ * Resolve a URL exibível de um documento de dependente (menor / responsável).
+ * O app cliente grava apenas o PATH cru no bucket privado `dependent-documents`
+ * (ex.: `{userId}/{dependentId}/documento_dependente.pdf`) → precisa de signed URL.
+ * Tolera também URLs públicas/assinadas antigas do mesmo bucket.
+ * Mantida separada de `resolveStorageDisplayUrl` (que só cobre driver-documents/vehicles).
+ */
+export async function resolveDependentDocumentUrl(
+  client: SupabaseClient,
+  pathOrUrl: string | null | undefined,
+): Promise<string | null> {
+  const trimmed = pathOrUrl?.trim();
+  if (!trimmed) return null;
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    const parsed = parseSupabasePublicStorageUrl(trimmed) ?? parseSupabaseSignedStorageUrl(trimmed);
+    const objectPath = parsed?.bucket === DEPENDENT_DOCUMENTS_BUCKET ? parsed.objectPath : null;
+    if (objectPath) {
+      const { data, error } = await client.storage
+        .from(DEPENDENT_DOCUMENTS_BUCKET)
+        .createSignedUrl(objectPath, 60 * 60);
+      if (!error && data?.signedUrl) return data.signedUrl;
+    }
+    return trimmed;
+  }
+
+  const { data, error } = await client.storage
+    .from(DEPENDENT_DOCUMENTS_BUCKET)
+    .createSignedUrl(trimmed, 60 * 60);
+  if (!error && data?.signedUrl) return data.signedUrl;
+  return null;
+}
+
 const CHAT_ATTACHMENTS_BUCKET = 'chat-attachments';
 
 /**

@@ -132,6 +132,7 @@ export function NotificationsScreen({ navigation }: Props) {
           .from('notifications')
           .select(columns)
           .eq('user_id', user.id)
+          .eq('target_app_slug', 'motorista')
           .order('created_at', { ascending: false })
           .limit(50);
 

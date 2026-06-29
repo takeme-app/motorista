@@ -1,4 +1,6 @@
 import * as Location from 'expo-location';
+import { mapboxSearchBoxSuggest, mapboxSearchBoxRetrieve } from '@take-me/shared';
+import { supabase } from './supabase';
 
 export type Coords = { latitude: number; longitude: number };
 
@@ -81,7 +83,7 @@ export async function reverseGeocode(latitude: number, longitude: number): Promi
   }
   if (!res.ok) throw new Error('Falha ao obter endereço');
   const data = (await res.json()) as { display_name?: string; address?: NominatimAddress };
-  const fallback = data.display_name ?? `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
+  const fallback = data.display_name ?? 'a partir daqui';
   if (data.address) return formatShortAddress(data.address, fallback);
   return fallback;
 }
@@ -91,8 +93,8 @@ export type ResolveCurrentPlaceResult =
   | { kind: 'permission_denied' }
   | { kind: 'unavailable' };
 
-function formatCoordsOnlyAddress(c: Coords): string {
-  return `Localização (${c.latitude.toFixed(4)}, ${c.longitude.toFixed(4)})`;
+function formatCoordsOnlyAddress(_c: Coords): string {
+  return 'a partir daqui';
 }
 
 /**
@@ -209,14 +211,125 @@ function formatShortAddress(addr: NominatimAddress | undefined, fallback: string
   return fallback;
 }
 
+export type SearchAddressOptions = {
+  /** Viés de proximidade: prioriza resultados perto deste ponto (ex.: localização atual). */
+  proximity?: { latitude: number; longitude: number } | null;
+  /** Token de sessão Mapbox (agrupa suggest+retrieve para billing). */
+  sessionToken?: string;
+};
+
+/**
+ * Item da lista de autocomplete. Quando vem da Mapbox Search Box, não traz
+ * coordenadas ainda (resolver via `retrieveAddressCoords` ao selecionar). Quando
+ * vem do fallback Nominatim, já traz `latitude`/`longitude`.
+ */
+export type AddressSearchResult = {
+  /** chave estável para a lista */
+  id: string;
+  /** texto exibido/selecionado (preserva o nome do POI) */
+  address: string;
+  city?: string;
+  /** presente para resultados Search Box; usar em `retrieveAddressCoords` */
+  mapboxId?: string;
+  /** presente apenas no fallback Nominatim */
+  latitude?: number;
+  longitude?: number;
+};
+
+/** Remove duplicados por `address` (case-insensitive), preservando ordem. */
+function dedupeResults(list: AddressSearchResult[]): AddressSearchResult[] {
+  const seen = new Set<string>();
+  return list.filter((s) => {
+    if (s.address.trim().length === 0) return false;
+    const key = s.address.trim().toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /**
  * Autocomplete de endereços (estilo Google Maps).
- * Usa Nominatim Search. Respeite 1 req/seg; em produção considere Google Places Autocomplete.
- * Aceita cidade, rua, endereço completo. Resultados resumidos no formato "Cidade, UF" ou "Rua, Cidade - UF".
+ *
+ * Delega à Mapbox Search Box compartilhada (`@take-me/shared`) — mesmo token dos
+ * mapas/rotas — que faz autocomplete de verdade e prioriza POIs nomeados
+ * (Shopping, Hospital, Aeroporto...), enviesados por proximidade. As coordenadas
+ * vêm depois, via `retrieveAddressCoords` no momento da seleção. Cai para
+ * Nominatim apenas se o token estiver ausente (dev sem env).
  */
-export async function searchAddress(query: string): Promise<AddressSuggestion[]> {
+/**
+ * Pontos nomeados globais (tabela `custom_places`) cadastrados pelo admin.
+ * Casa por nome e já traz lat/lng (a seleção usa as coords direto, sem retrieve).
+ */
+async function fetchCustomPlaceMatches(query: string): Promise<AddressSearchResult[]> {
+  try {
+    const { data } = await (supabase as { from: (t: string) => any })
+      .from('custom_places')
+      .select('id, name, city, latitude, longitude')
+      .eq('is_active', true)
+      .ilike('name', `%${query}%`)
+      .limit(6);
+    if (!Array.isArray(data) || data.length === 0) return [];
+    return data
+      .filter((p: any) => Number.isFinite(Number(p.latitude)) && Number.isFinite(Number(p.longitude)))
+      .map((p: any) => ({
+        id: `custom:${p.id}`,
+        address: String(p.name ?? '').trim(),
+        ...(p.city ? { city: String(p.city) } : {}),
+        latitude: Number(p.latitude),
+        longitude: Number(p.longitude),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+export async function searchAddress(
+  query: string,
+  opts?: SearchAddressOptions,
+): Promise<AddressSearchResult[]> {
   const trimmed = query.trim();
   if (trimmed.length < 2) return [];
+
+  // Pontos nomeados (custom_places) aparecem primeiro nas sugestões.
+  const custom = await fetchCustomPlaceMatches(trimmed);
+
+  const token = (process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '').trim();
+  let base: AddressSearchResult[];
+  if (!token) {
+    base = await searchAddressNominatim(trimmed);
+  } else {
+    const items = await mapboxSearchBoxSuggest(trimmed, token, {
+      proximity: opts?.proximity ?? null,
+      sessionToken: opts?.sessionToken,
+    });
+    base = items.length === 0
+      ? await searchAddressNominatim(trimmed)
+      : items.map((s) => ({
+          id: s.mapboxId,
+          address: s.address,
+          mapboxId: s.mapboxId,
+          ...(s.city ? { city: s.city } : {}),
+        }));
+  }
+  return dedupeResults([...custom, ...base]);
+}
+
+/**
+ * Resolve as coordenadas de um resultado da Search Box (passo `/retrieve`).
+ * Deve usar o MESMO `sessionToken` do `searchAddress` que gerou o `mapboxId`.
+ */
+export async function retrieveAddressCoords(
+  mapboxId: string,
+  opts?: { sessionToken?: string },
+): Promise<{ latitude: number; longitude: number; city?: string } | null> {
+  const token = (process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '').trim();
+  if (!token || !mapboxId) return null;
+  return mapboxSearchBoxRetrieve(mapboxId, token, { sessionToken: opts?.sessionToken });
+}
+
+/** Fallback Nominatim (usado só sem token Mapbox). Respeite 1 req/seg. */
+async function searchAddressNominatim(trimmed: string): Promise<AddressSearchResult[]> {
   const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(trimmed)}&format=json&addressdetails=1&limit=10&countrycodes=br`;
   const res = await fetch(url, {
     headers: { 'User-Agent': 'TakeMe-Cliente/1.0 (mobile app)' },
@@ -228,7 +341,7 @@ export async function searchAddress(query: string): Promise<AddressSuggestion[]>
     lon?: string;
     address?: NominatimAddress;
   }>;
-  const mapped = data.map((item) => {
+  const mapped: AddressSearchResult[] = data.map((item, i) => {
     const short = formatShortAddress(item.address, item.display_name ?? '');
     const addr = item.address;
     const cityRaw =
@@ -238,18 +351,12 @@ export async function searchAddress(query: string): Promise<AddressSuggestion[]>
       addr?.municipality?.trim() ??
       '';
     return {
+      id: `nominatim-${i}-${item.lat ?? ''}-${item.lon ?? ''}`,
       address: short,
       latitude: parseFloat(item.lat ?? '0'),
       longitude: parseFloat(item.lon ?? '0'),
       ...(cityRaw ? { city: cityRaw } : {}),
     };
-  }).filter((s) => s.address.length > 0);
-
-  const seen = new Set<string>();
-  return mapped.filter((s) => {
-    const key = s.address.trim().toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
   });
+  return dedupeResults(mapped);
 }

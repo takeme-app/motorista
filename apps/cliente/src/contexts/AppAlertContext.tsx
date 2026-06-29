@@ -1,7 +1,13 @@
 import React, { createContext, useCallback, useContext, useRef, useState } from 'react';
 import { AppAlertModal } from '../components/AppAlertModal';
 
-type ShowAlertOptions = { buttonLabel?: string; onClose?: () => void };
+type SecondaryButton = { label: string; onPress: () => void };
+
+type ShowAlertOptions = {
+  buttonLabel?: string;
+  onClose?: () => void;
+  secondaryButton?: SecondaryButton;
+};
 
 type AppAlertContextValue = {
   showAlert: (title: string, message: string, options?: ShowAlertOptions) => void;
@@ -14,13 +20,15 @@ export function AppAlertProvider({ children }: { children: React.ReactNode }) {
   const [title, setTitle] = useState('');
   const [message, setMessage] = useState('');
   const [buttonLabel, setButtonLabel] = useState('OK');
-  const onCloseRef = useRef<(() => void) | undefined>();
+  const [secondaryButton, setSecondaryButton] = useState<SecondaryButton | undefined>(undefined);
+  const onCloseRef = useRef<(() => void) | undefined>(undefined);
 
   const showAlert = useCallback(
     (t: string, m: string, options?: ShowAlertOptions) => {
       setTitle(t);
       setMessage(m);
       setButtonLabel(options?.buttonLabel ?? 'OK');
+      setSecondaryButton(options?.secondaryButton);
       onCloseRef.current = options?.onClose;
       setVisible(true);
     },
@@ -42,6 +50,7 @@ export function AppAlertProvider({ children }: { children: React.ReactNode }) {
         title={title}
         message={message}
         buttonLabel={buttonLabel}
+        secondaryButton={secondaryButton}
       />
     </AppAlertContext.Provider>
   );

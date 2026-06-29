@@ -275,6 +275,11 @@ export default function Layout() {
                   icon: settingsOutlineSvg,
                   action: () => { setAccountOpen(false); navigate('/configuracoes'); },
                 },
+                {
+                  label: 'Feriados',
+                  icon: settingsOutlineSvg,
+                  action: () => { setAccountOpen(false); navigate('/feriados'); },
+                },
               ] as const).map((item) =>
                 React.createElement('button', {
                   key: item.label, type: 'button', role: 'menuitem',

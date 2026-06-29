@@ -12,7 +12,9 @@ export type TripStatusBadge =
   | 'em_andamento'
   | 'aguardando_inicio'
   | 'em_analise'
-  | 'aguardando_motorista';
+  | 'aguardando_motorista'
+  | 'aguardando_aprovacao'
+  | 'orcamento';
 
 /** Motivo gravado pelo trigger ao iniciar viagem sem aceite do motorista (bookings/envios/dependentes). */
 export const DRIVER_JOURNEY_STARTED_NOT_ACCEPTED_REASON = 'driver_journey_started_not_accepted';
@@ -36,6 +38,8 @@ const VARIANT_STYLES: Record<
   aguardando_inicio: { backgroundColor: '#dcfce7', color: '#166534' },
   em_analise: { backgroundColor: '#e5e5e5', color: '#0d0d0d' },
   aguardando_motorista: { backgroundColor: '#e5e5e5', color: '#0d0d0d' },
+  aguardando_aprovacao: { backgroundColor: '#fef3c7', color: '#92400e' },
+  orcamento: { backgroundColor: '#dbeafe', color: '#1e3a8a' },
 };
 
 const VARIANT_LABELS: Record<StatusBadgeVariant, string> = {
@@ -48,6 +52,8 @@ const VARIANT_LABELS: Record<StatusBadgeVariant, string> = {
   aguardando_inicio: 'Aguardando início',
   em_analise: 'Em análise',
   aguardando_motorista: 'Aguardando aceite do motorista',
+  aguardando_aprovacao: 'Aguardando aprovação',
+  orcamento: 'Orçamento disponível',
 };
 
 type Props = {
@@ -101,8 +107,10 @@ export function clientViagemStatusBadge(
     return 'cancelada';
   }
   if (t === 'completed') {
-    if (b === 'confirmed' || b === 'in_progress') return 'concluida';
-    if (b === 'paid' || b === 'pending') return 'reembolsada';
+    // 'paid' é o status terminal natural da reserva após `motorista_complete_scheduled_trip`
+    // (libera repasse). Não é refund.
+    if (b === 'confirmed' || b === 'in_progress' || b === 'paid') return 'concluida';
+    if (b === 'pending') return 'em_analise';
     return 'em_analise';
   }
   if (t === 'active') {
@@ -125,6 +133,8 @@ export function clientShipmentActivityStatusBadge(
   tripStatus: string | undefined | null,
   options?: { skipDriverIdConfirmedCheck?: boolean },
   driverJourneyStartedAt?: string | null,
+  packageSize?: string | null,
+  adminApprovedAt?: string | null,
 ): TripStatusBadge {
   const s = String(status ?? '').trim().toLowerCase();
   const t = String(tripStatus ?? '').trim().toLowerCase();
@@ -132,6 +142,14 @@ export function clientShipmentActivityStatusBadge(
 
   if (s === 'cancelled' && isDriverJourneyStartedNotAcceptedReason(cancellationReason)) {
     return 'reembolsada';
+  }
+  // Encomenda grande aguardando aprovação do admin (antes de ofertar ao motorista).
+  if (
+    String(packageSize ?? '').trim().toLowerCase() === 'grande' &&
+    !adminApprovedAt &&
+    s !== 'cancelled' && s !== 'canceled' && s !== 'delivered'
+  ) {
+    return 'aguardando_aprovacao';
   }
   if (t === 'active') {
     if (s === 'pending_review') return 'aguardando_motorista';

@@ -117,6 +117,31 @@ export function applyNotificationDeeplink(
       return true;
     }
 
+    // Telas dos tabs de excursão (preparador). Vivem em MainExcursoes → ColetasExc
+    // (stack "Excursões"); ex.: DetalhesExcursao. Sem este branch caíam no fallback
+    // do Profile (rota inexistente) e a push não navegava.
+    const excursionTabRoutes = [
+      'DetalhesExcursao',
+      'RealizarEmbarques',
+      'HistoricoExcursoes',
+      'ColetasMain',
+    ];
+    if (excursionTabRoutes.includes(route)) {
+      nav.dispatch(
+        CommonActions.navigate({
+          name: 'MainExcursoes',
+          params: {
+            screen: 'ColetasExc',
+            params: {
+              screen: route,
+              params: params ?? undefined,
+            },
+          },
+        }),
+      );
+      return true;
+    }
+
     // Telas dentro do Profile stack (ex.: Notifications, Conversations, WorkerRoutes).
     nav.dispatch(
       CommonActions.navigate({

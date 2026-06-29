@@ -6,6 +6,8 @@ const COLORS = {
   background: '#FFFFFF',
   black: '#0d0d0d',
   neutral700: '#767676',
+  neutral100: '#EFEFEF',
+  danger: '#B24A44',
 };
 
 export type AppAlertModalProps = {
@@ -14,6 +16,11 @@ export type AppAlertModalProps = {
   title: string;
   message: string;
   buttonLabel?: string;
+  /** Modo confirmação (2 botões): define o rótulo do botão de confirmar. */
+  confirmLabel?: string;
+  cancelLabel?: string;
+  onConfirm?: () => void;
+  destructive?: boolean;
 };
 
 export function AppAlertModal({
@@ -22,7 +29,14 @@ export function AppAlertModal({
   title,
   message,
   buttonLabel = 'OK',
+  confirmLabel,
+  cancelLabel = 'Cancelar',
+  onConfirm,
+  destructive,
 }: AppAlertModalProps) {
+  // Modo confirmação (2 botões) só quando há confirmLabel — o provider sempre
+  // passa onConfirm, então não dá pra usá-lo como gatilho.
+  const isConfirm = !!confirmLabel;
   return (
     <Modal
       visible={visible}
@@ -35,9 +49,28 @@ export function AppAlertModal({
         <View style={styles.box}>
           <Text style={styles.title}>{title}</Text>
           <Text style={styles.message}>{message}</Text>
-          <TouchableOpacity style={styles.primary} activeOpacity={0.8} onPress={onClose}>
-            <Text style={styles.primaryText}>{buttonLabel}</Text>
-          </TouchableOpacity>
+          {isConfirm ? (
+            <View style={styles.row}>
+              <TouchableOpacity
+                style={[styles.rowBtn, styles.cancelBtn]}
+                activeOpacity={0.8}
+                onPress={onClose}
+              >
+                <Text style={styles.cancelText}>{cancelLabel}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.rowBtn, destructive ? styles.confirmDanger : styles.confirmFill]}
+                activeOpacity={0.8}
+                onPress={onConfirm}
+              >
+                <Text style={styles.primaryText}>{confirmLabel}</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity style={styles.primary} activeOpacity={0.8} onPress={onClose}>
+              <Text style={styles.primaryText}>{buttonLabel}</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     </Modal>
@@ -79,4 +112,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primaryText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
+  row: { flexDirection: 'row', gap: 12 },
+  rowBtn: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  cancelBtn: { backgroundColor: COLORS.neutral100 },
+  cancelText: { fontSize: 16, fontWeight: '600', color: COLORS.black },
+  confirmFill: { backgroundColor: COLORS.black },
+  confirmDanger: { backgroundColor: COLORS.danger },
 });

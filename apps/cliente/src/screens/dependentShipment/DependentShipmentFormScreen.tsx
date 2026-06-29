@@ -7,6 +7,7 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -29,55 +30,55 @@ const COLORS = {
   neutral700: '#767676',
 };
 
-type Dependent = { id: string; full_name: string; status: string };
+type Dependent = { id: string; full_name: string; status: string; contact_phone: string | null };
 
-function formatPhoneDisplay(digits: string): string {
-  const d = digits.replace(/\D/g, '');
-  if (d.length <= 2) return d ? `(${d}` : '';
-  if (d.length <= 7) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
-  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7, 11)}`;
-}
-
-function applyPhoneMask(text: string): string {
-  const digits = text.replace(/\D/g, '').slice(0, 11);
-  return formatPhoneDisplay(digits);
-}
+/** Máximo de fotos no carrossel (mesmo limite do fluxo de encomenda, p/ consistência). */
+const MAX_DEPENDENT_PHOTOS = 8;
 
 export function DependentShipmentFormScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
-  const [fullName, setFullName] = useState('');
-  const [contactPhone, setContactPhone] = useState('');
   const [bagsCount, setBagsCount] = useState(1);
-  /** Outras pessoas que embarcam no veículo com o dependente (titular não conta). */
-  const [extraPassengers, setExtraPassengers] = useState(0);
   const [instructions, setInstructions] = useState('');
   const [dependentId, setDependentId] = useState<string | undefined>(undefined);
   const [dependents, setDependents] = useState<Dependent[]>([]);
   const [loadingDependents, setLoadingDependents] = useState(true);
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [photoUris, setPhotoUris] = useState<string[]>([]);
 
-  const totalPassengers = dependentShipmentTotalPassengers(extraPassengers);
+  // Só o dependente embarca (sem passageiros extras nesta tela).
+  const totalPassengers = dependentShipmentTotalPassengers(0);
   const maxBags = maxBagsForTrip(totalPassengers, null);
+  const hasValidated = dependents.some((d) => d.status === 'validated');
 
   useEffect(() => {
     setBagsCount((b) => Math.min(b, maxBags));
   }, [maxBags]);
 
-  const pickImage = async () => {
+  const pickImages = async () => {
+    const remaining = MAX_DEPENDENT_PHOTOS - photoUris.length;
+    if (remaining <= 0) {
+      showAlert('Fotos', `Máximo de ${MAX_DEPENDENT_PHOTOS} fotos.`);
+      return;
+    }
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      showAlert('Permissão', 'Precisamos de acesso à galeria para adicionar uma foto da encomenda.');
+      showAlert('Permissão', 'Precisamos de acesso à galeria para adicionar fotos do dependente.');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.8,
+      allowsMultipleSelection: true,
+      quality: 0.85,
+      selectionLimit: remaining,
     });
-    if (!result.canceled && result.assets[0]?.uri) {
-      setPhotoUri(result.assets[0].uri);
+    if (!result.canceled && result.assets?.length) {
+      setPhotoUris((prev) =>
+        [...prev, ...result.assets.map((a) => a.uri)].slice(0, MAX_DEPENDENT_PHOTOS),
+      );
     }
+  };
+
+  const removePhotoAt = (index: number) => {
+    setPhotoUris((prev) => prev.filter((_, i) => i !== index));
   };
 
   const loadDependents = useCallback(async () => {
@@ -88,11 +89,12 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
     }
     const { data } = await supabase
       .from('dependents')
-      .select('id, full_name, status')
+      .select('id, full_name, status, contact_phone')
       .eq('user_id', user.id)
       .in('status', ['pending', 'validated'])
       .order('created_at', { ascending: false });
-    setDependents(data ?? []);
+    // contact_phone existe no banco, mas os tipos gerados podem estar defasados.
+    setDependents((data ?? []) as unknown as Dependent[]);
     setLoadingDependents(false);
   }, []);
 
@@ -103,26 +105,20 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
     }, [loadDependents])
   );
 
-  const handleContactChange = (text: string) => setContactPhone(applyPhoneMask(text));
-
   const goToAddDependent = () => {
     navigation.navigate('AddDependent');
   };
 
+  // Só dependentes validados pelo admin podem ser selecionados para o envio.
   const selectDependent = (d: Dependent) => {
+    if (d.status !== 'validated') return;
     setDependentId(d.id);
-    setFullName(d.full_name);
   };
 
   const handleDefineTrip = () => {
-    const name = fullName.trim();
-    if (!name) {
-      showAlert('Atenção', 'Informe o nome do dependente.');
-      return;
-    }
-    const phoneDigits = contactPhone.replace(/\D/g, '');
-    if (phoneDigits.length < 10) {
-      showAlert('Atenção', 'Preencha o contato com DDD e número (ex.: (00) 00000-0000).');
+    const selected = dependents.find((d) => d.id === dependentId);
+    if (!selected || selected.status !== 'validated') {
+      showAlert('Atenção', 'Selecione um dependente aprovado para o envio.');
       return;
     }
     if (bagsCount > maxBags) {
@@ -130,13 +126,13 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
       return;
     }
     navigation.navigate('DefineDependentTrip', {
-      fullName: name,
-      contactPhone: phoneDigits,
+      fullName: selected.full_name,
+      contactPhone: (selected.contact_phone ?? '').replace(/\D/g, ''),
       bagsCount,
-      extraPassengers,
+      extraPassengers: 0,
       instructions: instructions.trim() || undefined,
-      dependentId,
-      photoUri: photoUri ?? undefined,
+      dependentId: selected.id,
+      ...(photoUris.length ? { photoUris } : {}),
     });
   };
 
@@ -160,77 +156,56 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
         >
           <Text style={styles.sectionTitle}>Confirme os detalhes do envio para seu dependente</Text>
 
-          <Text style={styles.label}>Nome completo</Text>
-          <View style={styles.nameInputWrap}>
-            <TextInput
-              style={styles.nameInput}
-              value={fullName}
-              onChangeText={setFullName}
-              placeholder="Nome do dependente"
-              placeholderTextColor={COLORS.neutral700}
-            />
+          <View style={styles.depHeaderRow}>
+            <Text style={styles.label}>Dependente</Text>
             <TouchableOpacity style={styles.linkButton} onPress={goToAddDependent} activeOpacity={0.8}>
               <Text style={styles.linkText}>Cadastrar contato</Text>
             </TouchableOpacity>
           </View>
+
           {!loadingDependents && dependents.length > 0 && (
             <View style={styles.dependentsRow}>
-              {dependents.map((d) => (
-                <TouchableOpacity
-                  key={d.id}
-                  style={[styles.chip, dependentId === d.id && styles.chipSelected]}
-                  onPress={() => selectDependent(d)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.chipText, dependentId === d.id && styles.chipTextSelected]} numberOfLines={1}>
-                    {d.full_name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              {dependents.map((d) => {
+                const selectable = d.status === 'validated';
+                const selected = dependentId === d.id;
+                return (
+                  <TouchableOpacity
+                    key={d.id}
+                    style={[styles.chip, selected && styles.chipSelected, !selectable && styles.chipPending]}
+                    onPress={() => selectDependent(d)}
+                    disabled={!selectable}
+                    activeOpacity={0.7}
+                  >
+                    {!selectable && (
+                      <MaterialIcons name="schedule" size={14} color={COLORS.neutral700} style={{ marginRight: 4 }} />
+                    )}
+                    <Text
+                      style={[
+                        styles.chipText,
+                        selected && styles.chipTextSelected,
+                        !selectable && styles.chipTextPending,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {d.full_name}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           )}
 
-          <Text style={styles.label}>Contato</Text>
-          <TextInput
-            style={styles.input}
-            value={contactPhone}
-            onChangeText={handleContactChange}
-            placeholder="(00) 00000-0000"
-            placeholderTextColor={COLORS.neutral700}
-            keyboardType="phone-pad"
-          />
-
-          <Text style={[styles.label, { marginTop: 8 }]}>Quem embarca na viagem</Text>
-          <Text style={styles.passengersExplain}>
-            Contamos apenas quem vai no veículo: o dependente e, se precisar, outras pessoas na mesma corrida com ele.
-            Você (quem solicita o envio) não embarca: não ocupa lugar nem aparece aqui.
-          </Text>
-          <View style={styles.compactStepperRow}>
-            <TouchableOpacity
-              style={[styles.compactStepperBtn, extraPassengers <= 0 && styles.stepperBtnDisabled]}
-              onPress={() => setExtraPassengers((n) => Math.max(0, n - 1))}
-              disabled={extraPassengers <= 0}
-              activeOpacity={0.7}
-            >
-              <MaterialIcons name="remove" size={22} color={extraPassengers <= 0 ? COLORS.neutral700 : COLORS.black} />
-            </TouchableOpacity>
-            <Text style={styles.compactStepperValue}>
-              {extraPassengers === 0 ? 'Nenhum extra' : extraPassengers === 1 ? '1 acompanhante' : `${extraPassengers} acompanhantes`}
+          {!loadingDependents && dependents.some((d) => d.status !== 'validated') && (
+            <Text style={styles.pendingHint}>
+              Dependentes em cinza aguardam validação do admin e ainda não podem ser enviados.
             </Text>
-            <TouchableOpacity
-              style={styles.compactStepperBtn}
-              onPress={() => setExtraPassengers((n) => n + 1)}
-              activeOpacity={0.7}
-            >
-              <MaterialIcons name="add" size={22} color={COLORS.black} />
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.passengersMeta}>
-            Total embarcado(s): {totalPassengers}{' '}
-            {extraPassengers === 0
-              ? '(apenas o dependente).'
-              : `(dependente + ${extraPassengers} ${extraPassengers === 1 ? 'acompanhante' : 'acompanhantes'}).`}
-          </Text>
+          )}
+
+          {!loadingDependents && !hasValidated && (
+            <Text style={styles.noValidatedNotice}>
+              Você precisa de um dependente aprovado para enviar. Toque em "Cadastrar contato" e aguarde a validação do admin.
+            </Text>
+          )}
 
           <View style={styles.separator}>
             <View style={styles.separatorLine} />
@@ -278,19 +253,49 @@ export function DependentShipmentFormScreen({ navigation }: Props) {
             numberOfLines={3}
           />
 
-          <Text style={styles.label}>Foto da encomenda (opcional)</Text>
-          <TouchableOpacity style={styles.photoBox} onPress={pickImage} activeOpacity={0.8}>
-            {photoUri ? (
-              <Text style={styles.photoPlaceholderText} numberOfLines={1}>Foto selecionada</Text>
-            ) : (
-              <>
-                <MaterialIcons name="camera-alt" size={32} color={COLORS.neutral700} />
-                <Text style={styles.photoPlaceholderText}>Toque para adicionar</Text>
-              </>
-            )}
-          </TouchableOpacity>
+          <Text style={styles.label}>Fotos do dependente (opcional, até {MAX_DEPENDENT_PHOTOS})</Text>
+          {photoUris.length === 0 ? (
+            <TouchableOpacity style={styles.photoBox} onPress={pickImages} activeOpacity={0.8}>
+              <MaterialIcons name="camera-alt" size={32} color={COLORS.neutral700} />
+              <Text style={styles.photoPlaceholderText}>Toque para adicionar uma ou mais fotos</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.photoGallery}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.photoGalleryRow}
+                keyboardShouldPersistTaps="handled"
+              >
+                {photoUris.map((uri, idx) => (
+                  <View key={`${uri}-${idx}`} style={styles.photoThumbWrap}>
+                    <Image source={{ uri }} style={styles.photoThumbSmall} resizeMode="cover" />
+                    <TouchableOpacity
+                      style={styles.photoThumbRemove}
+                      onPress={() => removePhotoAt(idx)}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      accessibilityLabel="Remover foto"
+                    >
+                      <MaterialIcons name="close" size={18} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                {photoUris.length < MAX_DEPENDENT_PHOTOS ? (
+                  <TouchableOpacity style={styles.photoAddTile} onPress={pickImages} activeOpacity={0.85}>
+                    <MaterialIcons name="add-a-photo" size={28} color={COLORS.neutral700} />
+                  </TouchableOpacity>
+                ) : null}
+              </ScrollView>
+              <Text style={styles.photoHint}>Toque em + para incluir mais · ✕ remove a foto</Text>
+            </View>
+          )}
 
-          <TouchableOpacity style={styles.primaryButton} onPress={handleDefineTrip} activeOpacity={0.8}>
+          <TouchableOpacity
+            style={[styles.primaryButton, !dependentId && styles.primaryButtonDisabled]}
+            onPress={handleDefineTrip}
+            disabled={!dependentId}
+            activeOpacity={0.8}
+          >
             <Text style={styles.primaryButtonText}>Definir viagem</Text>
           </TouchableOpacity>
         </ScrollView>
@@ -370,16 +375,28 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     textDecorationLine: 'underline',
   },
-  dependentsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
+  depHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  dependentsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
   chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: 20,
     backgroundColor: COLORS.neutral300,
   },
   chipSelected: { backgroundColor: COLORS.black },
+  chipPending: { opacity: 0.55 },
   chipText: { fontSize: 14, color: COLORS.black },
   chipTextSelected: { color: '#FFF' },
+  chipTextPending: { color: COLORS.neutral700 },
+  pendingHint: { fontSize: 12, color: COLORS.neutral700, marginBottom: 8, lineHeight: 16 },
+  noValidatedNotice: { fontSize: 13, color: '#B91C1C', marginBottom: 8, lineHeight: 18 },
   passengersExplain: { fontSize: 13, color: COLORS.neutral700, marginBottom: 12, lineHeight: 18 },
   compactStepperRow: {
     flexDirection: 'row',
@@ -401,7 +418,7 @@ const styles = StyleSheet.create({
   stepperWrap: { marginBottom: 20 },
   stepperRow: {
     flexDirection: 'row',
-    width: 358,
+    width: '100%',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 8,
@@ -433,6 +450,40 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   photoPlaceholderText: { fontSize: 14, color: COLORS.neutral700, marginTop: 4 },
+  photoGallery: { marginBottom: 24 },
+  photoGalleryRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
+  photoThumbWrap: {
+    width: 88,
+    height: 88,
+    borderRadius: 12,
+    overflow: 'hidden',
+    position: 'relative',
+    marginRight: 10,
+  },
+  photoThumbSmall: { width: '100%', height: '100%', backgroundColor: COLORS.neutral300 },
+  photoThumbRemove: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoAddTile: {
+    width: 88,
+    height: 88,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: '#E2E2E2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.neutral300,
+  },
+  photoHint: { fontSize: 12, color: COLORS.neutral700, marginTop: 10 },
   primaryButton: {
     backgroundColor: COLORS.black,
     paddingVertical: 16,
@@ -440,5 +491,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 8,
   },
+  primaryButtonDisabled: { opacity: 0.4 },
   primaryButtonText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
 });

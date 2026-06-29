@@ -6,7 +6,6 @@ import {
   StyleSheet,
   ScrollView,
   KeyboardAvoidingView,
-  Platform,
   ActivityIndicator,
 } from 'react-native';
 import { Text } from '../../components/Text';
@@ -20,6 +19,7 @@ import { supabase } from '../../lib/supabase';
 import { tryOpenSupportTicket } from '../../lib/supportTickets';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
+import { uploadToStorage } from '../../utils/uploadToStorage';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'AddDependent'>;
 
@@ -83,13 +83,15 @@ export function AddDependentScreen({ navigation }: Props) {
   };
 
   const uploadFile = async (uri: string, path: string, mimeType: string): Promise<boolean> => {
-    const response = await fetch(uri);
-    const blob = await response.blob();
-    const { error } = await supabase.storage.from(BUCKET_DOCS).upload(path, blob, {
-      contentType: mimeType || 'application/octet-stream',
-      upsert: true,
-    });
-    return !error;
+    // Em RN/Expo, `supabase.storage.upload(blob)` a partir de `fetch(uri).blob()`
+    // grava arquivo de 0 byte. `uploadToStorage` usa FileSystem.uploadAsync
+    // (BINARY_CONTENT), que envia os bytes reais do arquivo.
+    try {
+      await uploadToStorage(BUCKET_DOCS, path, uri, mimeType || 'application/octet-stream');
+      return true;
+    } catch {
+      return false;
+    }
   };
 
   const handleSubmit = async () => {

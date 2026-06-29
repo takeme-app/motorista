@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -12,11 +12,14 @@ import {
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ShipmentStackParamList } from '../../navigation/types';
 import { PaymentMethodSection, type PaymentMethodType, type CardPaymentConfirmParams } from '../../components/PaymentMethodSection';
+import { fetchDriverStripeChargesEnabled } from '../../lib/driverStripeConnect';
 import { supabase } from '../../lib/supabase';
+import { registerPalliativePix } from '../../lib/palliativePixStore';
 import { tryOpenSupportTicket } from '../../lib/supportTickets';
 import { resolveShipmentBaseId } from '../../lib/resolveShipmentBase';
 import { useAppAlert } from '../../contexts/AppAlertContext';
@@ -25,8 +28,9 @@ import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
 import {
   shipmentPricingSnapshotFromParams,
   shipmentOrderInsertFromQuoteParams,
+  snapshotFromPricingResult,
 } from '../../lib/orderPricingSnapshot';
-import { formatPricingBreakdown, computeOrderPricing, PricingDenominatorOverflowError, formatShipmentCode } from '@take-me/shared';
+import { formatPricingBreakdown, computeOrderPricing, normalizeApplyPromotion, PricingDenominatorOverflowError, formatShipmentCode } from '@take-me/shared';
 import { guessCityFromPtAddress } from '../../lib/shipmentOriginCity';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
@@ -56,6 +60,7 @@ function orderIdFromUuid(uuid: string): string {
 
 export function ConfirmShipmentScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const { showAlert } = useAppAlert();
   const {
     origin,
@@ -71,12 +76,50 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
     priceRouteBaseCents,
     pricingRouteId,
     adminPctApplied,
+    preparerPayoutCents,
     clientPreferredDriverId,
     resolvedBaseId: resolvedBaseIdParam,
     scheduledTripId,
   } = route.params;
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Mesma regra da corrida: o motorista é selecionado antes do checkout
+  // (clientPreferredDriverId). Se ele não tem Stripe Connect habilitado
+  // (charges_enabled), só "dinheiro" fica disponível.
+  const [connectChargesEnabled, setConnectChargesEnabled] = useState<boolean | null>(null);
+  const [connectStatusLoading, setConnectStatusLoading] = useState(() => Boolean(clientPreferredDriverId?.trim()));
+  const connectFetchGen = useRef(0);
+
+  useEffect(() => {
+    const wid = clientPreferredDriverId?.trim();
+    if (!wid) {
+      setConnectChargesEnabled(false);
+      setConnectStatusLoading(false);
+      return;
+    }
+    const gen = ++connectFetchGen.current;
+    setConnectStatusLoading(true);
+    void fetchDriverStripeChargesEnabled(wid).then((ok) => {
+      if (connectFetchGen.current !== gen) return;
+      setConnectChargesEnabled(ok);
+      setConnectStatusLoading(false);
+    });
+  }, [clientPreferredDriverId]);
+
+  const allowedPaymentMethods = useMemo((): PaymentMethodType[] => {
+    // Dinheiro ocultado de todos os checkouts. Pix paliativo não depende do Stripe Connect.
+    if (connectStatusLoading) return ['pix'];
+    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix'];
+    return ['pix'];
+  }, [connectChargesEnabled, connectStatusLoading]);
+
+  useEffect(() => {
+    if (selectedPaymentMethod == null) return;
+    if (!allowedPaymentMethods.includes(selectedPaymentMethod)) {
+      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'pix');
+    }
+  }, [allowedPaymentMethods, selectedPaymentMethod]);
 
   /** Há base na região: coleta pode ser na base (motorista vê no mapa / paradas) após aceitar. */
   const hubColetaNaBase = Boolean(resolvedBaseIdParam);
@@ -89,37 +132,72 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
     priceRouteBaseCents,
   });
 
-  // Reconstrói o breakdown gross-up (PDF) usando os parâmetros da cotação.
-  // Neste momento não aplicamos promoção — o desconto/ganho promocional
-  // é persistido pelo edge `charge-shipments` após o checkout.
+  // Promoção da encomenda (order_type 'shipments') — desconto incide no preço do cliente,
+  // igual viagem/dependente. Antes a encomenda não aplicava promoção nenhuma.
+  const [promoGainPct, setPromoGainPct] = useState(0);
+  const [promoDiscountPct, setPromoDiscountPct] = useState(0);
+  const [promotionId, setPromotionId] = useState<string | null>(null);
+  const [promoWorkerRouteId, setPromoWorkerRouteId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      try {
+        const { data } = await supabase.rpc('apply_active_promotion', {
+          p_order_type: 'shipments',
+          p_user_id: user.id,
+          p_amount_cents: amountCents,
+        } as never);
+        const applied = normalizeApplyPromotion(Array.isArray(data) ? (data[0] as any) : (data as any));
+        if (cancelled) return;
+        setPromoGainPct(applied.gainPct);
+        setPromoDiscountPct(applied.discountPct);
+        setPromotionId(applied.promotionId);
+        setPromoWorkerRouteId(applied.promoWorkerRouteId);
+      } catch {
+        /* sem promoção */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [amountCents]);
+
+  // Breakdown gross-up (PDF) com a promoção aplicada (desconto reduz o total do cliente).
   const pricingPreview = useMemo(() => {
     try {
       return computeOrderPricing({
         baseCents: priceRouteBaseCents,
         surchargesCents: Math.max(0, amountCents - priceRouteBaseCents - platformFeeCents),
         adminPct: adminPctApplied,
-        gainPct: 0,
-        discountPct: 0,
+        gainPct: promoGainPct,
+        discountPct: promoDiscountPct,
       });
     } catch (err) {
       if (err instanceof PricingDenominatorOverflowError) return null;
       return null;
     }
-  }, [priceRouteBaseCents, platformFeeCents, amountCents, adminPctApplied]);
+  }, [priceRouteBaseCents, platformFeeCents, amountCents, adminPctApplied, promoGainPct, promoDiscountPct]);
 
   const pricingInsertRow = useMemo(
     () =>
-      shipmentOrderInsertFromQuoteParams({
-        pricingRouteId,
-        priceRouteBaseCents,
-        pricingSubtotalCents,
-        platformFeeCents,
-        amountCents,
-        adminPctApplied,
-        surchargesCents: pricingPreview?.surchargesCents ?? 0,
-        workerEarningCents: pricingPreview?.workerEarningCents,
-        adminEarningCents: pricingPreview?.adminEarningCents,
-      }),
+      // Com a promoção aplicada (pricingPreview), grava o snapshot do resultado (amount já com
+      // desconto + promotion_id). Sem preview (config inválida), usa o fallback da cotação.
+      pricingPreview
+        ? snapshotFromPricingResult(pricingPreview, {
+            promotionId,
+            pricingRouteId,
+            promoWorkerRouteId,
+          })
+        : shipmentOrderInsertFromQuoteParams({
+            pricingRouteId,
+            priceRouteBaseCents,
+            pricingSubtotalCents,
+            platformFeeCents,
+            amountCents,
+            adminPctApplied,
+            surchargesCents: 0,
+          }),
     [
       pricingRouteId,
       priceRouteBaseCents,
@@ -128,9 +206,13 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
       amountCents,
       adminPctApplied,
       pricingPreview,
+      promotionId,
+      promoWorkerRouteId,
     ]
   );
-  const amountFormatted = `R$ ${(pricingSnapshot.amount_cents / 100).toFixed(2).replace('.', ',')}`;
+  // Total exibido/cobrado = total com promoção (quando há preview); senão o da cotação.
+  const displayTotalCents = pricingPreview?.totalCents ?? pricingSnapshot.amount_cents;
+  const amountFormatted = `R$ ${(displayTotalCents / 100).toFixed(2).replace('.', ',')}`;
   const formatBRL = (cents: number) => `R$ ${(cents / 100).toFixed(2).replace('.', ',')}`;
   const cancellationVariant =
     selectedPaymentMethod === 'credito'
@@ -200,33 +282,84 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
               });
         const originCityResolved =
           (origin.city?.trim() || guessCityFromPtAddress(origin.address)).trim() || null;
+        const shipmentInsertPayload = {
+          user_id: user.id,
+          origin_address: origin.address,
+          origin_lat: origin.latitude,
+          origin_lng: origin.longitude,
+          origin_city: originCityResolved,
+          ...(clientPreferredDriverId ? { client_preferred_driver_id: clientPreferredDriverId } : {}),
+          ...(scheduledTripId ? { scheduled_trip_id: scheduledTripId } : {}),
+          destination_address: destination.address,
+          destination_lat: destination.latitude,
+          destination_lng: destination.longitude,
+          when_option: whenOption,
+          scheduled_at: whenOption === 'later' ? null : null,
+          package_size: packageSize,
+          recipient_name: recipient.name,
+          recipient_email: (recipient.email?.trim() || user.email || '').trim() || 'nao-informado@take-me.local',
+          recipient_phone: recipient.phone,
+          instructions: recipient.instructions ?? null,
+          photo_url: photoUrl,
+          photo_paths: photoPathsJson,
+          payment_method: paymentMethodDb,
+          ...pricingInsertRow,
+          // Modelo de pernas (encomenda com base): preparador = perna Origem→Base;
+          // motorista fica com o restante do repasse (perna Base→Destino + tamanho).
+          ...(preparerPayoutCents && preparerPayoutCents > 0
+            ? {
+                preparer_payout_cents: Math.round(preparerPayoutCents),
+                worker_earning_cents: Math.max(
+                  0,
+                  Math.round(Number((pricingInsertRow as { worker_earning_cents?: number }).worker_earning_cents ?? 0)) -
+                    Math.round(preparerPayoutCents),
+                ),
+              }
+            : {}),
+          status,
+          ...(baseIdForInsert ? { base_id: baseIdForInsert } : {}),
+        };
+        // Encomenda grande NÃO abre fila na criação: aguarda aprovação do admin (o trigger
+        // trg_shipment_auto_open_driver_offer_queue abre a fila quando admin_approved_at é setado).
+        const canStartQueueForPix =
+          Boolean(clientPreferredDriverId) && status === 'confirmed';
+
+        // Pix paliativo (Stripe Pix desabilitado): não cobra. A encomenda é criada e
+        // ofertada ao motorista só aos 40s (na tela de Pix) — não antes ("sem pagar o pix").
+        if (params.method === 'pix') {
+          let pixShipmentId = '';
+          const pixAmountCents = Number((pricingInsertRow as { amount_cents?: number }).amount_cents ?? 0);
+          const reqId = registerPalliativePix({
+            amountCents: pixAmountCents,
+            effectivate: async () => {
+              const { data: pixRow, error: pixErr } = await supabase
+                .from('shipments')
+                .insert(shipmentInsertPayload)
+                .select('id')
+                .single();
+              if (pixErr) throw pixErr;
+              pixShipmentId = String((pixRow as { id: string }).id);
+              if (packageSize === 'grande') void tryOpenSupportTicket('encomendas', { shipment_id: pixShipmentId });
+              if (canStartQueueForPix) {
+                await supabase.rpc('shipment_begin_driver_offering', { p_shipment_id: pixShipmentId });
+              }
+            },
+            navigateSuccess: () => {
+              navigation.replace('ShipmentSuccess', {
+                orderId: pixShipmentId ? orderIdFromUuid(pixShipmentId) : '----',
+                shipmentId: pixShipmentId || undefined,
+                isLargePackage: packageSize === 'grande',
+                paymentProcessed: true,
+              });
+            },
+          });
+          navigation.navigate('PixPaliativo', { requestId: reqId });
+          return;
+        }
+
         const { data: row, error } = await supabase
           .from('shipments')
-          .insert({
-            user_id: user.id,
-            origin_address: origin.address,
-            origin_lat: origin.latitude,
-            origin_lng: origin.longitude,
-            origin_city: originCityResolved,
-            ...(clientPreferredDriverId ? { client_preferred_driver_id: clientPreferredDriverId } : {}),
-            ...(scheduledTripId ? { scheduled_trip_id: scheduledTripId } : {}),
-            destination_address: destination.address,
-            destination_lat: destination.latitude,
-            destination_lng: destination.longitude,
-            when_option: whenOption,
-            scheduled_at: whenOption === 'later' ? null : null,
-            package_size: packageSize,
-            recipient_name: recipient.name,
-            recipient_email: (recipient.email?.trim() || user.email || '').trim() || 'nao-informado@take-me.local',
-            recipient_phone: recipient.phone,
-            instructions: recipient.instructions ?? null,
-            photo_url: photoUrl,
-            photo_paths: photoPathsJson,
-            payment_method: paymentMethodDb,
-            ...pricingInsertRow,
-            status,
-            ...(baseIdForInsert ? { base_id: baseIdForInsert } : {}),
-          })
+          .insert(shipmentInsertPayload)
           .select('id')
           .single();
         if (error) {
@@ -376,10 +509,12 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
           }
         }
 
+        // Encomenda grande NÃO abre fila na criação: aguarda aprovação do admin (o trigger
+        // trg_shipment_auto_open_driver_offer_queue abre a fila quando admin_approved_at é setado).
         const canStartDriverOfferQueue =
           Boolean(shipmentId) &&
           Boolean(clientPreferredDriverId) &&
-          (status === 'confirmed' || (packageSize === 'grande' && status === 'pending_review'));
+          status === 'confirmed';
 
         if (canStartDriverOfferQueue && shipmentId) {
           const { data: beginData, error: beginErr } = await supabase.rpc('shipment_begin_driver_offering', {
@@ -455,7 +590,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
   );
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) }]}>
+    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: bottomInset }]}>
       <StatusBar style="dark" />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
@@ -547,12 +682,13 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
         </View>
 
         <PaymentMethodSection
-          amountCents={pricingSnapshot.amount_cents}
+          amountCents={displayTotalCents}
           selectedMethod={selectedPaymentMethod}
           onSelectMethod={setSelectedPaymentMethod}
           onConfirmPayment={handleConfirmPayment}
           confirmLabel="Confirmar envio"
           cancellationPolicyVariant={cancellationVariant}
+          allowedMethods={allowedPaymentMethods}
           loading={submitting}
         />
       </ScrollView>

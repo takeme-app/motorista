@@ -7,8 +7,11 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
+  Platform,
+  Image,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../../components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -17,8 +20,11 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ColetasExcursoesStackParamList } from '../../navigation/ColetasExcursoesStack';
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 import { supabase } from '../../lib/supabase';
+import { formatCpf, onlyDigits, validateCpf } from '../../utils/formatCpf';
 
 type Props = NativeStackScreenProps<ColetasExcursoesStackParamList, 'CadastrarPassageiroExcursao'>;
+
+const GENDER_OPTIONS = ['Masculino', 'Feminino', 'Outro'] as const;
 
 export function CadastrarPassageiroExcursaoScreen({ navigation, route }: Props) {
   const { excursionId } = route.params;
@@ -28,17 +34,60 @@ export function CadastrarPassageiroExcursaoScreen({ navigation, route }: Props) 
   const [gender, setGender] = useState('');
   const [observations, setObservations] = useState('');
   const [saving, setSaving] = useState(false);
+  // Documento (RG/CNH) e foto — upload p/ bucket privado `excursion-passenger-docs`
+  // (path começa com auth.uid() do preparador — RLS). *Uri = preview local; *Path = caminho salvo.
+  const [documentUri, setDocumentUri] = useState<string | null>(null);
+  const [documentPath, setDocumentPath] = useState<string | null>(null);
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [photoPath, setPhotoPath] = useState<string | null>(null);
+  const [uploading, setUploading] = useState<'doc' | 'photo' | null>(null);
 
-  const onUploadDoc = useCallback(() => {
-    Alert.alert(
-      'Documento',
-      'O envio de RG/CNH será ligado ao armazenamento em uma próxima versão. Por agora, cadastre os dados abaixo.',
-    );
-  }, []);
-
-  const onUploadPhoto = useCallback(() => {
-    Alert.alert('Foto', 'Upload de foto opcional em breve.');
-  }, []);
+  const pickAndUpload = useCallback(async (kind: 'doc' | 'photo') => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (perm.status !== 'granted') {
+      Alert.alert('Permissão', 'Precisamos de acesso à galeria para enviar a imagem.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.75,
+      base64: true,
+    });
+    const asset = result.canceled ? null : result.assets[0];
+    if (!asset?.base64) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user?.id) {
+      Alert.alert('Sessão', 'Faça login novamente.');
+      return;
+    }
+    let bytes: Uint8Array;
+    try {
+      const binary = atob(asset.base64);
+      bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    } catch {
+      Alert.alert('Erro', 'Não foi possível processar a imagem. Tente novamente.');
+      return;
+    }
+    // Path DEVE começar com auth.uid() (RLS do bucket excursion-passenger-docs).
+    const path = `${user.id}/${excursionId}/${kind}_${Date.now()}.jpg`;
+    setUploading(kind);
+    const { error } = await supabase.storage
+      .from('excursion-passenger-docs')
+      .upload(path, bytes, { contentType: 'image/jpeg', upsert: true });
+    setUploading(null);
+    if (error) {
+      Alert.alert('Erro', 'Não foi possível enviar a imagem. Tente novamente.');
+      return;
+    }
+    if (kind === 'doc') {
+      setDocumentPath(path);
+      setDocumentUri(asset.uri);
+    } else {
+      setPhotoPath(path);
+      setPhotoUri(asset.uri);
+    }
+  }, [excursionId]);
 
   const onSave = useCallback(async () => {
     const name = fullName.trim();
@@ -46,14 +95,21 @@ export function CadastrarPassageiroExcursaoScreen({ navigation, route }: Props) 
       Alert.alert('Atenção', 'Informe o nome completo.');
       return;
     }
+    const cpfDigits = onlyDigits(cpf);
+    if (cpfDigits && !validateCpf(cpfDigits)) {
+      Alert.alert('CPF inválido', 'Verifique o CPF informado (11 dígitos válidos).');
+      return;
+    }
     setSaving(true);
     const { error } = await supabase.from('excursion_passengers').insert({
       excursion_request_id: excursionId,
       full_name: name,
-      cpf: cpf.trim() || null,
+      cpf: cpfDigits ? formatCpf(cpf) : null,
       age: age.trim() || null,
-      gender: gender.trim() || null,
+      gender: gender || null,
       observations: observations.trim() || null,
+      document_url: documentPath,
+      photo_url: photoPath,
     });
     setSaving(false);
     if (error) {
@@ -61,14 +117,14 @@ export function CadastrarPassageiroExcursaoScreen({ navigation, route }: Props) 
       return;
     }
     navigation.goBack();
-  }, [excursionId, fullName, cpf, age, gender, observations, navigation]);
+  }, [excursionId, fullName, cpf, age, gender, observations, documentPath, photoPath, navigation]);
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
       <StatusBar style="dark" />
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior="padding"
+        behavior="height"
       >
         <View style={styles.handle} />
         <View style={styles.header}>
@@ -84,29 +140,87 @@ export function CadastrarPassageiroExcursaoScreen({ navigation, route }: Props) 
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Field label="Nome completo" placeholder="Digite o nome do dependente" value={fullName} onChangeText={setFullName} />
-          <Field label="CPF" placeholder="Ex: 123.456.789-99" value={cpf} onChangeText={setCpf} keyboardType="numbers-and-punctuation" />
-          <Field label="Idade" placeholder="Ex: 25 anos" value={age} onChangeText={setAge} />
-          <Field label="Sexo" placeholder="Ex: Masculino" value={gender} onChangeText={setGender} />
+          <Field label="Nome completo" placeholder="Digite o nome do passageiro" value={fullName} onChangeText={setFullName} />
+          <Field
+            label="CPF"
+            placeholder="000.000.000-00"
+            value={cpf}
+            onChangeText={(t) => setCpf(formatCpf(t))}
+            keyboardType="number-pad"
+            maxLength={14}
+          />
+          <Field
+            label="Idade"
+            placeholder="Ex: 25"
+            value={age}
+            onChangeText={(t) => setAge(onlyDigits(t).slice(0, 3))}
+            keyboardType="number-pad"
+            maxLength={3}
+          />
+
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Sexo</Text>
+            <View style={styles.genderRow}>
+              {GENDER_OPTIONS.map((opt) => {
+                const sel = gender === opt;
+                return (
+                  <TouchableOpacity
+                    key={opt}
+                    style={[styles.genderChip, sel && styles.genderChipOn]}
+                    onPress={() => setGender(opt)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.genderChipText, sel && styles.genderChipTextOn]}>{opt}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
 
           <Text style={styles.uploadLabel}>Documento de identificação</Text>
-          <TouchableOpacity style={styles.uploadBox} onPress={onUploadDoc} activeOpacity={0.85}>
-            <View style={styles.uploadIconWrap}>
-              <MaterialIcons name="cloud-upload" size={22} color="#5C4A2E" />
-            </View>
-            <Text style={styles.uploadTitle}>Upload frente e verso</Text>
-            <Text style={styles.uploadHint}>Aceitamos RG, CNH ou documento de identificação válido.</Text>
+          <TouchableOpacity
+            style={styles.uploadBox}
+            onPress={() => pickAndUpload('doc')}
+            disabled={uploading !== null}
+            activeOpacity={0.85}
+          >
+            {uploading === 'doc' ? (
+              <ActivityIndicator color="#5C4A2E" />
+            ) : documentUri ? (
+              <Image source={{ uri: documentUri }} style={styles.uploadPreview} resizeMode="cover" />
+            ) : (
+              <>
+                <View style={styles.uploadIconWrap}>
+                  <MaterialIcons name="cloud-upload" size={22} color="#5C4A2E" />
+                </View>
+                <Text style={styles.uploadTitle}>Upload frente e verso</Text>
+                <Text style={styles.uploadHint}>Aceitamos RG, CNH ou documento de identificação válido.</Text>
+              </>
+            )}
           </TouchableOpacity>
 
           <View style={styles.rowLabel}>
             <Text style={styles.uploadLabel}>Foto do passageiro</Text>
             <Text style={styles.optional}>Opcional</Text>
           </View>
-          <TouchableOpacity style={styles.uploadBox} onPress={onUploadPhoto} activeOpacity={0.85}>
-            <View style={styles.uploadIconWrap}>
-              <MaterialIcons name="photo-camera" size={22} color="#5C4A2E" />
-            </View>
-            <Text style={styles.uploadTitle}>Clique pra fazer o upload</Text>
+          <TouchableOpacity
+            style={styles.uploadBox}
+            onPress={() => pickAndUpload('photo')}
+            disabled={uploading !== null}
+            activeOpacity={0.85}
+          >
+            {uploading === 'photo' ? (
+              <ActivityIndicator color="#5C4A2E" />
+            ) : photoUri ? (
+              <Image source={{ uri: photoUri }} style={styles.uploadPreview} resizeMode="cover" />
+            ) : (
+              <>
+                <View style={styles.uploadIconWrap}>
+                  <MaterialIcons name="photo-camera" size={22} color="#5C4A2E" />
+                </View>
+                <Text style={styles.uploadTitle}>Clique pra fazer o upload</Text>
+              </>
+            )}
           </TouchableOpacity>
 
           <View style={styles.rowLabel}>
@@ -152,12 +266,14 @@ function Field({
   value,
   onChangeText,
   keyboardType,
+  maxLength,
 }: {
   label: string;
   placeholder: string;
   value: string;
   onChangeText: (t: string) => void;
-  keyboardType?: 'default' | 'numbers-and-punctuation';
+  keyboardType?: 'default' | 'numbers-and-punctuation' | 'number-pad';
+  maxLength?: number;
 }) {
   return (
     <View style={styles.field}>
@@ -169,6 +285,7 @@ function Field({
         value={value}
         onChangeText={onChangeText}
         keyboardType={keyboardType ?? 'default'}
+        maxLength={maxLength}
       />
     </View>
   );
@@ -214,6 +331,19 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#111827',
   },
+  genderRow: { flexDirection: 'row', gap: 10 },
+  genderChip: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: '#F2F2F2',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#F2F2F2',
+  },
+  genderChipOn: { backgroundColor: '#111827', borderColor: '#111827' },
+  genderChipText: { fontSize: 14, fontWeight: '600', color: '#374151' },
+  genderChipTextOn: { color: '#FFFFFF' },
   uploadLabel: { fontSize: 14, fontWeight: '700', color: '#111827', marginBottom: 10 },
   rowLabel: {
     flexDirection: 'row',
@@ -228,11 +358,15 @@ const styles = StyleSheet.create({
     borderColor: '#D1D5DB',
     borderStyle: 'dashed',
     borderRadius: 14,
+    minHeight: 130,
     paddingVertical: 22,
     paddingHorizontal: 16,
     alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 8,
+    overflow: 'hidden',
   },
+  uploadPreview: { width: '100%', height: 160, borderRadius: 10 },
   uploadIconWrap: {
     width: 48,
     height: 48,

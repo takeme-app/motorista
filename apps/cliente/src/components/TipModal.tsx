@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useBottomSafeInset } from '@take-me/shared';
 import { CardField, useStripe } from '../lib/stripeNativeBridge';
 import { supabase } from '../lib/supabase';
 import { useAppAlert } from '../contexts/AppAlertContext';
@@ -63,6 +64,7 @@ export function TipModal({
   entityId,
   driverName,
 }: TipModalProps) {
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const { createPaymentMethod } = useStripe();
   const { showAlert } = useAppAlert();
 
@@ -200,7 +202,7 @@ export function TipModal({
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.avoid}
         >
-          <View style={styles.sheet}>
+          <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
             <View style={styles.handle} />
             <View style={styles.headerRow}>
               <Text style={styles.title}>Enviar gorjeta</Text>

@@ -7,13 +7,14 @@ import {
   ActivityIndicator,
   Modal,
   TextInput,
-  KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { PagamentosEncStackParamList } from '../../navigation/types';
@@ -43,7 +44,8 @@ function formatShortDate(iso: string): string {
 
 function formatHour(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  // Hora LOCAL sem Intl (toLocaleTimeString é instável no Hermes e retornava hora errada).
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 function PixIcon() {
@@ -58,6 +60,7 @@ type Nav = NativeStackNavigationProp<PagamentosEncStackParamList, 'PagamentosMai
 
 export function PagamentosEncomendasScreen() {
   const navigation = useNavigation<Nav>();
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const [totalCents, setTotalCents] = useState(0);
   const [coletas, setColetas] = useState(0);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
@@ -92,20 +95,25 @@ export function PagamentosEncomendasScreen() {
     const start = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
     const end = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999).toISOString();
 
+    // A perna do preparador conclui quando ele DEPOSITA na base (delivered_to_base_at),
+    // nao na entrega final (delivered_at) — essa e feita por outro motorista (base->destino)
+    // e pode ocorrer dias depois. Por isso o payout do preparador conta por delivered_to_base_at.
     const { data: shipments } = await supabase
       .from('shipments')
-      .select('id, amount_cents, created_at, delivered_at')
+      .select('id, preparer_payout_cents, created_at, delivered_to_base_at')
       .eq('preparer_id' as never, user.id)
       .eq('base_id' as never, myBaseId as never)
-      .eq('status', 'delivered')
-      .gte('delivered_at', start)
-      .lte('delivered_at', end)
-      .order('delivered_at', { ascending: false });
+      .not('delivered_to_base_at' as never, 'is', null)
+      .gte('delivered_to_base_at', start)
+      .lte('delivered_to_base_at', end)
+      .order('delivered_to_base_at', { ascending: false });
 
+    // Preparador recebe a parcela do km base<->origem (preparer_payout_cents),
+    // nao o total pago pelo cliente (amount_cents).
     const list: Transfer[] = (shipments ?? []).map((s: any) => ({
       id: s.id,
-      amount_cents: s.amount_cents,
-      created_at: s.delivered_at ?? s.created_at,
+      amount_cents: s.preparer_payout_cents ?? 0,
+      created_at: s.delivered_to_base_at ?? s.created_at,
     }));
 
     setTransfers(list);
@@ -184,7 +192,7 @@ export function PagamentosEncomendasScreen() {
                     <PixIcon />
                     <View style={styles.transferInfo}>
                       <Text style={styles.transferAmount}>{formatCents(t.amount_cents)}</Text>
-                      <Text style={styles.transferMeta}>Pix • {formatHour(t.created_at)}</Text>
+                      <Text style={styles.transferMeta}>Entrega na base • {formatHour(t.created_at)}</Text>
                     </View>
                     <Text style={styles.transferDate}>{formatShortDate(t.created_at)}</Text>
                   </View>
@@ -208,10 +216,10 @@ export function PagamentosEncomendasScreen() {
       <Modal visible={editPixVisible} transparent animationType="slide">
         <KeyboardAvoidingView
           style={styles.modalOverlay}
-          behavior="padding"
+          behavior="height"
         >
           <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setEditPixVisible(false)} />
-          <View style={styles.sheet}>
+          <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
             <View style={styles.sheetHandleRow}>
               <View style={styles.sheetHandle} />
             </View>
@@ -330,7 +338,6 @@ const styles = StyleSheet.create({
   sheet: {
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    paddingBottom: 32,
   },
   sheetHandleRow: { alignItems: 'center', paddingTop: 12, paddingBottom: 4 },
   sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E5E7EB' },

@@ -610,6 +610,7 @@ export default function PreparadorEditScreen() {
             // Dados básicos
             React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#cba04b', margin: 0, ...font } }, 'Dados básicos'),
             isEncEditMode ? editableField('Nome completo', encNome, setEncNome) : readOnlyBox('Nome completo', prep.fullName || '—'),
+            readOnlyBox('Telefone', prep.phone || '—'),
             React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
               isEncEditMode ? editableField('CPF', encCpf, setEncCpf) : readOnlyBox('CPF', wd.cpf || pd.cpf || '—'),
               isEncEditMode ? editableField('Idade', encIdade, setEncIdade) : readOnlyBox('Idade', wd.age ? `${wd.age} anos` : '—')),
@@ -955,6 +956,7 @@ export default function PreparadorEditScreen() {
           React.createElement('h3', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: '0 0 12px 0', ...font } }, 'Dados básicos'),
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
             editableField('Nome completo', nomePrep, setNomePrep, 'Nome do preparador'),
+            readOnlyBox('Telefone', detail?.preparerProfile?.phone ?? '—'),
             editableField('CPF', cpfPrep, setCpfPrep, '000.000.000-00'),
             editableField('Idade', idadePrep, setIdadePrep, 'Ex.: 25'),
             editableField('Gênero', generoPrep, setGeneroPrep, 'Ex.: Feminino'),

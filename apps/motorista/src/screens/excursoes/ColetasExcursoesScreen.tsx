@@ -19,6 +19,8 @@ import { supabase } from '../../lib/supabase';
 import { ensureExcursionClientConversation } from '../../lib/excursionClientConversation';
 import { navigateExcursionTabToChatThread } from '../../navigation/excursionNavigateToChat';
 import { passengerTotalLabel } from './excursionFormat';
+import { boardingCta, type BoardingCta } from './excursionStatus';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 type Props = NativeStackScreenProps<ColetasExcursoesStackParamList, 'ColetasMain'>;
 
@@ -39,6 +41,7 @@ type Excursion = {
   clientUserId: string;
   clientAvatarUrl: string | null;
   registeredPassengerCount: number;
+  boarding: BoardingCta;
 };
 
 type StatusConfig = { label: string; bg: string; text: string; border: string };
@@ -151,6 +154,7 @@ function DateLine({ iso, direction }: { iso: string | null; direction: string })
 }
 
 export function ColetasExcursoesScreen({ navigation }: Props) {
+  const { showConfirm, showAlert } = useAppAlert();
   const [loading, setLoading] = useState(true);
   const [listTab, setListTab] = useState<ListTab>('progress');
   const [excursions, setExcursions] = useState<Excursion[]>([]);
@@ -164,7 +168,7 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
     const { data, error } = await supabase
       .from('excursion_requests')
       .select(
-        'id, destination, excursion_date, scheduled_departure_at, fleet_type, status, user_id, created_at, confirmed_at',
+        'id, origin, destination, excursion_date, scheduled_departure_at, check_in_ida_started_at, check_in_volta_started_at, boarding_ida_done_at, boarding_volta_done_at, fleet_type, status, user_id, created_at, confirmed_at',
       )
       .eq('preparer_id', user.id)
       .order('created_at', { ascending: false })
@@ -183,7 +187,7 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
       return;
     }
 
-    const rows = (data ?? []) as any[];
+    const rows = (data ?? []) as unknown as any[];
     const userIds = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
     let profRows: { id: string; full_name: string | null; phone: string | null; avatar_url: string | null }[] = [];
     if (userIds.length > 0) {
@@ -223,7 +227,7 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
 
       list.push({
         id: r.id,
-        origin: 'Origem a definir',
+        origin: (typeof r.origin === 'string' && r.origin.trim()) ? r.origin.trim() : 'Origem a definir',
         destination: r.destination ?? 'Destino',
         departureTime: depIso,
         returnTime: retIso,
@@ -238,6 +242,7 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
         clientUserId: r.user_id as string,
         clientAvatarUrl,
         registeredPassengerCount: registeredByExc[r.id] ?? 0,
+        boarding: boardingCta(r),
       });
     }
 
@@ -246,6 +251,24 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const confirmComplete = useCallback((id: string) => {
+    showConfirm('Concluir excursão', 'Deseja realmente concluir a excursão?', {
+      confirmLabel: 'Sim',
+      cancelLabel: 'Não',
+      onConfirm: async () => {
+        const { error } = await supabase
+          .from('excursion_requests')
+          .update({ status: 'completed', updated_at: new Date().toISOString() } as never)
+          .eq('id', id);
+        if (error) {
+          showAlert('Erro', 'Não foi possível concluir a excursão.');
+          return;
+        }
+        await load();
+      },
+    });
+  }, [load, showConfirm, showAlert]);
 
   const toggleExpand = useCallback((id: string) => {
     setExcursions((prev) => prev.map((e) => e.id === id ? { ...e, expanded: !e.expanded } : e));
@@ -259,6 +282,7 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
       }
       setOpeningChatExcursionId(exc.id);
       const res = await ensureExcursionClientConversation({
+        excursionRequestId: exc.id,
         clientUserId: exc.clientUserId,
         participantName: exc.responsible,
         participantAvatar: exc.clientAvatarUrl,
@@ -459,12 +483,17 @@ export function ColetasExcursoesScreen({ navigation }: Props) {
                           ))}
                           <TouchableOpacity
                             style={styles.cardBtnBlack}
-                            onPress={() => navigation.navigate('RealizarEmbarques', { excursionId: exc.id })}
+                            onPress={() =>
+                              exc.boarding.complete
+                                ? confirmComplete(exc.id)
+                                : navigation.navigate('RealizarEmbarques', {
+                                    excursionId: exc.id,
+                                    phase: exc.boarding.phase,
+                                  })
+                            }
                             activeOpacity={0.88}
                           >
-                            <Text style={styles.cardBtnBlackText}>
-                              {exc.status === 'in_progress' ? 'Continuar embarque' : 'Iniciar embarque'}
-                            </Text>
+                            <Text style={styles.cardBtnBlackText}>{exc.boarding.label}</Text>
                           </TouchableOpacity>
                           <TouchableOpacity
                             style={styles.cardBtnOutline}
@@ -603,6 +632,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   cardBtnBlackText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+  cardBtnDisabled: { backgroundColor: '#9CA3AF', opacity: 0.7 },
   cardBtnOutline: {
     marginTop: 10,
     height: 48,

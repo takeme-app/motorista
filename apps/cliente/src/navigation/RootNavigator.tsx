@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import { NavigationContainer, type NavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AuthRecoveryHandler } from './AuthRecoveryHandler';
+import { NotificationDeeplinkHandler } from './NotificationDeeplinkHandler';
 import { RootNavigationProvider } from './RootNavigationContext';
 import { SplashScreen } from '../screens/SplashScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
@@ -38,6 +39,7 @@ export function RootNavigator({ initialRouteName }: RootNavigatorProps) {
   return (
     <NavigationContainer ref={navigationRef}>
       <AuthRecoveryHandler navigationRef={navigationRef} />
+      <NotificationDeeplinkHandler navigationRef={navigationRef} />
       <RootNavigationProvider navigationRef={navigationRef}>
       <Stack.Navigator
         initialRouteName={initialRouteName}

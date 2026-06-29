@@ -8,11 +8,13 @@ import {
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { DependentShipmentStackParamList } from '../../navigation/types';
 import { PaymentMethodSection, type PaymentMethodType } from '../../components/PaymentMethodSection';
 import { supabase } from '../../lib/supabase';
+import { registerPalliativePix } from '../../lib/palliativePixStore';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../../utils/errorMessage';
 import {
@@ -47,8 +49,46 @@ function formatPhoneDisplay(digits: string): string {
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7, 11)}`;
 }
 
+const applyTimeSurcharge = (baseCents: number, pct: number): number =>
+  Math.round(baseCents * (1 + (Number.isFinite(pct) ? pct : 0) / 100));
+
+/**
+ * Adicionais da VIAGEM (fim de semana / noturno / feriado + adicionais de rota) — o envio de
+ * dependente viaja numa corrida agendada, então segue a MESMA regra da viagem comum (não a de
+ * encomenda). Espelha resolveBookingPricingExtras do CheckoutScreen.
+ */
+async function resolveDependentPricingExtras(
+  scheduledTripId: string | null | undefined,
+): Promise<{ timeSurchargePct: number; surchargesCents: number }> {
+  let timeSurchargePct = 0;
+  let surchargesCents = 0;
+  try {
+    if (scheduledTripId) {
+      const { data } = await supabase.rpc('resolve_trip_time_surcharge_pct', {
+        p_scheduled_trip_id: scheduledTripId,
+      });
+      const pct = Number(data);
+      if (Number.isFinite(pct) && pct > 0) timeSurchargePct = pct;
+    }
+  } catch {
+    /* sem adicional de horário */
+  }
+  try {
+    // Envio de dependente não tem pricing_route próprio; adicionais de rota não se aplicam (null).
+    const { data } = await supabase.rpc('resolve_booking_surcharges_cents', {
+      p_pricing_route_id: null,
+    });
+    const cents = Number(data);
+    if (Number.isFinite(cents) && cents > 0) surchargesCents = Math.floor(cents);
+  } catch {
+    /* sem adicionais */
+  }
+  return { timeSurchargePct, surchargesCents };
+}
+
 export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset();
   const { showAlert } = useAppAlert();
   const {
     origin,
@@ -63,9 +103,10 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     dependentId,
     amountCents,
     photoUri,
+    photoUris,
   } = route.params;
   const driver = route.params.driver;
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('dinheiro');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('pix');
   const [submitting, setSubmitting] = useState(false);
   /** Stripe Connect (`charges_enabled`): só então cartão/Pix ficam disponíveis. */
   const [connectChargesEnabled, setConnectChargesEnabled] = useState<boolean | null>(null);
@@ -108,10 +149,13 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         }
       }
 
+      // Mesma regra da viagem: adicionais de horário (fds/noturno/feriado) + rota.
+      const { timeSurchargePct, surchargesCents } = await resolveDependentPricingExtras(driver?.id);
+
       try {
         const preview = computeOrderPricing({
-          baseCents: amountCents,
-          surchargesCents: 0,
+          baseCents: applyTimeSurcharge(amountCents, timeSurchargePct),
+          surchargesCents,
           adminPct,
           gainPct,
           discountPct,
@@ -131,12 +175,13 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [amountCents]);
+  }, [amountCents, driver?.id]);
 
   const allowedPaymentMethods = useMemo((): PaymentMethodType[] => {
-    if (connectStatusLoading) return ['dinheiro'];
-    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix', 'dinheiro'];
-    return ['dinheiro'];
+    // Dinheiro ocultado de todos os checkouts. Pix paliativo não depende do Stripe Connect.
+    if (connectStatusLoading) return ['pix'];
+    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix'];
+    return ['pix'];
   }, [connectChargesEnabled, connectStatusLoading]);
 
   useEffect(() => {
@@ -158,7 +203,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (selectedPaymentMethod == null) return;
     if (!allowedPaymentMethods.includes(selectedPaymentMethod)) {
-      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'dinheiro');
+      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'pix');
     }
   }, [allowedPaymentMethods, selectedPaymentMethod]);
 
@@ -275,18 +320,28 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
                 ? 'pix'
                 : 'dinheiro';
         const status = 'pending_review';
-        let photoUrl: string | null = null;
-        if (photoUri) {
-          photoUrl = await uploadPhotoAndGetPath(user.id, photoUri);
+        // Upload de todas as fotos (carrossel). photo_url = primeira; photo_paths = todas.
+        const rawPhotoUris = [
+          ...(photoUris ?? []),
+          ...(photoUri ? [photoUri] : []),
+        ];
+        const uploadedPaths: string[] = [];
+        for (const uri of rawPhotoUris) {
+          const p = await uploadPhotoAndGetPath(user.id, uri);
+          if (p) uploadedPaths.push(p);
         }
+        const photoUrl: string | null = uploadedPaths[0] ?? null;
         let pricingFields = pricingInsertRow;
         if (!pricingFields) {
           const fallbackAdminPct = await fetchPlatformFeePctForService('dependent_shipment');
+          // Mesma regra da viagem (fds/noturno/feriado + rota) também no fallback.
+          const { timeSurchargePct: fbTimePct, surchargesCents: fbSurchargesCents } =
+            await resolveDependentPricingExtras(scheduledTripId);
           try {
             pricingFields = snapshotFromPricingResult(
               computeOrderPricing({
-                baseCents: amountCents,
-                surchargesCents: 0,
+                baseCents: applyTimeSurcharge(amountCents, fbTimePct),
+                surchargesCents: fbSurchargesCents,
                 adminPct: fallbackAdminPct,
                 gainPct: 0,
                 discountPct: 0,
@@ -307,29 +362,57 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
             };
           }
         }
+        const dependentInsertPayload = {
+          user_id: user.id,
+          dependent_id: dependentId ?? null,
+          full_name: fullName,
+          contact_phone: contactPhone,
+          bags_count: bagsCount,
+          instructions: instructions ?? null,
+          origin_address: origin.address,
+          origin_lat: origin.latitude,
+          origin_lng: origin.longitude,
+          destination_address: destination.address,
+          destination_lat: destination.latitude,
+          destination_lng: destination.longitude,
+          when_option: whenOption,
+          scheduled_at: whenOption === 'later' ? null : null,
+          payment_method: paymentMethodDb,
+          ...pricingFields,
+          ...(scheduledTripId ? { scheduled_trip_id: scheduledTripId } : {}),
+          status,
+          photo_url: photoUrl,
+          photo_paths: uploadedPaths,
+        };
+
+        // Pix paliativo: cria o envio do dependente só aos 40s (na tela de Pix).
+        if (params.method === 'pix') {
+          let pixDepId = '';
+          const reqId = registerPalliativePix({
+            amountCents,
+            effectivate: async () => {
+              const { data: pixRow, error: pixErr } = await supabase
+                .from('dependent_shipments')
+                .insert(dependentInsertPayload)
+                .select('id')
+                .single();
+              if (pixErr) throw pixErr;
+              pixDepId = String((pixRow as { id: string }).id);
+            },
+            navigateSuccess: () => {
+              navigation.replace('DependentShipmentSuccess', {
+                orderId: pixDepId ? orderIdFromUuid(pixDepId) : '----',
+                shipmentId: pixDepId || undefined,
+              });
+            },
+          });
+          navigation.navigate('PixPaliativo', { requestId: reqId });
+          return;
+        }
+
         const { data: row, error } = await supabase
           .from('dependent_shipments')
-          .insert({
-            user_id: user.id,
-            dependent_id: dependentId ?? null,
-            full_name: fullName,
-            contact_phone: contactPhone,
-            bags_count: bagsCount,
-            instructions: instructions ?? null,
-            origin_address: origin.address,
-            origin_lat: origin.latitude,
-            origin_lng: origin.longitude,
-            destination_address: destination.address,
-            destination_lat: destination.latitude,
-            destination_lng: destination.longitude,
-            when_option: whenOption,
-            scheduled_at: whenOption === 'later' ? null : null,
-            payment_method: paymentMethodDb,
-            ...pricingFields,
-            ...(scheduledTripId ? { scheduled_trip_id: scheduledTripId } : {}),
-            status,
-            photo_url: photoUrl,
-          })
+          .insert(dependentInsertPayload)
           .select('id')
           .single();
         if (error) {
@@ -392,6 +475,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
       showAlert,
       pricingInsertRow,
       photoUri,
+      photoUris,
       uploadPhotoAndGetPath,
       driver,
       allowedPaymentMethods,
@@ -399,7 +483,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
   );
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) }]}>
+    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: bottomInset }]}>
       <StatusBar style="dark" />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton} hitSlop={12}>

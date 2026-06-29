@@ -48,6 +48,63 @@ function toBoolean(raw: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
+/** Parseia "H:MM" / "HH:MM" / "HH:MM:SS" (Postgres time em texto) -> [hora, min]. */
+function parseHHMM(value: string | null | undefined): [number, number] | null {
+  if (value == null) return null;
+  const m = String(value).trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!m) return null;
+  const h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  if (!Number.isFinite(h) || !Number.isFinite(min) || h < 0 || h > 23 || min < 0 || min > 59) {
+    return null;
+  }
+  return [h, min];
+}
+
+/**
+ * Próxima partida/chegada (> agora) para o weekday + horários fixos da rota, como instante UTC ISO.
+ * Espelha computeNextDepartureArrivalFromWeekday do app, mas ancora "agora" em America/São_Paulo
+ * (UTC-3, sem DST) — a edge roda em UTC, então a âncora SP garante o dia/hora corretos no calendário.
+ * dayNum: 0=Dom … 6=Sáb (igual Date.getUTCDay()).
+ */
+function nextOccurrenceUtc(
+  dayNum: number,
+  departureTime: string | null | undefined,
+  arrivalTime: string | null | undefined,
+): { departureAt: string; arrivalAt: string } | null {
+  if (!Number.isInteger(dayNum) || dayNum < 0 || dayNum > 6) return null;
+  const dep = parseHHMM(departureTime);
+  const arr = parseHHMM(arrivalTime);
+  if (!dep || !arr) return null;
+  const [depH, depMin] = dep;
+  const [arrH, arrMin] = arr;
+
+  const SP_OFFSET_MS = 3 * 3600 * 1000; // UTC-3 fixo
+  const nowMs = Date.now();
+  // nowSp: os campos getUTC* representam o relógio de parede em SP.
+  const nowSp = new Date(nowMs - SP_OFFSET_MS);
+  const y = nowSp.getUTCFullYear();
+  const mo = nowSp.getUTCMonth();
+  const d = nowSp.getUTCDate();
+  const dow = nowSp.getUTCDay();
+  let addDays = (dayNum - dow + 7) % 7;
+
+  // Parede SP -> instante UTC = parede + 3h.
+  let depUtcMs = Date.UTC(y, mo, d + addDays, depH, depMin) + SP_OFFSET_MS;
+  if (depUtcMs <= nowMs) {
+    addDays += 7;
+    depUtcMs = Date.UTC(y, mo, d + addDays, depH, depMin) + SP_OFFSET_MS;
+  }
+  let arrUtcMs = Date.UTC(y, mo, d + addDays, arrH, arrMin) + SP_OFFSET_MS;
+  if (arrUtcMs <= depUtcMs) {
+    arrUtcMs = Date.UTC(y, mo, d + addDays + 1, arrH, arrMin) + SP_OFFSET_MS;
+  }
+  return {
+    departureAt: new Date(depUtcMs).toISOString(),
+    arrivalAt: new Date(arrUtcMs).toISOString(),
+  };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -110,7 +167,9 @@ Deno.serve(async (req) => {
 
     const { data: tripRaw, error: tripErr } = await admin
       .from("scheduled_trips")
-      .select("id, driver_id, status, departure_at")
+      .select(
+        "id, driver_id, status, departure_at, route_id, day_of_week, departure_time, arrival_time, capacity, price_per_person_cents, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng"
+      )
       .eq("id", tripId)
       .maybeSingle();
 
@@ -126,6 +185,18 @@ Deno.serve(async (req) => {
       driver_id: string | null;
       status: string;
       departure_at: string | null;
+      route_id: string | null;
+      day_of_week: number | null;
+      departure_time: string | null;
+      arrival_time: string | null;
+      capacity: number | null;
+      price_per_person_cents: number | null;
+      origin_address: string | null;
+      destination_address: string | null;
+      origin_lat: number | null;
+      origin_lng: number | null;
+      destination_lat: number | null;
+      destination_lng: number | null;
     };
 
     if (String(trip.driver_id ?? "") !== user.id) {
@@ -341,6 +412,77 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Roll-forward: cancelar UMA viagem não pode apagar o slot recorrente do
+    // cronograma. A linha cancelada fica como histórico (reservas/estornos/multas
+    // apontam para ela) e criamos uma nova ocorrência ativa para a próxima semana
+    // do mesmo dia/horário — assim o slot continua aparecendo no cronograma.
+    // (O "Excluir horário" do cronograma é outro fluxo e segue removendo o slot.)
+    let rolledForward = false;
+    try {
+      const next =
+        trip.route_id && trip.day_of_week != null
+          ? nextOccurrenceUtc(trip.day_of_week, trip.departure_time, trip.arrival_time)
+          : null;
+      if (next) {
+        // Só rola para frente se a rota recorrente ainda estiver ativa.
+        const { data: routeRow } = await admin
+          .from("worker_routes")
+          .select("is_active")
+          .eq("id", trip.route_id as string)
+          .maybeSingle();
+        const routeActive = (routeRow as { is_active?: boolean } | null)?.is_active === true;
+
+        if (routeActive) {
+          // Guard de duplicidade: não cria 2ª linha ativa idêntica se já existe o
+          // slot da próxima semana (mesmo dia/horário).
+          const { data: dup } = await admin
+            .from("scheduled_trips")
+            .select("id")
+            .eq("driver_id", trip.driver_id as string)
+            .eq("route_id", trip.route_id as string)
+            .eq("day_of_week", trip.day_of_week as number)
+            .eq("departure_time", trip.departure_time as string)
+            .eq("arrival_time", trip.arrival_time as string)
+            .in("status", ["active", "scheduled"])
+            .limit(1);
+
+          if (!dup || dup.length === 0) {
+            const capacity = Math.max(1, Math.floor(Number(trip.capacity ?? 4)));
+            const { error: insErr } = await admin.from("scheduled_trips").insert({
+              driver_id: trip.driver_id,
+              route_id: trip.route_id,
+              day_of_week: trip.day_of_week,
+              departure_time: trip.departure_time,
+              arrival_time: trip.arrival_time,
+              departure_at: next.departureAt,
+              arrival_at: next.arrivalAt,
+              capacity,
+              seats_available: capacity,
+              bags_available: 0,
+              confirmed_count: 0,
+              is_active: true,
+              status: "active",
+              origin_address: trip.origin_address,
+              destination_address: trip.destination_address,
+              price_per_person_cents: trip.price_per_person_cents,
+              origin_lat: trip.origin_lat,
+              origin_lng: trip.origin_lng,
+              destination_lat: trip.destination_lat,
+              destination_lng: trip.destination_lng,
+            } as never);
+            if (insErr) {
+              console.error("[cancel-scheduled-trip] roll-forward insert error:", insErr.message);
+            } else {
+              rolledForward = true;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Best-effort: o cancelamento já concluiu; não derrubar a resposta.
+      console.warn("[cancel-scheduled-trip] roll-forward warn:", e);
+    }
+
     return new Response(
       JSON.stringify({
         cancelled: true,
@@ -349,6 +491,7 @@ Deno.serve(async (req) => {
         penalty_cents: penaltyCents,
         penalty_enabled: penaltyEnabled,
         refund_results: refundResults,
+        rolled_forward: rolledForward,
         reason,
       }),
       {

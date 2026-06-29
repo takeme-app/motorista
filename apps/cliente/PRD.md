@@ -1,6 +1,6 @@
 # Take Me — PRD do App Cliente (Passageiro)
 
-> **Versao:** 1.0 | **Data:** 14/04/2026 | **Status:** Implementado
+> **Versao:** 1.1 | **Data:** 10/06/2026 | **Status:** Implementado
 > **Stack:** React Native + Expo SDK 54 + Supabase + @rnmapbox/maps v10 + Stripe React Native + expo-location
 > **Repositorio:** monorepo `take_me/apps/cliente`
 > **Arquitetura:** New Architecture habilitada (`newArchEnabled=true`)
@@ -512,6 +512,23 @@ Splash → Welcome → Login/SignUp/VerifyEmail → AddPaymentPrompt → Main
 - [x] Cancelamento de viagem com ticket de reembolso
 - [x] AnimatedBottomSheet e SupportSheet reutilizaveis
 - [x] Validacao de CPF em formularios
+
+### Concluido recentemente (v1.1 — 10/06/2026)
+
+- [x] **Atividades**: atualizacao automatica do status em tempo real — subscription realtime
+  movida para `useFocusEffect` (re-assina ao focar) + reconexao/refetch em `AppState` (volta do
+  background) + polling de fallback (`ActivitiesScreen.tsx`). Antes so atualizava ao sair/voltar.
+- [x] **Envio de dependentes**: respeita a regra de aprovacao do admin — nome **nao** e mais
+  digitavel (so selecao de dependente **validado** ou "Cadastrar contato"); pendentes aparecem com
+  selo "Aguardando validacao" e nao sao selecionaveis; removidos os campos **Contato** e
+  **"Quem embarca na viagem"**; foto do dependente virou **carrossel** de imagens.
+- [x] **Excursao — solicitacao**: campo **Horario** agora e digitavel (mascara HH:MM, sem seletor);
+  novo campo **Origem da excursao** (ponto de partida escolhido pelo cliente, presets + endereco).
+- [x] **Excursao — cadastro de passageiro**: campo **Sexo** em chips (Masculino/Feminino/Outro);
+  novos campos **Documento de identificacao** e **Foto do passageiro** com upload real
+  (`excursion-passenger-docs`).
+- [x] **Checkout de viagem**: exibe somente o **preco final** (com taxa da plataforma); enquanto
+  calcula mostra "Carregando preco" — eliminado o flash do valor base intermediario.
 
 ### Em Desenvolvimento / Pendente
 

@@ -12,7 +12,22 @@ import {
 } from 'react-native';
 import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
-import { searchAddress, type AddressSuggestion } from '../lib/location';
+import * as Crypto from 'expo-crypto';
+import {
+  searchAddress,
+  retrieveAddressCoords,
+  type AddressSuggestion,
+  type AddressSearchResult,
+} from '../lib/location';
+import { useCurrentLocation } from '../contexts/CurrentLocationContext';
+
+function newSessionToken(): string {
+  try {
+    return Crypto.randomUUID();
+  } catch {
+    return `takeme-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+  }
+}
 
 const DEBOUNCE_MS = 400;
 
@@ -44,10 +59,12 @@ export function AddressAutocomplete({
   style,
   inputStyle,
 }: Props) {
-  const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([]);
+  const [suggestions, setSuggestions] = useState<AddressSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [showList, setShowList] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionTokenRef = useRef<string>(newSessionToken());
+  const { currentPlace } = useCurrentLocation();
 
   const fetchSuggestions = useCallback(async (query: string) => {
     if (query.trim().length < 2) {
@@ -57,7 +74,10 @@ export function AddressAutocomplete({
     }
     setLoading(true);
     try {
-      const list = await searchAddress(query);
+      const list = await searchAddress(query, {
+        proximity: currentPlace,
+        sessionToken: sessionTokenRef.current,
+      });
       setSuggestions(list);
       setShowList(list.length > 0);
     } catch {
@@ -66,7 +86,7 @@ export function AddressAutocomplete({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentPlace]);
 
   const handleChangeText = useCallback(
     (text: string) => {
@@ -81,11 +101,40 @@ export function AddressAutocomplete({
   );
 
   const handleSelect = useCallback(
-    (item: AddressSuggestion) => {
+    async (item: AddressSearchResult) => {
       onChangeText(item.address);
-      onSelectPlace(item);
       setSuggestions([]);
       setShowList(false);
+
+      // Nominatim (fallback) já traz coords; Search Box resolve via /retrieve.
+      if (item.latitude != null && item.longitude != null) {
+        onSelectPlace({
+          address: item.address,
+          latitude: item.latitude,
+          longitude: item.longitude,
+          ...(item.city ? { city: item.city } : {}),
+        });
+        return;
+      }
+      if (!item.mapboxId) return;
+      setLoading(true);
+      try {
+        const coords = await retrieveAddressCoords(item.mapboxId, {
+          sessionToken: sessionTokenRef.current,
+        });
+        if (coords) {
+          onSelectPlace({
+            address: item.address,
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+            ...((item.city ?? coords.city) ? { city: item.city ?? coords.city } : {}),
+          });
+        }
+      } finally {
+        setLoading(false);
+        // Encerra a sessão de billing; próxima busca usa novo token.
+        sessionTokenRef.current = newSessionToken();
+      }
     },
     [onChangeText, onSelectPlace]
   );
@@ -97,7 +146,7 @@ export function AddressAutocomplete({
   }, []);
 
   return (
-    <View style={[styles.wrap, style]}>
+    <View style={[styles.wrap, showList && styles.wrapActive, style]}>
       <View style={styles.inputRow}>
         <TextInput
           style={[styles.input, inputStyle]}
@@ -127,9 +176,9 @@ export function AddressAutocomplete({
           >
             {suggestions.slice(0, 15).map((item, index) => (
               <TouchableOpacity
-                key={`${index}-${item.latitude}-${item.longitude}`}
+                key={`${index}-${item.id}`}
                 style={styles.suggestionRow}
-                onPress={() => handleSelect(item)}
+                onPress={() => { void handleSelect(item); }}
                 activeOpacity={0.7}
               >
                 <MaterialIcons name="place" size={20} color={COLORS.neutral700} />
@@ -145,6 +194,8 @@ export function AddressAutocomplete({
 
 const styles = StyleSheet.create({
   wrap: { position: 'relative', zIndex: 1 },
+  /** Enquanto a lista está aberta, flutua acima dos campos seguintes (evita bleed-through no Android). */
+  wrapActive: { zIndex: 1000, elevation: 24 },
   inputRow: { position: 'relative' },
   input: {
     borderWidth: 1,
@@ -175,7 +226,8 @@ const styles = StyleSheet.create({
     borderColor: COLORS.neutral400,
     maxHeight: 260,
     overflow: 'hidden',
-    elevation: 4,
+    zIndex: 1000,
+    elevation: 24,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.12,

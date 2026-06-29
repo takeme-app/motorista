@@ -14,6 +14,7 @@ export type ClientChatRouteParams = {
 };
 
 type ActivitiesOnlyParamList = {
+  PixPaliativo: { requestId: string };
   ActivitiesList: undefined;
   TravelHistory: undefined;
   TripDetail: { bookingId: string };

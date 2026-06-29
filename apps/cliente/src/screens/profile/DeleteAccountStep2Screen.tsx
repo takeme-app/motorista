@@ -104,7 +104,7 @@ export function DeleteAccountStep2Screen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
-      <KeyboardAvoidingView style={styles.keyboard} behavior="padding">
+      <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={styles.dialog}>
           <View style={styles.headerRow}>
             <View style={styles.headerSpacer} />

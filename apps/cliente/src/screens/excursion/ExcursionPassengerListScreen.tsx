@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -10,9 +10,11 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
+import type { ExcursionStatusFields } from '../../lib/excursionStatus';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ExcursionPassengerList'>;
 
@@ -40,25 +42,36 @@ function statusLabel(s: string): string {
   }
 }
 
-function getExcursionStatusMessage(status: string): { text: string; icon: 'celebration' | 'schedule' | 'check-circle' | 'cancel' } {
-  switch (status) {
-    case 'completed':
-      return { text: 'Excursão concluída! Obrigado por viajar com a Take Me.', icon: 'check-circle' };
-    case 'cancelled':
-      return { text: 'Esta excursão foi cancelada.', icon: 'cancel' };
-    case 'approved':
-    case 'scheduled':
-    case 'in_progress':
-      return { text: 'Sua excursão foi confirmada! No dia da viagem, você poderá acompanhar o trajeto em tempo real.', icon: 'celebration' };
-    default:
-      return { text: 'Sua solicitação está em análise. Assim que a excursão for confirmada, você poderá acompanhar o trajeto em tempo real.', icon: 'schedule' };
+function getExcursionStatusMessage(
+  row: ExcursionStatusFields,
+): { text: string; icon: 'celebration' | 'schedule' | 'check-circle' | 'cancel' } {
+  const status = (row.status ?? '').toLowerCase();
+  if (status === 'cancelled' || status === 'canceled') {
+    return { text: 'Esta excursão foi cancelada.', icon: 'cancel' };
   }
+  if (status === 'completed' || row.boarding_volta_done_at) {
+    return { text: 'Excursão concluída! Obrigado por viajar com a Take Me.', icon: 'check-circle' };
+  }
+  if (row.check_in_volta_started_at) {
+    return { text: 'Embarque de volta em andamento. Acompanhe os passageiros abaixo.', icon: 'celebration' };
+  }
+  if (row.boarding_ida_done_at) {
+    return { text: 'Sua excursão está em andamento. Acompanhe o trajeto em tempo real.', icon: 'celebration' };
+  }
+  if (row.check_in_ida_started_at) {
+    return { text: 'Embarque de ida em andamento. Acompanhe os passageiros abaixo.', icon: 'celebration' };
+  }
+  if (['approved', 'scheduled', 'in_progress'].includes(status)) {
+    return { text: 'Sua excursão foi confirmada! No dia da viagem, você poderá acompanhar o trajeto em tempo real.', icon: 'celebration' };
+  }
+  return { text: 'Sua solicitação está em análise. Assim que a excursão for confirmada, você poderá acompanhar o trajeto em tempo real.', icon: 'schedule' };
 }
 
 export function ExcursionPassengerListScreen({ navigation, route }: Props) {
   const excursionRequestId = route.params?.excursionRequestId ?? '';
   const [passengers, setPassengers] = useState<Passenger[]>([]);
   const [excursionStatus, setExcursionStatus] = useState<string>('pending');
+  const [boarding, setBoarding] = useState<ExcursionStatusFields>({});
   const [loading, setLoading] = useState(true);
   const [segment, setSegment] = useState<'ida' | 'volta'>('ida');
 
@@ -76,7 +89,7 @@ export function ExcursionPassengerListScreen({ navigation, route }: Props) {
         .order('created_at', { ascending: true }),
       supabase
         .from('excursion_requests')
-        .select('status')
+        .select('status, check_in_ida_started_at, check_in_volta_started_at, boarding_ida_done_at, boarding_volta_done_at')
         .eq('id', excursionRequestId)
         .eq('user_id', user.id)
         .single(),
@@ -86,13 +99,19 @@ export function ExcursionPassengerListScreen({ navigation, route }: Props) {
       return;
     }
     setPassengers((passengersRes.data ?? []) as Passenger[]);
-    setExcursionStatus((requestRes.data as { status?: string } | null)?.status ?? 'pending');
+    const reqRow = (requestRes.data as unknown as ExcursionStatusFields | null) ?? {};
+    setExcursionStatus(reqRow.status ?? 'pending');
+    setBoarding(reqRow);
     setLoading(false);
   }, [excursionRequestId]);
 
-  useEffect(() => {
-    loadPassengers();
-  }, [loadPassengers]);
+  // Recarrega sempre que a tela ganha foco (ex.: ao voltar do cadastro de
+  // passageiro), garantindo que a lista reflita o passageiro recém-adicionado.
+  useFocusEffect(
+    useCallback(() => {
+      loadPassengers();
+    }, [loadPassengers]),
+  );
 
   const statusForSegment = (p: Passenger) => segment === 'ida' ? p.status_departure : p.status_return;
 
@@ -172,7 +191,7 @@ export function ExcursionPassengerListScreen({ navigation, route }: Props) {
         </TouchableOpacity>
 
         {(() => {
-          const { text, icon } = getExcursionStatusMessage(excursionStatus);
+          const { text, icon } = getExcursionStatusMessage(boarding);
           const isCancelled = excursionStatus === 'cancelled';
           return (
             <View style={[styles.confirmationCard, isCancelled && styles.confirmationCardCancelled]}>

@@ -83,6 +83,17 @@ function packageSizeLabelDb(size: string | null | undefined): string {
   }
 }
 
+/**
+ * Valor da OFERTA de encomenda exibido ao motorista = o que ele recebe
+ * (worker_earning_cents = perna Base→Destino + tamanho, no modelo de pernas).
+ * Fallback para amount_cents em encomendas antigas (sem split gravado).
+ */
+function shipmentDriverNetCents(row: { amount_cents: number; worker_earning_cents?: number | null }): number {
+  const w = row.worker_earning_cents;
+  if (typeof w === 'number' && Number.isFinite(w) && w > 0) return w;
+  return Number(row.amount_cents) || 0;
+}
+
 /** Prazo do assignment no banco; se ausente/inválido, usa o fallback (ex.: partida − 30 min). */
 function expiresAtFromAssignment(iso: string | null | undefined, fallback: Date): Date {
   if (iso) {
@@ -213,7 +224,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
     const { data: offerRowsRaw } = await supabase
       .from('shipments')
       .select(
-        'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, current_offer_expires_at, scheduled_trip_id, scheduled_trips(status)',
+        'id, origin_address, destination_address, amount_cents, worker_earning_cents, created_at, user_id, package_size, admin_approved_at, current_offer_expires_at, scheduled_trip_id, scheduled_trips(status)',
       )
       .eq('current_offer_driver_id', user.id)
       .in('status', ['pending_review', 'confirmed'])
@@ -235,7 +246,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
     const { data: preferredWaitRaw } = await supabase
       .from('shipments')
       .select(
-        'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, current_offer_expires_at, scheduled_trip_id, scheduled_trips(status)',
+        'id, origin_address, destination_address, amount_cents, worker_earning_cents, created_at, user_id, package_size, admin_approved_at, current_offer_expires_at, scheduled_trip_id, scheduled_trips(status)',
       )
       .eq('client_preferred_driver_id', user.id)
       .is('current_offer_driver_id', null)
@@ -247,7 +258,11 @@ export function PendingRequestsScreen({ navigation }: Props) {
       const r = row as {
         scheduled_trip_id?: string | null;
         scheduled_trips?: { status?: string | null } | { status?: string | null }[] | null;
+        package_size?: string | null;
+        admin_approved_at?: string | null;
       };
+      // Encomenda grande só aparece após aprovação do admin.
+      if ((r.package_size ?? '').toLowerCase() === 'grande' && !r.admin_approved_at) return false;
       const tid = r.scheduled_trip_id;
       if (tid == null || tid === '') return true;
       return tripStatusAllowsPendingRequests(nestedScheduledTripStatus(r.scheduled_trips));
@@ -258,6 +273,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
       origin_address: string;
       destination_address: string;
       amount_cents: number;
+      worker_earning_cents?: number | null;
       created_at: string;
       user_id: string;
       package_size: string;
@@ -284,7 +300,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
         destination: s.destination_address,
         departureAt: offerDeadlineIso,
         timeLabel: formatTime(offerDeadlineIso),
-        priceCents: s.amount_cents,
+        priceCents: shipmentDriverNetCents(s),
         userName: p?.full_name ?? 'Cliente',
         userAvatar: p?.avatar_url ?? null,
         userRating: p?.rating != null ? Number(p.rating) : null,
@@ -302,6 +318,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
       origin_address: string;
       destination_address: string;
       amount_cents: number;
+      worker_earning_cents?: number | null;
       created_at: string;
       user_id: string;
       package_size: string;
@@ -330,7 +347,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
         destination: s.destination_address,
         departureAt: offerDeadlineIso,
         timeLabel: formatTime(offerDeadlineIso),
-        priceCents: s.amount_cents,
+        priceCents: shipmentDriverNetCents(s),
         userName: p?.full_name ?? 'Cliente',
         userAvatar: p?.avatar_url ?? null,
         userRating: p?.rating != null ? Number(p.rating) : null,
@@ -395,18 +412,19 @@ export function PendingRequestsScreen({ navigation }: Props) {
       const { data: shipRows } = await supabase
         .from('shipments')
         .select(
-          'id, origin_address, destination_address, amount_cents, created_at, user_id, package_size, scheduled_trip_id, client_preferred_driver_id, current_offer_driver_id, driver_offer_index',
+          'id, origin_address, destination_address, amount_cents, worker_earning_cents, created_at, user_id, package_size, scheduled_trip_id, client_preferred_driver_id, current_offer_driver_id, driver_offer_index',
         )
         .in('scheduled_trip_id', tripIds)
         .is('driver_id', null)
         .in('status', ['pending_review', 'confirmed'])
         .limit(50);
 
-      for (const s of (shipRows ?? []) as {
+      for (const s of (shipRows ?? []) as unknown as {
         id: string;
         origin_address: string;
         destination_address: string;
         amount_cents: number;
+        worker_earning_cents?: number | null;
         created_at: string;
         user_id: string;
         package_size: string;
@@ -444,7 +462,7 @@ export function PendingRequestsScreen({ navigation }: Props) {
           destination: s.destination_address,
           departureAt: depAt,
           timeLabel: formatTime(depAt),
-          priceCents: s.amount_cents,
+          priceCents: shipmentDriverNetCents(s),
           userName: p?.full_name ?? 'Cliente',
           userAvatar: p?.avatar_url ?? null,
           userRating: p?.rating != null ? Number(p.rating) : null,

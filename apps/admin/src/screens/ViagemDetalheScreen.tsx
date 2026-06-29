@@ -40,6 +40,7 @@ import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
 import type { BookingDetailForAdmin, TripShipmentListItem } from '../data/types';
 import type { MotoristaListItem } from '../data/types';
 import MapView from '../components/MapView';
+import { ShipmentHandoffPinsBlock } from '../components/ShipmentHandoffPinsBlock';
 import { useTripStops } from '../hooks/useTripStops';
 import { useTripMapCoords } from '../hooks/useTripMapCoords';
 import { useScheduledTripLiveLocation } from '../hooks/useScheduledTripLiveLocation';
@@ -1217,51 +1218,7 @@ export default function ViagemDetalheScreen() {
   const shipmentRow = (s: TripShipmentListItem) => {
     const ps = s.packageSize;
     const sizeLabel = ps === 'pequeno' ? 'Pequeno' : ps === 'medio' ? 'Médio' : ps === 'grande' ? 'Grande' : ps || '—';
-    const handoffPinsBlock = React.createElement(
-      'div',
-      {
-        style: {
-          borderTop: '1px solid #e2e2e2',
-          paddingTop: 16,
-          marginTop: 4,
-          display: 'flex',
-          flexDirection: 'column' as const,
-          gap: 14,
-        },
-      },
-      React.createElement(
-        'div',
-        { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' } },
-        s.baseId ? 'PINs de handoff (encomenda com base)' : 'PINs de handoff (sem base)',
-      ),
-      s.baseId
-        ? React.createElement(
-            React.Fragment,
-            null,
-            adminPinChipRow('PIN A — Passageiro → preparador', s.passengerToPreparerCode, s.pickedUpByPreparerAt),
-            adminPinChipRow('PIN B — Preparador → base', s.preparerToBaseCode, s.deliveredToBaseAt),
-            adminPinChipRow(
-              'PIN C — Base → motorista',
-              s.baseToDriverCode,
-              s.baseToDriverConfirmedAt ?? s.pickedUpByDriverFromBaseAt,
-            ),
-            adminPinChipRow('PIN D — Motorista → destinatário', s.deliveryCode, s.deliveredAt),
-            s.pickupCode?.trim()
-              ? adminPinChipRow(
-                  'PIN coleta direta (gerado no registro)',
-                  s.pickupCode,
-                  null,
-                  'Com base, a cadeia validada é A→B→C→D; este código existe por compatibilidade técnica.',
-                )
-              : null,
-          )
-        : React.createElement(
-            React.Fragment,
-            null,
-            adminPinChipRow('PIN — Coleta no remetente (motorista)', s.pickupCode, s.pickedUpAt),
-            adminPinChipRow('PIN — Entrega ao destinatário', s.deliveryCode, s.deliveredAt),
-          ),
-    );
+    const handoffPinsBlock = ShipmentHandoffPinsBlock({ shipment: s });
     return React.createElement('div', {
       key: s.id,
       style: { background: '#f6f6f6', borderRadius: 16, padding: '20px 24px', display: 'flex', flexDirection: 'column' as const, gap: 16 },

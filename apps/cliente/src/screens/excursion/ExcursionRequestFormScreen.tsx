@@ -9,16 +9,15 @@ import {
   Modal,
   Pressable,
   KeyboardAvoidingView,
-  Platform,
   ActivityIndicator,
 } from 'react-native';
-import { mapboxForwardGeocode } from '@take-me/shared';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ExcursionStackParamList } from '../../navigation/types';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
+// (Horário da excursão agora é um campo digitável HH:MM — sem time picker.)
 import { tryOpenSupportTicket } from '../../lib/supportTickets';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { CalendarPicker } from '../../components/CalendarPicker';
@@ -27,6 +26,9 @@ import {
   EXCURSION_PRESET_OTHER_ID,
   type ExcursionDestinationPreset,
 } from '../../data/excursionDestinationPresets';
+import { AddressAutocomplete } from '../../components/AddressAutocomplete';
+import type { AddressSuggestion } from '../../lib/location';
+import { mapboxForwardGeocode } from '@take-me/shared';
 
 type Props = NativeStackScreenProps<ExcursionStackParamList, 'ExcursionRequestForm'>;
 
@@ -67,14 +69,35 @@ function formatDisplayDate(iso: string): string {
   return `${day} ${months[d.getMonth()]} ${d.getFullYear()}`;
 }
 
+/** Máscara progressiva de horário: dígitos -> "HH:MM" (24h). */
+function applyTimeMask(text: string): string {
+  const digits = text.replace(/\D/g, '').slice(0, 4);
+  if (digits.length <= 2) return digits;
+  return `${digits.slice(0, 2)}:${digits.slice(2)}`;
+}
+
+/** Valida horário no formato HH:MM (24h). */
+function isValidHHMM(s: string): boolean {
+  const m = /^(\d{2}):(\d{2})$/.exec(s);
+  if (!m) return false;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  return h >= 0 && h <= 23 && min >= 0 && min <= 59;
+}
+
 export function ExcursionRequestFormScreen({ navigation }: Props) {
   const { showAlert } = useAppAlert();
+  const [origin, setOrigin] = useState('');
+  /** Coordenadas quando o usuário escolhe a origem da lista (evita geocode no envio). */
+  const [presetOriginCoords, setPresetOriginCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [originChipFocus, setOriginChipFocus] = useState<string | null>(null);
   const [destination, setDestination] = useState('');
   /** Coordenadas quando o usuário escolhe um destino da lista (evita geocode no envio). */
   const [presetDestCoords, setPresetDestCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [destChipFocus, setDestChipFocus] = useState<string | null>(null);
   const [excursionDate, setExcursionDate] = useState<Date | null>(null);
   const [dateModalVisible, setDateModalVisible] = useState(false);
+  const [excursionTime, setExcursionTime] = useState('');
   const [peopleCount, setPeopleCount] = useState(2);
   const [fleetType, setFleetType] = useState<'carro' | 'van' | 'micro_onibus' | 'onibus' | null>(null);
   const [firstAidTeam, setFirstAidTeam] = useState(false);
@@ -105,6 +128,11 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
   }, []);
 
   const handleSubmit = useCallback(async () => {
+    const orig = origin.trim();
+    if (!orig) {
+      showAlert('Atenção', 'Informe a origem da excursão.');
+      return;
+    }
     const dest = destination.trim();
     if (!dest) {
       showAlert('Atenção', 'Informe o destino da excursão.');
@@ -112,6 +140,10 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
     }
     if (!excursionDate) {
       showAlert('Atenção', 'Selecione a data da excursão.');
+      return;
+    }
+    if (!isValidHHMM(excursionTime)) {
+      showAlert('Atenção', 'Informe um horário válido no formato HH:MM (ex.: 14:30).');
       return;
     }
     if (!fleetType) {
@@ -126,19 +158,30 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
       return;
     }
 
-    let destinationLat: number | null = presetDestCoords?.lat ?? null;
-    let destinationLng: number | null = presetDestCoords?.lng ?? null;
-    if (destinationLat == null || destinationLng == null) {
-      const token = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN?.trim();
-      if (!token) {
+    // Fallback de geocoding quando o usuário digitou e não selecionou da lista:
+    // usa a Mapbox Geocoding compartilhada (consistente com o autocomplete).
+    const mapboxToken = (process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '').trim();
+
+    let originLat: number | null = presetOriginCoords?.lat ?? null;
+    let originLng: number | null = presetOriginCoords?.lng ?? null;
+    if (originLat == null || originLng == null) {
+      const geo = await mapboxForwardGeocode(`${orig}, Brasil`, mapboxToken);
+      if (!geo) {
         setSubmitting(false);
         showAlert(
-          'Destino no mapa',
-          'Escolha um destino da lista ou configure EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN para localizar endereços digitados.',
+          'Origem',
+          'Não encontramos essa origem. Tente “Cidade, UF” ou escolha uma origem da lista.',
         );
         return;
       }
-      const geo = await mapboxForwardGeocode(`${dest}, Brasil`, token);
+      originLat = geo.latitude;
+      originLng = geo.longitude;
+    }
+
+    let destinationLat: number | null = presetDestCoords?.lat ?? null;
+    let destinationLng: number | null = presetDestCoords?.lng ?? null;
+    if (destinationLat == null || destinationLng == null) {
+      const geo = await mapboxForwardGeocode(`${dest}, Brasil`, mapboxToken);
       if (!geo) {
         setSubmitting(false);
         showAlert(
@@ -156,10 +199,14 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
       .map((r) => ({ itemType: r.itemType.trim(), quantity: (r.quantity || '').trim() }));
     const payload = {
       user_id: user.id,
+      origin: orig,
+      origin_lat: originLat,
+      origin_lng: originLng,
       destination: dest,
       destination_lat: destinationLat,
       destination_lng: destinationLng,
       excursion_date: toISODate(excursionDate),
+      excursion_time: `${excursionTime}:00`,
       people_count: peopleCount,
       fleet_type: fleetType,
       first_aid_team: Boolean(firstAidTeam),
@@ -172,7 +219,9 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
     };
     const { data: row, error } = await supabase
       .from('excursion_requests')
-      .insert(payload)
+      // `excursion_time` é coluna nova; os tipos gerados do Supabase ainda não a
+      // conhecem, por isso o cast (consistente com o resto do projeto).
+      .insert(payload as never)
       .select('id')
       .single();
     setSubmitting(false);
@@ -184,8 +233,10 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
     if (row?.id) void tryOpenSupportTicket('excursao', { excursion_request_id: row.id });
     navigation.replace('ExcursionSuccess', { requestId: row?.id });
   }, [
+    origin,
     destination,
     excursionDate,
+    excursionTime,
     fleetType,
     peopleCount,
     firstAidTeam,
@@ -196,6 +247,7 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
     observations,
     navigation,
     showAlert,
+    presetOriginCoords,
     presetDestCoords,
   ]);
 
@@ -217,12 +269,80 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
           showsVerticalScrollIndicator={false}
         >
           <Text style={styles.title}>Solicite uma excursão</Text>
           <Text style={styles.subtitle}>
             Preencha as informações abaixo e nossa equipe entrará em contato com o orçamento.
           </Text>
+
+          <Text style={styles.label}>Origem da excursão</Text>
+          <Text style={styles.destHint}>
+            Ponto de partida da excursão. Escolha um local frequente ou toque em “Outro” e digite cidade e UF; o app localiza no mapa ao enviar.
+          </Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.chipsScroll}
+            contentContainerStyle={styles.chipsContent}
+          >
+            {EXCURSION_DESTINATION_PRESETS.map((p: ExcursionDestinationPreset) => {
+              const selected =
+                originChipFocus === p.id ||
+                (presetOriginCoords != null &&
+                  presetOriginCoords.lat === p.lat &&
+                  presetOriginCoords.lng === p.lng &&
+                  origin.trim() === p.destinationText);
+              return (
+                <TouchableOpacity
+                  key={`origin-${p.id}`}
+                  style={[styles.destChip, selected && styles.destChipSelected]}
+                  onPress={() => {
+                    setOriginChipFocus(p.id);
+                    setOrigin(p.destinationText);
+                    setPresetOriginCoords({ lat: p.lat, lng: p.lng });
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Text style={[styles.destChipText, selected && styles.destChipTextSelected]}>{p.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+            <TouchableOpacity
+              style={[styles.destChip, originChipFocus === EXCURSION_PRESET_OTHER_ID && styles.destChipSelected]}
+              onPress={() => {
+                setOriginChipFocus(EXCURSION_PRESET_OTHER_ID);
+                setPresetOriginCoords(null);
+              }}
+              activeOpacity={0.85}
+            >
+              <Text
+                style={[
+                  styles.destChipText,
+                  originChipFocus === EXCURSION_PRESET_OTHER_ID && styles.destChipTextSelected,
+                ]}
+              >
+                Outro
+              </Text>
+            </TouchableOpacity>
+          </ScrollView>
+          <AddressAutocomplete
+            value={origin}
+            onChangeText={(t) => {
+              setOrigin(t);
+              setPresetOriginCoords(null);
+              setOriginChipFocus(EXCURSION_PRESET_OTHER_ID);
+            }}
+            onSelectPlace={(place: AddressSuggestion) => {
+              setOrigin(place.address);
+              setPresetOriginCoords({ lat: place.latitude, lng: place.longitude });
+              setOriginChipFocus(EXCURSION_PRESET_OTHER_ID);
+            }}
+            placeholder="Ex.: Rosário, MA ou nome do município"
+            style={styles.destAutocomplete}
+            inputStyle={styles.destAutocompleteInput}
+          />
 
           <Text style={styles.label}>Destino da excursão</Text>
           <Text style={styles.destHint}>
@@ -274,16 +394,21 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
               </Text>
             </TouchableOpacity>
           </ScrollView>
-          <TextInput
-            style={styles.input}
+          <AddressAutocomplete
             value={destination}
             onChangeText={(t) => {
               setDestination(t);
               setPresetDestCoords(null);
               setDestChipFocus(EXCURSION_PRESET_OTHER_ID);
             }}
+            onSelectPlace={(place: AddressSuggestion) => {
+              setDestination(place.address);
+              setPresetDestCoords({ lat: place.latitude, lng: place.longitude });
+              setDestChipFocus(EXCURSION_PRESET_OTHER_ID);
+            }}
             placeholder="Ex.: Bacabal, MA ou nome do município"
-            placeholderTextColor={COLORS.neutral700}
+            style={styles.destAutocomplete}
+            inputStyle={styles.destAutocompleteInput}
           />
 
           <Text style={styles.label}>Data da excursão</Text>
@@ -293,6 +418,17 @@ export function ExcursionRequestFormScreen({ navigation }: Props) {
             </Text>
             <MaterialIcons name="keyboard-arrow-down" size={24} color={COLORS.black} />
           </TouchableOpacity>
+
+          <Text style={styles.label}>Horário da excursão</Text>
+          <TextInput
+            style={styles.input}
+            value={excursionTime}
+            onChangeText={(v) => setExcursionTime(applyTimeMask(v))}
+            placeholder="Ex.: 14:30"
+            placeholderTextColor={COLORS.neutral700}
+            keyboardType="numeric"
+            maxLength={5}
+          />
 
           <View style={styles.separator}>
             <View style={styles.separatorLine} />
@@ -505,12 +641,18 @@ const styles = StyleSheet.create({
   },
   dateText: { fontSize: 16, color: COLORS.black },
   datePlaceholder: { color: COLORS.neutral700 },
+  destAutocomplete: { marginBottom: 20, zIndex: 5 },
+  destAutocompleteInput: { backgroundColor: COLORS.neutral300, borderWidth: 0 },
+  timeModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  timeModalCard: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 16 },
+  timeModalConfirm: { backgroundColor: COLORS.black, borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 8 },
+  timeModalConfirmText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
   separator: { paddingVertical: 40, marginHorizontal: -24 },
   separatorLine: { height: 1, backgroundColor: '#E2E2E2', width: '100%' },
   stepperWrap: { marginBottom: 20 },
   stepperRow: {
     flexDirection: 'row',
-    width: 358,
+    width: '100%',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 8,

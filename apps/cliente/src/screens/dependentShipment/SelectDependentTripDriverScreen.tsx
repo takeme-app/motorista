@@ -11,6 +11,7 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { DependentShipmentStackParamList, TripDriverParam } from '../../navigation/types';
 import { loadShipmentDriversForRoute } from '../../lib/loadShipmentDriversForRoute';
@@ -56,6 +57,7 @@ function toTripDriverParam(sel: ClientScheduledTripItem): TripDriverParam {
 
 export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset();
   const { showAlert } = useAppAlert();
   const {
     origin,
@@ -162,7 +164,7 @@ export function SelectDependentTripDriverScreen({ navigation, route }: Props) {
   };
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) }]}>
+    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: bottomInset }]}>
       <StatusBar style="dark" />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>

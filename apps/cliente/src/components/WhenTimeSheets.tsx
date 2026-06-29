@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useBottomSafeInset } from '@take-me/shared';
 import { getDateCarouselOptions } from '../lib/dateTimeSlots';
 import type { useWhenTimeSelection } from '../hooks/useWhenTimeSelection';
 
@@ -37,6 +38,7 @@ export function WhenTimeSheets({
   nowSubtitle = 'Solicitar imediatamente',
   laterSubtitle = 'Agende escolhendo o dia',
 }: Props) {
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   return (
     <>
       <Modal
@@ -53,7 +55,7 @@ export function WhenTimeSheets({
           />
           <Pressable style={styles.overlayTouchable} onPress={state.closeWhenSheet} />
           <Animated.View
-            style={[styles.sheetContent, { transform: [{ translateY: state.whenSheetTranslateY }] }]}
+            style={[styles.sheetContent, { paddingBottom: bottomInset }, { transform: [{ translateY: state.whenSheetTranslateY }] }]}
             pointerEvents="box-none"
           >
             <View style={styles.handle} />
@@ -119,7 +121,7 @@ export function WhenTimeSheets({
           />
           <Pressable style={styles.overlayTouchable} onPress={state.closeTimeSheet} />
           <Animated.View
-            style={[styles.sheetContent, { transform: [{ translateY: state.timeSheetTranslateY }] }]}
+            style={[styles.sheetContent, { paddingBottom: bottomInset }, { transform: [{ translateY: state.timeSheetTranslateY }] }]}
             pointerEvents="box-none"
           >
             <View style={styles.handle} />

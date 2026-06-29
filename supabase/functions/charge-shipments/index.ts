@@ -43,6 +43,7 @@ type Row = {
   admin_earning_cents?: number | null;
   driver_id?: string | null;
   preparer_id?: string | null;
+  base_id?: string | null;
 };
 
 type CardFunding = "credit" | "debit" | "prepaid" | "unknown";
@@ -158,7 +159,7 @@ Deno.serve(async (req) => {
     const id = shipmentId ?? dependentId!;
 
     const selectFields = shipmentId
-      ? "id, user_id, amount_cents, status, payment_method, stripe_payment_intent_id, worker_earning_cents, admin_earning_cents, driver_id, preparer_id"
+      ? "id, user_id, amount_cents, status, payment_method, stripe_payment_intent_id, worker_earning_cents, admin_earning_cents, driver_id, preparer_id, base_id"
       : "id, user_id, amount_cents, status, payment_method, stripe_payment_intent_id, worker_earning_cents, admin_earning_cents, driver_id";
     const { data: row, error: rowErr } = await admin
       .from(table)
@@ -225,9 +226,13 @@ Deno.serve(async (req) => {
         );
       }
       // Split Connect também em Pix: transfer_data é usado no Pix da mesma forma que cartão.
+      // Encomenda com base (preparador + motorista) tem DOIS recebedores: não dá para usar um
+      // único transfer_data; cobra-se o total na plataforma e a distribuição (motorista +
+      // preparador) é feita via tabela `payouts` no stripe-webhook.
+      const isBaseFlow = shipmentId ? Boolean(s.base_id) : false;
       const preparerUserIdPix = shipmentId ? (s.preparer_id ?? null) : null;
       const driverUserIdPix = s.driver_id ?? null;
-      const workerUserIdPix = preparerUserIdPix ?? driverUserIdPix ?? null;
+      const workerUserIdPix = isBaseFlow ? null : (preparerUserIdPix ?? driverUserIdPix ?? null);
       const connectDestinationPix = await resolveConnectDestination(admin, workerUserIdPix);
       let applicationFeeCentsPix: number | null = null;
       if (connectDestinationPix) {
@@ -351,11 +356,12 @@ Deno.serve(async (req) => {
 
     // Split Stripe Connect: se worker (motorista ou preparador) tem Connect ativo,
     // faz transfer_data[destination] com application_fee_amount = admin_earning_cents.
-    // Caso preparador_encomendas (shipment.preparer_id): PDF exige admin_pct = 0,
-    // então worker_earning_cents ≈ amount_cents (zero taxa admin).
+    // Encomenda com base tem DOIS recebedores (motorista + preparador): não usa transfer_data
+    // único; cobra o total na plataforma e distribui via `payouts` no stripe-webhook.
+    const isBaseFlowCard = shipmentId ? Boolean(s.base_id) : false;
     const preparerUserId = shipmentId ? (s.preparer_id ?? null) : null;
     const driverUserId = s.driver_id ?? null;
-    const workerUserId = preparerUserId ?? driverUserId ?? null;
+    const workerUserId = isBaseFlowCard ? null : (preparerUserId ?? driverUserId ?? null);
     const connectDestination = await resolveConnectDestination(admin, workerUserId);
 
     let applicationFeeCents: number | null = null;

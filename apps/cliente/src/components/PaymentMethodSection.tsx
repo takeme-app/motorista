@@ -68,11 +68,16 @@ function getCancellationPolicyLines(
   switch (variant) {
     case 'shipment_credit':
     case 'shipment_debit':
+      // Encomenda não tem reembolso automático por janela — é tratado pelo suporte.
+      return [
+        'Cancelamento pelo app antes da entrega',
+        'Reembolso de valores pagos tratado pelo suporte',
+      ];
     case 'trip':
     default:
       return [
         `Cancelamento até ${hoursLabel} antes da partida: reembolso integral`,
-        `Cancelamento após esse prazo: sem reembolso`,
+        `Cancelamento após esse prazo: sem reembolso automático`,
       ];
   }
 }
@@ -471,8 +476,7 @@ export function PaymentMethodSection({
           {selectedMethod === opt.type && opt.type === 'pix' && (
             <View style={styles.expanded}>
               <Text style={styles.pixIntro}>
-                Ao confirmar o envio, abriremos o Pix oficial (Stripe): você poderá copiar o código, abrir o
-                comprovante no navegador e pagar no app do banco. Só depois disso o pedido segue para os motoristas.
+                Ao confirmar, abriremos a tela do Pix Take Me com o QR e o código para você pagar no app do seu banco.
               </Text>
               <TouchableOpacity
                 style={[styles.confirmButton, loading && styles.confirmButtonDisabled]}

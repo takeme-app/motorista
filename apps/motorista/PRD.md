@@ -1,6 +1,6 @@
 # Take Me — PRD do App Motorista
 
-> **Versao:** 1.3 | **Data:** 15/04/2026 | **Status:** Em desenvolvimento
+> **Versao:** 1.4 | **Data:** 10/06/2026 | **Status:** Em desenvolvimento
 > **Stack:** React Native + Expo SDK 54 + Supabase + @rnmapbox/maps v10 + expo-location
 > **Repositorio:** monorepo `take_me/apps/motorista`
 > **Arquitetura:** New Architecture habilitada (`newArchEnabled=true`)
@@ -617,11 +617,25 @@ Ver secao 8.2 para lista completa de RPCs.
 - [ ] Badge de notificacoes nao lidas na navbar
 - [ ] Push notifications nativas (`expo-notifications` nao esta nas dependencias)
 
-### Concluido recentemente (v1.3)
+### Concluido recentemente (v1.4 — 10/06/2026)
 
-- [x] `PendingRequestsScreen`: countdown alinhado a `expires_at` do assignment (e ofertas / fallback)
-- [x] Supabase Realtime em `PendingRequestsScreen` e no hook `useTripStops` (tela de viagem ativa), alem do chat
-- [x] `status_history`: triggers no banco para mudanca de status de viagem (`entity_type = trip`), além de booking/shipment/dependent_shipment/excursion já existentes
+- [x] **Cancelar viagem (roll-forward)**: ao cancelar uma viagem recorrente (`cancel-scheduled-trip`),
+  a ocorrencia atual fica como historico e e criada uma **nova ocorrencia ativa** para a proxima
+  semana — o slot **permanece** no cronograma da rota (`RouteScheduleScreen`). "Excluir horario"
+  continua removendo o slot.
+- [x] **Notificacoes do preparador de excursao**: ativadas em producao (drift corrigido) — aprovacao/
+  reprovacao de cadastro (cobre motorista + preparador de excursao + de encomendas) e atividade da
+  excursao (em andamento / finalizada / mudou de status) via `excursion_requests.preparer_id`.
+- [x] **Notificacoes de mudanca de status**: mensagem agora em **portugues** (antes mostrava o status
+  cru, ex.: "cancelled") — `notify_driver_activity_status_changed` + backfill das existentes.
+- [x] **Excursoes — origem real**: `ColetasExcursoesScreen` / `HomeExcursoesScreen` /
+  `DetalhesExcursaoScreen` passam a exibir a **origem** escolhida pelo cliente (colunas
+  `excursion_requests.origin/origin_lat/origin_lng`) em vez de "Origem a definir".
+- [x] **Cadastrar passageiro de excursao**: campo **Sexo** em chips; **Documento** e **Foto** com
+  upload real (`excursion-passenger-docs`) — antes eram placeholders.
+- [x] **Realizar embarques → Justificar ausentes**: nova tela `JustificarAusenciaExcursao` com
+  **motivo (obrigatorio)** e **anexo (opcional)** por passageiro; grava
+  `excursion_passengers.absence_reason/absence_attachment_url` e finaliza o embarque.
 
 ---
 

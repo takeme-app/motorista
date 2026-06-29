@@ -16,6 +16,10 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { PagamentosExcStackParamList } from '../../navigation/PagamentosExcursoesStack';
 import { supabase } from '../../lib/supabase';
+import {
+  fetchExcursionPaymentTransfers,
+  type ExcursionPaymentTransfer,
+} from '../../lib/excursionPaymentTransfers';
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
 import { getStripeConnectState, type StripeConnectState } from '../../lib/motoristaAccess';
@@ -29,11 +33,12 @@ const MUTED = '#6B7280';
 const SUBTLE = '#9CA3AF';
 const INK = '#111827';
 
-type Transfer = {
-  id: string;
-  amount_cents: number;
-  paid_at: string;
-};
+type Transfer = ExcursionPaymentTransfer;
+
+// Só payout pago é repasse real "Pix"; excursão concluída ainda não transferida é "Excursão".
+function transferLabel(source: ExcursionPaymentTransfer['source']): string {
+  return source === 'payout' ? 'Pix' : 'Excursão';
+}
 
 function formatCents(cents: number): string {
   return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -47,7 +52,8 @@ function formatShortDate(iso: string): string {
 
 function formatHour(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  // Hora LOCAL sem Intl (toLocaleTimeString é instável no Hermes e retornava hora errada).
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 function PixIcon() {
@@ -98,25 +104,11 @@ export function PagamentosExcursoesScreen({ navigation }: Props) {
     const startToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
     const endToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999).toISOString();
 
-    const { data: todayPayouts } = await (supabase as any)
-      .from('payouts')
-      .select('id, worker_amount_cents, paid_at')
-      .eq('worker_id', user.id)
-      .eq('status', 'paid')
-      .gte('paid_at', startToday)
-      .lte('paid_at', endToday)
-      .order('paid_at', { ascending: false });
-
-    const todayList = (todayPayouts ?? []) as { id: string; worker_amount_cents: number; paid_at: string }[];
-    setTotalTodayCents(todayList.reduce((s, p) => s + p.worker_amount_cents, 0));
+    // Payout pago (repasse oficial) OU, sem payout, a parcela da excursão concluída (ao concluir).
+    const todayList = await fetchExcursionPaymentTransfers(supabase, user.id, startToday, endToday);
+    setTotalTodayCents(todayList.reduce((s, p) => s + p.amount_cents, 0));
     setExcursionsToday(todayList.length);
-    setTransfers(
-      todayList.map((p) => ({
-        id: p.id,
-        amount_cents: p.worker_amount_cents,
-        paid_at: p.paid_at,
-      })),
-    );
+    setTransfers(todayList);
     setLoading(false);
   }, []);
 
@@ -249,7 +241,7 @@ export function PagamentosExcursoesScreen({ navigation }: Props) {
                     <PixIcon />
                     <View style={styles.transferInfo}>
                       <Text style={styles.transferAmount}>{formatCents(t.amount_cents)}</Text>
-                      <Text style={styles.transferMeta}>Pix • {formatHour(t.paid_at)}</Text>
+                      <Text style={styles.transferMeta}>{transferLabel(t.source)} • {formatHour(t.paid_at)}</Text>
                     </View>
                     <Text style={styles.transferDate}>{formatShortDate(t.paid_at)}</Text>
                   </View>

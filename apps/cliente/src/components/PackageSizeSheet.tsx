@@ -9,6 +9,7 @@ import {
 import { useRef, useEffect } from 'react';
 import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useBottomSafeInset } from '@take-me/shared';
 
 const COLORS = {
   background: '#FFFFFF',
@@ -36,6 +37,7 @@ type Props = {
 };
 
 export function PackageSizeSheet({ visible, onClose, selectedSize, onSelectSize }: Props) {
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const overlayOpacity = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(SLIDE)).current;
 
@@ -54,7 +56,10 @@ export function PackageSizeSheet({ visible, onClose, selectedSize, onSelectSize 
       <View style={styles.overlayContainer} pointerEvents="box-none">
         <Animated.View style={[styles.overlay, { opacity: overlayOpacity }]} pointerEvents="none" />
         <Pressable style={styles.overlayTouchable} onPress={onClose} />
-        <Animated.View style={[styles.sheetContent, { transform: [{ translateY }] }]} pointerEvents="box-none">
+        <Animated.View
+          style={[styles.sheetContent, { paddingBottom: bottomInset }, { transform: [{ translateY }] }]}
+          pointerEvents="box-none"
+        >
           <View style={styles.handle} />
           <Text style={styles.title}>Tamanho do pacote</Text>
           {OPTIONS.map((opt) => (

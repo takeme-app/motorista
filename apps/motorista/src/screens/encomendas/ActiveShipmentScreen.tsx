@@ -7,10 +7,12 @@ import {
   ScrollView,
   ActivityIndicator,
   Modal,
-  KeyboardAvoidingView,
   Platform,
   useWindowDimensions,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../../components/Text';
 import { DriverLocationFocusButton } from '../../components/DriverLocationFocusButton';
 import { MapNetworkBadge } from '../../components/MapNetworkBadge';
@@ -58,7 +60,7 @@ import {
 import { onlyDigits } from '../../utils/formatCpf';
 import { closeShipmentConversation } from '../../lib/shipmentConversation';
 import { getUserErrorMessage, isShipmentDriverRatingsUnavailableError } from '../../utils/errorMessage';
-import { formatShipmentCode } from '@take-me/shared';
+import { useBottomSafeInset, formatShipmentCode } from '@take-me/shared';
 
 let Location: any = null;
 try { Location = require('expo-location'); } catch { /* not linked yet */ }
@@ -163,12 +165,26 @@ function shipmentDisplayId(id: string): string {
 /** ~150 m — abre modais de código ao aproximar da coleta ou da base. */
 const NEARBY_KM = 0.15;
 
+/** Encomenda do mesmo cliente nesta coleta (fluxo com base). */
+type GroupItem = {
+  id: string;
+  shortId: string;
+  passengerToPreparerCode: string;
+  preparerToBaseCode: string;
+  pickedUpByPreparerAt: string | null;
+};
+
 export function ActiveShipmentScreen({ navigation, route }: Props) {
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const { showAlert } = useAppAlert();
   const { shipmentId } = route.params;
   const [shipment, setShipment] = useState<Shipment | null>(null);
+  // Grupo de encomendas do mesmo cliente (fluxo com base): coletadas e
+  // depositadas juntas. Vazio = encomenda única.
+  const [group, setGroup] = useState<GroupItem[]>([]);
+  const [deliveryCodes, setDeliveryCodes] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [step, setStep] = useState<Step>('to_pickup');
@@ -392,7 +408,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       const { data } = await supabase
         .from('shipments')
         .select(
-          'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, amount_cents, created_at, status, user_id, base_id, pickup_code, delivery_code, picked_up_at, passenger_to_preparer_code, preparer_to_base_code, picked_up_by_preparer_at',
+          'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, amount_cents, preparer_payout_cents, created_at, status, user_id, base_id, pickup_code, delivery_code, picked_up_at, passenger_to_preparer_code, preparer_to_base_code, picked_up_by_preparer_at',
         )
         .eq('id', shipmentId)
         .maybeSingle();
@@ -431,6 +447,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         destination_lat: number | null;
         destination_lng: number | null;
         amount_cents: number | null;
+        preparer_payout_cents: number | null;
         created_at: string;
         status: string;
         user_id: string;
@@ -492,7 +509,8 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
           pickupHasMapCoords,
           baseHasMapCoords: deliveryHasMapCoords,
           deliveryHasMapCoords,
-        amountCents: row.amount_cents ?? 0,
+        // Valor exibido ao preparador = parcela dele (preparer_payout_cents), nao o total do cliente.
+        amountCents: row.preparer_payout_cents ?? 0,
         confirmedAt: row.created_at,
         pickupCodeExpected: String(row.pickup_code ?? ''),
         deliveryCodeExpected: String(row.delivery_code ?? ''),
@@ -575,7 +593,8 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         baseHasMapCoords,
         /** Proximidade da 2ª etapa = depósito na base. */
         deliveryHasMapCoords: baseHasMapCoords,
-        amountCents: row.amount_cents ?? 0,
+        // Valor exibido ao preparador = parcela dele (preparer_payout_cents), nao o total do cliente.
+        amountCents: row.preparer_payout_cents ?? 0,
         confirmedAt: row.created_at,
         pickupCodeExpected: String(row.pickup_code ?? ''),
         deliveryCodeExpected: String(row.delivery_code ?? ''),
@@ -588,6 +607,30 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       setShipment(s);
 
       if (row.status === 'in_progress' || row.picked_up_at) setStep('to_delivery');
+
+      // Grupo do mesmo cliente sob este preparador, ainda não depositado: o
+      // preparador coleta todas numa corrida e deposita juntas na base.
+      const { data: groupRows } = await supabase
+        .from('shipments')
+        .select('id, passenger_to_preparer_code, preparer_to_base_code, picked_up_by_preparer_at, created_at')
+        .eq('user_id' as never, row.user_id as never)
+        .eq('preparer_id' as never, user.id as never)
+        .is('delivered_to_base_at', null)
+        .in('status', ['confirmed', 'in_progress'])
+        .order('created_at', { ascending: false });
+      const gitems: GroupItem[] = ((groupRows ?? []) as unknown as {
+        id: string;
+        passenger_to_preparer_code: string | null;
+        preparer_to_base_code: string | null;
+        picked_up_by_preparer_at: string | null;
+      }[]).map((g) => ({
+        id: g.id,
+        shortId: shipmentDisplayId(g.id),
+        passengerToPreparerCode: String(g.passenger_to_preparer_code ?? ''),
+        preparerToBaseCode: String(g.preparer_to_base_code ?? ''),
+        pickedUpByPreparerAt: g.picked_up_by_preparer_at ?? null,
+      }));
+      setGroup(gitems.length > 1 ? gitems : []);
 
       const fullRoute = await getRouteWithDuration(s.pickupCoord, s.deliveryCoord, routeOpts);
       if (fullRoute) {
@@ -839,40 +882,48 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
     if (shipment.hasPreparerBase) {
       setPickupLoading(true);
       try {
+        // Lote: todas as encomendas do cliente precisam ter o PIN A validado.
+        const ids = group.length > 0 ? group.map((g) => g.id) : [shipment.id];
         const { data, error } = await supabase
           .from('shipments')
-          .select('picked_up_by_preparer_at, status, picked_up_at')
-          .eq('id', shipment.id)
-          .maybeSingle();
+          .select('id, picked_up_by_preparer_at, status, picked_up_at')
+          .in('id', ids);
         if (error || !data) {
           showAlert('Erro', 'Não foi possível verificar a coleta. Tente novamente.');
           return;
         }
-        const row = data as {
+        const rows = data as unknown as {
+          id: string;
           picked_up_by_preparer_at: string | null;
           status: string;
           picked_up_at: string | null;
-        };
-        if (!row.picked_up_by_preparer_at) {
+        }[];
+        const pending = rows.filter((r) => !r.picked_up_by_preparer_at);
+        if (pending.length > 0) {
           showAlert(
             'Aguardando o cliente',
-            'O cliente ainda não validou o código no app dele. Confirme com ele que digitou o código que você informou.',
+            ids.length > 1
+              ? `Faltam ${pending.length} de ${ids.length} códigos. Informe ao cliente os códigos pendentes — ele valida cada um no app dele.`
+              : 'O cliente ainda não validou o código no app dele. Confirme com ele que digitou o código que você informou.',
           );
           return;
         }
-        const { error: upErr } = await supabase
-          .from('shipments')
-          .update({
-            status: 'in_progress',
-            pickup_notes: pickupObs.trim() || null,
-            picked_up_at: row.picked_up_at ?? new Date().toISOString(),
-          } as never)
-          .eq('id', shipment.id);
-        if (upErr) {
-          showAlert('Não foi possível confirmar', upErr.message || 'Tente novamente.');
-          return;
+        const nowIso = new Date().toISOString();
+        for (const r of rows) {
+          const { error: upErr } = await supabase
+            .from('shipments')
+            .update({
+              status: 'in_progress',
+              pickup_notes: pickupObs.trim() || null,
+              picked_up_at: r.picked_up_at ?? nowIso,
+            } as never)
+            .eq('id', r.id);
+          if (upErr) {
+            showAlert('Não foi possível confirmar', upErr.message || 'Tente novamente.');
+            return;
+          }
         }
-        setShipment((s) => (s ? { ...s, pickedUpByPreparerAt: row.picked_up_by_preparer_at } : s));
+        setShipment((s) => (s ? { ...s, pickedUpByPreparerAt: nowIso } : s));
         autoModalRef.current = { pickup: false, delivery: false };
         setStep('to_delivery');
         setPickupVisible(false);
@@ -948,7 +999,58 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
   // PDF cenário 4 (sem base): comportamento legado — preparador digita
   // `delivery_code` para concluir entrega ao destinatário.
   const confirmDelivery = async () => {
-    if (!deliveryCode.trim() || !shipment) return;
+    if (!shipment) return;
+
+    // Lote (vários pedidos do mesmo cliente, com base): valida o PIN B de cada um.
+    if (shipment.hasPreparerBase && group.length > 0) {
+      const missing = group.filter((g) => onlyDigits(deliveryCodes[g.id] ?? '').length !== 4);
+      if (missing.length > 0) {
+        showAlert(
+          'Códigos faltando',
+          `Informe o código da base para cada encomenda (${group.length - missing.length}/${group.length} preenchidos).`,
+        );
+        return;
+      }
+      setDeliveryLoading(true);
+      try {
+        const failed: string[] = [];
+        for (const g of group) {
+          const { data, error } = await supabase.rpc(
+            'complete_shipment_preparer_to_base' as never,
+            { p_shipment_id: g.id, p_confirmation_code: deliveryCodes[g.id] } as never,
+          );
+          const payload = data as { ok?: boolean; error?: string } | null;
+          if (error || !payload || payload.ok !== true) {
+            failed.push(g.shortId);
+            continue;
+          }
+          if (deliveryObs.trim()) {
+            await supabase
+              .from('shipments')
+              .update({ delivery_notes: deliveryObs.trim() } as never)
+              .eq('id', g.id);
+          }
+          await closeShipmentConversation(g.id);
+        }
+        if (failed.length > 0) {
+          showAlert(
+            'Alguns códigos falharam',
+            `Não foi possível confirmar: ${failed.join(', ')}. Confira os códigos informados pela base.`,
+          );
+          return;
+        }
+        setDeliveryVisible(false);
+        setDeliveryCode('');
+        setDeliveryCodes({});
+        setDeliveryObs('');
+        setSummaryVisible(true);
+      } finally {
+        setDeliveryLoading(false);
+      }
+      return;
+    }
+
+    if (!deliveryCode.trim()) return;
 
     if (shipment.hasPreparerBase) {
       setDeliveryLoading(true);
@@ -1059,7 +1161,9 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
       );
       if (error) throw error;
       setSummaryVisible(false);
-      navigation.navigate('ColetasMain');
+      // Defere a navegação para depois do Modal sair da árvore: navegar com o Modal
+      // ainda visível deixa o overlay nativo preso no Android (tela "congelada").
+      requestAnimationFrame(() => navigation.navigate('ColetasMain'));
     } catch (e: unknown) {
       if (isShipmentDriverRatingsUnavailableError(e)) {
         showAlert(
@@ -1374,7 +1478,9 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                 : 'Entrega ao destino'}
           </Text>
           <Text style={styles.miniSheetOrderId} numberOfLines={1}>
-            Pedido #{shipmentDisplayId(shipment.id)}
+            {group.length > 1
+              ? `${group.length} pedidos deste cliente`
+              : `Pedido #${shipmentDisplayId(shipment.id)}`}
           </Text>
           <View style={styles.miniAddressRow}>
             <MaterialIcons name="location-on" size={14} color="#6B7280" />
@@ -1400,7 +1506,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
           >
             <Text style={styles.miniConfirmBtnText}>
               {step === 'to_pickup'
-                ? 'Confirmar coleta'
+                ? 'Iniciar coleta'
                 : shipment.hasPreparerBase
                   ? 'Confirmar na base'
                   : 'Confirmar entrega'}
@@ -1417,9 +1523,10 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         animationType="slide"
         onRequestClose={() => !pickupLoading && setPickupVisible(false)}
       >
-        <KeyboardAvoidingView behavior="padding" style={styles.kbav}>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        <KeyboardAvoidingView behavior="height" style={styles.kbav}>
           <View style={styles.modalOverlay}>
-            <View style={styles.sheet}>
+            <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
               <View style={styles.handle} />
               <View style={styles.sheetHeader}>
                 <Text style={styles.sheetTitle}>Deseja confirmar a Coleta {shipment.coletaLetter}?</Text>
@@ -1433,18 +1540,27 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                 {shipment.hasPreparerBase ? (
                   <>
                     <Text style={styles.fieldLabel}>
-                      Informe este código ao cliente
+                      {group.length > 1 ? 'Informe estes códigos ao cliente' : 'Informe este código ao cliente'}
                     </Text>
                     <Text style={styles.handoffHint}>
-                      Diga estes 4 dígitos ao cliente. Ele vai digitar no app dele
-                      para validar a coleta. Quando ele confirmar, toque no botão
-                      abaixo para seguir até a base.
+                      {group.length > 1
+                        ? 'Diga ao cliente o código de cada pedido abaixo. Ele valida cada um no app dele. Quando todos estiverem validados, toque no botão para seguir até a base.'
+                        : 'Diga estes 4 dígitos ao cliente. Ele vai digitar no app dele para validar a coleta. Quando ele confirmar, toque no botão abaixo para seguir até a base.'}
                     </Text>
-                    <View style={styles.handoffPinBox}>
-                      <Text style={styles.handoffPinText}>
-                        {shipment.passengerToPreparerCode || '— — — —'}
-                      </Text>
-                    </View>
+                    {group.length > 1 ? (
+                      group.map((g) => (
+                        <View key={g.id} style={styles.groupCodeRow}>
+                          <Text style={styles.groupCodeLabel}>#{g.shortId}</Text>
+                          <Text style={styles.groupCodeValue}>{g.passengerToPreparerCode || '— — — —'}</Text>
+                        </View>
+                      ))
+                    ) : (
+                      <View style={styles.handoffPinBox}>
+                        <Text style={styles.handoffPinText}>
+                          {shipment.passengerToPreparerCode || '— — — —'}
+                        </Text>
+                      </View>
+                    )}
                     <View style={styles.obsRow}>
                       <Text style={styles.fieldLabel}>Observações</Text>
                       <Text style={styles.optional}>Opcional</Text>
@@ -1520,6 +1636,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
             </View>
           </View>
         </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
       </Modal>
 
       {/* ── Delivery modal ── */}
@@ -1529,9 +1646,10 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         animationType="slide"
         onRequestClose={() => !deliveryLoading && setDeliveryVisible(false)}
       >
-        <KeyboardAvoidingView behavior="padding" style={styles.kbav}>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        <KeyboardAvoidingView behavior="height" style={styles.kbav}>
           <View style={styles.modalOverlay}>
-            <View style={styles.sheet}>
+            <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
               <View style={styles.handle} />
               <View style={styles.sheetHeader}>
                 <View style={{ flex: 1 }}>
@@ -1551,27 +1669,52 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
               <Text style={styles.reservaCodeLine}>ID da Reserva: {shipmentDisplayId(shipment.id)}</Text>
               <View style={styles.divider} />
               <ScrollView keyboardShouldPersistTaps="handled">
-                <Text style={styles.fieldLabel}>
-                  {shipment.hasPreparerBase
-                    ? 'Código informado pela base'
-                    : 'Código de entrega'}
-                </Text>
-                <TextInput
-                  style={shipment.hasPreparerBase ? styles.codeInput : styles.input}
-                  placeholder={shipment.hasPreparerBase ? 'Ex: 1234' : 'Ex: BASE132'}
-                  placeholderTextColor="#9CA3AF"
-                  value={deliveryCode}
-                  onChangeText={(value) => {
-                    setDeliveryCode(
-                      shipment.hasPreparerBase
-                        ? value.replace(/\D/g, '').slice(0, 4)
-                        : value,
-                    );
-                  }}
-                  autoCapitalize="characters"
-                  keyboardType={shipment.hasPreparerBase ? 'numeric' : 'default'}
-                  maxLength={shipment.hasPreparerBase ? 4 : undefined}
-                />
+                {shipment.hasPreparerBase && group.length > 1 ? (
+                  <>
+                    <Text style={styles.fieldLabel}>Códigos informados pela base</Text>
+                    <Text style={styles.handoffHint}>
+                      Peça à base o código de cada encomenda e digite abaixo.
+                    </Text>
+                    {group.map((g) => (
+                      <View key={g.id} style={styles.groupInputRow}>
+                        <Text style={styles.groupCodeLabel}>#{g.shortId}</Text>
+                        <TextInput
+                          style={styles.codeInputSmall}
+                          placeholder="0000"
+                          placeholderTextColor="#9CA3AF"
+                          value={deliveryCodes[g.id] ?? ''}
+                          onChangeText={(v) =>
+                            setDeliveryCodes((m) => ({ ...m, [g.id]: v.replace(/\D/g, '').slice(0, 4) }))
+                          }
+                          keyboardType="numeric"
+                          maxLength={4}
+                        />
+                      </View>
+                    ))}
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.fieldLabel}>
+                      {shipment.hasPreparerBase ? 'Código informado pela base' : 'Código de entrega'}
+                    </Text>
+                    <TextInput
+                      style={shipment.hasPreparerBase ? styles.codeInput : styles.input}
+                      placeholder={shipment.hasPreparerBase ? 'Ex: 1234' : 'Ex: BASE132'}
+                      placeholderTextColor="#9CA3AF"
+                      value={deliveryCode}
+                      onChangeText={(value) => {
+                        setDeliveryCode(
+                          shipment.hasPreparerBase
+                            ? value.replace(/\D/g, '').slice(0, 4)
+                            : value,
+                        );
+                      }}
+                      autoCapitalize="characters"
+                      keyboardType={shipment.hasPreparerBase ? 'numeric' : 'default'}
+                      maxLength={shipment.hasPreparerBase ? 4 : undefined}
+                    />
+                  </>
+                )}
                 <View style={styles.obsRow}>
                   <Text style={styles.fieldLabel}>Observações</Text>
                   <Text style={styles.optional}>Opcional</Text>
@@ -1587,16 +1730,20 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                   textAlignVertical="top"
                 />
                 <TouchableOpacity
-                  style={[styles.primaryBtn, !deliveryCode.trim() && styles.btnDisabled]}
+                  style={[styles.primaryBtn, (group.length > 1 ? false : !deliveryCode.trim()) && styles.btnDisabled]}
                   onPress={confirmDelivery}
-                  disabled={!deliveryCode.trim() || deliveryLoading}
+                  disabled={(group.length > 1 ? false : !deliveryCode.trim()) || deliveryLoading}
                   activeOpacity={0.85}
                 >
                   {deliveryLoading
                     ? <ActivityIndicator size="small" color="#FFF" />
                     : (
                       <Text style={styles.primaryBtnText}>
-                        {shipment.hasPreparerBase ? 'Confirmar depósito' : 'Confirmar entrega'}
+                        {!shipment.hasPreparerBase
+                          ? 'Confirmar entrega'
+                          : group.length > 1
+                            ? 'Confirmar depósito de todas'
+                            : 'Confirmar depósito'}
                       </Text>
                     )
                   }
@@ -1608,6 +1755,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
             </View>
           </View>
         </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
       </Modal>
 
       {/* ── Summary modal ── */}
@@ -1617,9 +1765,10 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
         animationType="slide"
         onRequestClose={() => !summaryLoading && setSummaryVisible(false)}
       >
-        <KeyboardAvoidingView behavior="padding" style={styles.kbav}>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        <KeyboardAvoidingView behavior="height" style={styles.kbav}>
           <View style={styles.modalOverlay}>
-            <View style={styles.sheet}>
+            <View style={[styles.sheet, { paddingBottom: bottomInset }]}>
               <View style={styles.handle} />
               <View style={styles.sheetHeader}>
                 <View style={{ flex: 1 }}>
@@ -1634,7 +1783,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                 </View>
                 <TouchableOpacity
                   style={styles.closeBtn}
-                  onPress={() => { setSummaryVisible(false); navigation.navigate('ColetasMain'); }}
+                  onPress={() => { setSummaryVisible(false); requestAnimationFrame(() => navigation.navigate('ColetasMain')); }}
                   activeOpacity={0.7}
                 >
                   <MaterialIcons name="close" size={18} color="#374151" />
@@ -1699,7 +1848,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.makeMoreBtn}
-                  onPress={() => { setSummaryVisible(false); navigation.navigate('ColetasMain'); }}
+                  onPress={() => { setSummaryVisible(false); requestAnimationFrame(() => navigation.navigate('ColetasMain')); }}
                   activeOpacity={0.7}
                 >
                   <Text style={styles.makeMoreText}>Fazer mais coletas</Text>
@@ -1708,6 +1857,7 @@ export function ActiveShipmentScreen({ navigation, route }: Props) {
             </View>
           </View>
         </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
       </Modal>
     </View>
   );
@@ -2034,6 +2184,38 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: DARK,
     letterSpacing: 6,
+  },
+  // Lote (vários pedidos do mesmo cliente)
+  groupCodeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  groupCodeLabel: { fontSize: 14, fontWeight: '700', color: '#6B7280' },
+  groupCodeValue: { fontSize: 22, fontWeight: '700', color: DARK, letterSpacing: 4 },
+  groupInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  codeInputSmall: {
+    width: 120,
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    fontSize: 22,
+    fontWeight: '700',
+    color: DARK,
+    backgroundColor: '#F9FAFB',
+    textAlign: 'center',
   },
 
   // Summary

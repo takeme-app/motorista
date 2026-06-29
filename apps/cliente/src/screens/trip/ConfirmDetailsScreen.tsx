@@ -188,7 +188,7 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
       </TouchableOpacity>
       <KeyboardAvoidingView
         style={styles.keyboardAvoid}
-        behavior="padding"
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
       >
         <ScrollView

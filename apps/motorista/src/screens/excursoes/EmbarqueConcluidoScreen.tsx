@@ -5,9 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ColetasExcursoesStackParamList } from '../../navigation/ColetasExcursoesStack';
-import { Linking, Alert } from 'react-native';
-import { useCallback, useEffect, useState } from 'react';
-import { supabase } from '../../lib/supabase';
+import { useCallback } from 'react';
 
 type Props = NativeStackScreenProps<ColetasExcursoesStackParamList, 'EmbarqueConcluido'>;
 
@@ -18,38 +16,19 @@ function formatBRL(cents: number | null | undefined): string {
 
 export function EmbarqueConcluidoScreen({ navigation, route }: Props) {
   const { boarded, justified, totalExcursion, excursionId, totalAmountCents } = route.params;
-  const [destinationQuery, setDestinationQuery] = useState<string | null>(null);
+  const isVolta = (route.params.phase ?? 'ida') === 'volta';
 
-  useEffect(() => {
-    let c = true;
-    (async () => {
-      const { data } = await supabase
-        .from('excursion_requests')
-        .select('destination')
-        .eq('id', excursionId)
-        .maybeSingle();
-      if (!c || !data) return;
-      const dest = String((data as { destination?: string | null }).destination ?? '').trim();
-      if (dest) setDestinationQuery(dest);
-    })();
-    return () => {
-      c = false;
-    };
-  }, [excursionId]);
-
-  const openMaps = useCallback(() => {
-    if (!destinationQuery) {
-      Alert.alert('Mapa', 'Destino não cadastrado para abrir no mapa.');
-      return;
-    }
-    const q = encodeURIComponent(`${destinationQuery}, Brasil`);
-    const url = `https://www.google.com/maps/search/?api=1&query=${q}`;
-    void Linking.openURL(url);
-  }, [destinationQuery]);
+  const openDetalhes = useCallback(() => {
+    navigation.navigate('DetalhesExcursao', { excursionId });
+  }, [navigation, excursionId]);
 
   const goHome = useCallback(() => {
     navigation.popToTop();
   }, [navigation]);
+
+  const goVolta = useCallback(() => {
+    navigation.navigate('RealizarEmbarques', { excursionId, phase: 'volta' });
+  }, [navigation, excursionId]);
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
@@ -62,9 +41,13 @@ export function EmbarqueConcluidoScreen({ navigation, route }: Props) {
             </View>
           </View>
           <View style={styles.card}>
-            <Text style={styles.title}>Embarque concluído com sucesso!</Text>
+            <Text style={styles.title}>
+              {isVolta ? 'Embarque de volta concluído!' : 'Embarque concluído com sucesso!'}
+            </Text>
             <Text style={styles.subtitle}>
-              Todos os passageiros foram registrados. A excursão está pronta para partir.
+              {isVolta
+                ? 'Todos os passageiros do retorno foram registrados.'
+                : 'Todos os passageiros foram registrados. A excursão está pronta para partir.'}
             </Text>
             <View style={styles.stats}>
               <StatRow label="Passageiros embarcados" value={String(boarded)} />
@@ -78,8 +61,17 @@ export function EmbarqueConcluidoScreen({ navigation, route }: Props) {
         </View>
       </View>
       <View style={styles.footer}>
-        <TouchableOpacity style={styles.btnBlack} onPress={openMaps} activeOpacity={0.88}>
-          <Text style={styles.btnBlackText}>Acompanhar excursão</Text>
+        {!isVolta && (
+          <TouchableOpacity style={styles.btnBlack} onPress={goVolta} activeOpacity={0.88}>
+            <Text style={styles.btnBlackText}>Iniciar embarque de volta</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity
+          style={isVolta ? styles.btnBlack : styles.btnOutline}
+          onPress={openDetalhes}
+          activeOpacity={0.88}
+        >
+          <Text style={isVolta ? styles.btnBlackText : styles.btnOutlineText}>Acompanhar excursão</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={goHome} activeOpacity={0.7} style={styles.linkWrap}>
           <Text style={styles.linkText}>Voltar ao início</Text>
@@ -156,6 +148,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   btnBlackText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
+  btnOutline: {
+    height: 56,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#111827',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  btnOutlineText: { fontSize: 16, fontWeight: '700', color: '#111827' },
   linkWrap: { alignItems: 'center', paddingVertical: 8 },
   linkText: { fontSize: 16, fontWeight: '600', color: '#111827' },
 });

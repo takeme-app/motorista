@@ -10,6 +10,7 @@ import { PaymentConfirmedScreen } from '../screens/trip/PaymentConfirmedScreen';
 import { DriverOnTheWayScreen } from '../screens/trip/DriverOnTheWayScreen';
 import { TripInProgressScreen } from '../screens/trip/TripInProgressScreen';
 import { RateTripScreen } from '../screens/trip/RateTripScreen';
+import { PixPaliativoScreen } from '../screens/payment/PixPaliativoScreen';
 import type { TripStackParamList } from './types';
 
 const Stack = createNativeStackNavigator<TripStackParamList>();
@@ -30,6 +31,7 @@ export function TripStack() {
       <Stack.Screen name="SearchTrip" component={SearchTripScreen} />
       <Stack.Screen name="ConfirmDetails" component={ConfirmDetailsScreen} />
       <Stack.Screen name="Checkout" component={CheckoutScreen} />
+      <Stack.Screen name="PixPaliativo" component={PixPaliativoScreen} />
       <Stack.Screen name="PaymentConfirmed" component={PaymentConfirmedScreen} />
       <Stack.Screen name="DriverOnTheWay" component={DriverOnTheWayScreen} />
       <Stack.Screen name="TripInProgress" component={TripInProgressScreen} />

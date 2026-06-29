@@ -19,6 +19,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../lib/supabase';
 import { unregisterClienteProfileFcmToken } from '../lib/clienteFcm';
 import { IconProfileGrid, IconNotifications, IconDependents, IconConversations } from '../components/ProfileGridIcons';
+import { useUnreadNotifications } from '../hooks/useUnreadNotifications';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'ProfileMain'>;
 
@@ -52,7 +53,7 @@ export function ProfileScreen({ navigation }: Props) {
   } | null>(null);
   const [nameFallback, setNameFallback] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const hasUnreadNotifications = useUnreadNotifications();
 
   const loadProfile = useCallback(async () => {
     setLoading(true);
@@ -76,13 +77,6 @@ export function ProfileScreen({ navigation }: Props) {
       .eq('id', user.id)
       .maybeSingle();
     setProfile(row ?? null);
-    const { count: unreadCount, error: unreadErr } = await supabase
-      .from('notifications')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', user.id)
-      .eq('target_app_slug', 'cliente')
-      .is('read_at', null);
-    setUnreadNotifications(!unreadErr && typeof unreadCount === 'number' ? unreadCount : 0);
     setLoading(false);
   }, []);
 
@@ -230,7 +224,7 @@ export function ProfileScreen({ navigation }: Props) {
                     {item.label}
                   </Text>
                 </TouchableOpacity>
-                {item.id === 'notificacoes' && unreadNotifications > 0 ? (
+                {item.id === 'notificacoes' && hasUnreadNotifications ? (
                   <View style={styles.notificationBadge} accessibilityLabel="Notificações não lidas" />
                 ) : null}
               </View>

@@ -12,12 +12,15 @@ import {
   useWindowDimensions,
   Alert,
   Image,
-  KeyboardAvoidingView,
   BackHandler,
   Vibration,
   Linking,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar, setStatusBarHidden } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import { CommonActions, useFocusEffect } from '@react-navigation/native';
@@ -398,14 +401,10 @@ function countsAsTripTotal(status: string | null | undefined): boolean {
  *   - dependente: embarque E desembarque (cenário 2 do PDF, etapas 1-3 e 5-7).
  */
 function requiresDriverEnteredPin(s: Stop): boolean {
-  // Encomenda com base: na retirada o motorista digita o PIN C (base_to_driver_code)
-  // que a base passa verbalmente. Sem essa validação, ao retirar 2+ encomendas
-  // na mesma base, o motorista pode "concluir" a encomenda errada — o backend
-  // permite porque só checa `base_to_driver_confirmed_at` (não compara o PIN).
-  // Encomenda sem base (cliente entrega direto): o cliente confirma o pickup_code
-  // no app dele; motorista não digita PIN aqui (RPC complete_shipment_client_pickup
-  // já marca `picked_up_at`).
-  if (s.stopType === 'package_pickup') return isPackagePickupAtBase(s);
+  // Encomenda com base: motorista MOSTRA o `base_to_driver_code` à base; a base
+  // confirma no app dela (seta `base_to_driver_confirmed_at`) e o motorista só
+  // toca em "Confirmar retirada" — não digita nada.
+  if (s.stopType === 'package_pickup') return false;
   if (isPackage(s)) return true; // package_dropoff: motorista digita delivery_code
   return (
     s.stopType === 'passenger_pickup' ||
@@ -604,7 +603,7 @@ function confirmPickupSubtitle(stop: Stop | null | undefined): string {
   if (!stop) return '';
   if (stop.stopType === 'package_pickup') {
     if (isPackagePickupAtBase(stop)) {
-      return 'Mostre o código de 4 dígitos abaixo para a base confirmar a retirada da encomenda.';
+      return 'Mostre o código de 4 dígitos abaixo à base e confirme abaixo que entregou o código.';
     }
     return 'Informe este código ao cliente. Ele deve digitar no app dele para validar a coleta; depois toque abaixo para avançar.';
   }
@@ -871,7 +870,36 @@ type GeoNavTarget = {
   coord: LatLng;
   label: string;
   address: string | null;
+  /** Fase da rota (mesma escala de `useTripStops`): coleta/embarque(0) < entrega/desembarque(1) < excursão(2) < destino(3). */
+  tier: number;
 };
+
+/**
+ * Fase operacional da parada: coletas/embarques (0) antes de entregas/desembarques (1),
+ * excursão (2) e destino (3). Espelha `reorderStopsPickupPhaseBeforeDeliveryPhase` (useTripStops).
+ * Usado para travar a busca do "mais próximo" dentro da fase pendente (coletar antes de entregar).
+ */
+function navPhaseTier(stopType: string): number {
+  switch (stopType) {
+    case 'passenger_pickup':
+    case 'dependent_pickup':
+    case 'package_pickup':
+    case 'shipment_pickup':
+      return 0;
+    case 'passenger_dropoff':
+    case 'dependent_dropoff':
+    case 'package_dropoff':
+    case 'shipment_dropoff':
+      return 1;
+    case 'excursion_stop':
+      return 2;
+    case 'trip_destination':
+    case 'base_dropoff':
+      return 3;
+    default:
+      return 2;
+  }
+}
 
 function stopLatLngForGeographicNav(s: TripStop): LatLng | null {
   if (s.stopType === 'driver_origin') return null;
@@ -899,6 +927,7 @@ function collectGeographicNavTargets(
       coord,
       label: s.label,
       address: s.address ?? null,
+      tier: navPhaseTier(s.stopType),
     });
   }
   if (tripDest && isValidGlobeCoordinate(tripDest.latitude, tripDest.longitude)) {
@@ -914,6 +943,7 @@ function collectGeographicNavTargets(
         coord: tripDest,
         label,
         address: tripDestAddress ?? null,
+        tier: 3,
       });
     }
   }
@@ -925,8 +955,13 @@ function pickGeographicNearestNavTarget(
   targets: GeoNavTarget[],
 ): GeoNavTarget | null {
   if (targets.length === 0) return null;
+  // Respeita a sequência principal de rota: o "mais próximo" só vale DENTRO da fase
+  // pendente mais antiga (todas as coletas/embarques antes de qualquer entrega/desembarque).
+  // Assim nunca aponta uma entrega enquanto houver coleta pendente, mesmo que esteja mais perto.
+  const minTier = Math.min(...targets.map((t) => t.tier));
+  const inPhase = targets.filter((t) => t.tier === minTier);
   const routeRank = (x: GeoNavTarget) => (x.kind === 'stop' ? x.stopIndex : 1_000_000);
-  const sorted = [...targets].sort((a, b) => {
+  const sorted = [...inPhase].sort((a, b) => {
     const da = distanceMetersApprox(driver, a.coord);
     const db = distanceMetersApprox(driver, b.coord);
     if (Math.abs(da - db) > GEO_NAV_TIE_METERS) return da - db;
@@ -958,17 +993,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
 
-  /**
-   * Folga inferior confiável: em Android edge-to-edge com botões virtuais, `insets.bottom`
-   * às vezes vem 0 e o conteúdo absoluto fica sob a barra do sistema (card / logo Mapbox).
-   */
-  const effectiveBottomInset = useMemo(() => {
-    const raw = insets.bottom;
-    if (Platform.OS === 'android' && raw < 24) {
-      return Math.max(raw, 48);
-    }
-    return raw;
-  }, [insets.bottom]);
+  const effectiveBottomInset = useBottomSafeInset();
 
   // Data
   const [trip, setTrip] = useState<TripRow | null>(null);
@@ -1248,6 +1273,38 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     setDriverPosition(null);
     setNativeNavigationRequested(false);
   }, [tripId]);
+
+  // Lista de encomendas com base atribuídas a esta viagem (para mostrar status
+  // por item no modal de coleta na base — "Pronta", "Aguardando preparador" ou
+  // "Buscar com o cliente — janela expirou").
+  type BaseShipmentInfo = {
+    id: string;
+    base_id: string | null;
+    recipient_name: string | null;
+    pickup_code: string | null;
+    base_to_driver_code: string | null;
+    delivered_to_base_at: string | null;
+    preparer_handoff_expired_at: string | null;
+    status: string | null;
+  };
+  const [baseShipments, setBaseShipments] = useState<BaseShipmentInfo[]>([]);
+  useEffect(() => {
+    if (!tripId) {
+      setBaseShipments([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const { data } = await supabase
+        .from('shipments')
+        .select('id, base_id, recipient_name, pickup_code, base_to_driver_code, delivered_to_base_at, preparer_handoff_expired_at, status')
+        .eq('scheduled_trip_id', tripId)
+        .not('base_id', 'is', null)
+        .in('status', ['confirmed', 'in_progress']);
+      if (!cancelled) setBaseShipments(((data ?? []) as unknown) as BaseShipmentInfo[]);
+    })();
+    return () => { cancelled = true; };
+  }, [tripId, stops]);
 
   // UI state
   const [detailVisible, setDetailVisible] = useState(false);
@@ -1960,7 +2017,14 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   const confirmSheetStop =
     confirmPickupVisible || confirmDeliveryVisible ? (confirmUiStop ?? currentStop) : null;
   const totalStops = stops.length;
-  const allDone = currentStopIndex >= totalStops && totalStops > 0;
+  // `allDone` cobre 2 cenários: (a) motorista concluiu todas as paradas; (b) não há
+  // paradas (todos os bookings/shipments foram cancelados ou trip iniciada sem reservas).
+  // Em ambos, oferece o float button "Finalizar viagem".
+  const allDone =
+    (currentStopIndex >= totalStops && totalStops > 0) ||
+    (totalStops === 0 && Boolean(trip?.driver_journey_started_at));
+  const noStopsAfterStart =
+    totalStops === 0 && Boolean(trip?.driver_journey_started_at);
   const confirmSheetCashPayment = useMemo(() => {
     if (!confirmSheetStop) return null;
     const entityId = isDependent(confirmSheetStop)
@@ -2235,20 +2299,15 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     }
     if (currentStop) return currentStop;
     if (!trip) return null;
-    return {
-      id: 'trip-dest',
-      scheduledTripId: trip.id,
-      stopType: 'passenger_dropoff',
-      entityId: trip.id,
-      label: trip.destination_address,
-      address: trip.destination_address,
-      lat: trip.destination_lat ?? null,
-      lng: trip.destination_lng ?? null,
-      sequenceOrder: 0,
-      status: 'pending',
-      notes: null,
-      code: null,
-    };
+    // Sem `currentStop`: cai no destino da viagem. Usa o builder canônico para
+    // garantir `stopType: 'trip_destination'` — caso contrário a UI mostraria
+    // "Confirmar desembarque" e o RPC `complete_trip_stop` receberia o id
+    // literal `trip-dest`, lançando "invalid input syntax for type uuid".
+    const fallbackLL = {
+      latitude: trip.destination_lat ?? 0,
+      longitude: trip.destination_lng ?? 0,
+    } as { latitude: number; longitude: number };
+    return buildSidebarTripDestinationStop(trip, fallbackLL);
   }, [nearestGeographicNavPick, stops, currentStop, trip]);
   const nativeMiniSheetCode = cardInfo ? stopModalCode(cardInfo) : null;
 
@@ -4055,22 +4114,35 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         )}
 
-        {/* All done float button */}
+        {/* All done float button — também aparece quando todas as paradas foram canceladas */}
         {allDone && !finalizeVisible && !completedVisible && (
-          <TouchableOpacity
-            style={[styles.finalizeFloatBtn, { bottom: effectiveBottomInset + 16 }]}
-            onPress={openFinalize}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.finalizeFloatBtnText}>Finalizar viagem</Text>
-          </TouchableOpacity>
+          <>
+            {noStopsAfterStart && (
+              <View
+                style={[styles.allCancelledBanner, { bottom: effectiveBottomInset + 80 }]}
+                pointerEvents="none"
+              >
+                <MaterialIcons name="info-outline" size={16} color="#92400E" />
+                <Text style={styles.allCancelledBannerText} numberOfLines={2}>
+                  Sem passageiros nem encomendas ativas — todas as reservas foram canceladas. Você pode finalizar a viagem.
+                </Text>
+              </View>
+            )}
+            <TouchableOpacity
+              style={[styles.finalizeFloatBtn, { bottom: effectiveBottomInset + 16 }]}
+              onPress={openFinalize}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.finalizeFloatBtnText}>Finalizar viagem</Text>
+            </TouchableOpacity>
+          </>
         )}
       </SafeAreaView>
 
       {/* ── Detail bottom sheet (View overlay: Modal + MapView quebra toques no Android) ─ */}
       {detailVisible ? (
         <View style={styles.fullScreenMapOverlay} accessibilityViewIsModal>
-        <KeyboardAvoidingView style={styles.modalRoot} behavior="padding">
+        <KeyboardAvoidingView style={styles.modalRoot} behavior="height">
           <Pressable style={styles.overlayBackdrop} onPress={closeDetail} />
           <Animated.View
             collapsable={false}
@@ -4131,6 +4203,50 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                     <Text style={styles.detailValue}>{detailSheetStop.notes}</Text>
                   </>
                 ) : null}
+                {detailSheetStop.stopType === 'package_pickup' && isPackagePickupAtBase(detailSheetStop) ? (() => {
+                  // Filtra pela mesma base do stop atual quando consegue resolver pelo
+                  // entityId; caso contrário mostra todas as encomendas com base do trip.
+                  const currentBaseId = baseShipments.find((s) => s.id === detailSheetStop.entityId)?.base_id ?? null;
+                  const items = currentBaseId
+                    ? baseShipments.filter((s) => s.base_id === currentBaseId)
+                    : baseShipments;
+                  return (
+                    <>
+                      <Text style={styles.detailLabel}>Encomendas nesta base</Text>
+                      {items.length === 0 ? (
+                        <Text style={styles.detailValue}>Nenhuma encomenda com base associada a esta viagem.</Text>
+                      ) : (
+                        <View style={styles.baseShipmentList}>
+                          {items.map((it) => {
+                            const expired = Boolean(it.preparer_handoff_expired_at);
+                            const delivered = Boolean(it.delivered_to_base_at);
+                            const label = delivered
+                              ? 'Já está na base'
+                              : expired
+                                ? 'Não chegou — buscar com o cliente'
+                                : 'Ainda não chegou na base';
+                            const tone = delivered
+                              ? styles.baseShipmentBadgeOk
+                              : expired
+                                ? styles.baseShipmentBadgeWarn
+                                : styles.baseShipmentBadgeWait;
+                            const idShort = it.id.slice(0, 8).toUpperCase();
+                            return (
+                              <View key={it.id} style={styles.baseShipmentRow}>
+                                <View style={styles.baseShipmentInfo}>
+                                  <Text style={styles.baseShipmentName} numberOfLines={1}>ID {idShort}</Text>
+                                </View>
+                                <View style={[styles.baseShipmentBadge, tone]}>
+                                  <Text style={styles.baseShipmentBadgeText}>{label}</Text>
+                                </View>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      )}
+                    </>
+                  );
+                })() : null}
                 <TouchableOpacity
                   style={styles.actionBtn}
                   onPress={hideDetailAndOpenConfirmPickup}
@@ -4266,9 +4382,10 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       {/* ── Confirmar coleta / entrega (um bottom sheet, um translateY) ─ */}
       {confirmPickupVisible || confirmDeliveryVisible ? (
         <View style={styles.fullScreenMapOverlay} accessibilityViewIsModal>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
         <KeyboardAvoidingView
           style={styles.modalRoot}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior="height"
         >
           <Pressable
             style={styles.overlayBackdrop}
@@ -4427,7 +4544,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
                     </View>
                     <Text style={styles.handoffCodeHint}>
                       {isPackagePickupAtBase(confirmSheetStop)
-                        ? 'Mostre este código à base. Quando ela confirmar a retirada, toque no botão abaixo para avançar.'
+                        ? 'Mostre este código à base e toque no botão abaixo para confirmar que recebeu a encomenda.'
                         : 'Peça para o cliente digitar esse código no app dele. Quando ele confirmar, toque no botão abaixo para avançar para a próxima parada.'}
                     </Text>
                   </View>
@@ -4451,13 +4568,14 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             )}
           </Animated.View>
         </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
         </View>
       ) : null}
 
       {/* ── Finalize Trip sheet ─────────────────────────────── */}
       {finalizeVisible ? (
         <View style={styles.fullScreenMapOverlay} accessibilityViewIsModal>
-        <KeyboardAvoidingView style={styles.modalRoot} behavior="padding">
+        <KeyboardAvoidingView style={styles.modalRoot} behavior="height">
           <Pressable style={styles.overlayBackdrop} onPress={closeFinalize} />
           <Animated.View
             collapsable={false}
@@ -4567,7 +4685,8 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       {/* ── Viagem concluída + avaliação (bottom sheet sobre o mapa) ─ */}
       {completedVisible ? (
         <View style={styles.fullScreenMapOverlay} accessibilityViewIsModal>
-        <KeyboardAvoidingView style={styles.modalRoot} behavior="padding">
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        <KeyboardAvoidingView style={styles.modalRoot} behavior="height">
           <View style={styles.overlayBackdrop} />
           <Animated.View
             collapsable={false}
@@ -4584,7 +4703,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             <ScrollView
               contentContainerStyle={styles.completedScroll}
               showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="always"
+              keyboardShouldPersistTaps="handled"
             >
               <View style={styles.completedIconCircle}>
                 <MaterialIcons name="check" size={40} color="#fff" />
@@ -4655,6 +4774,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
             </ScrollView>
           </Animated.View>
         </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
         </View>
       ) : null}
       <AppConfirmModal
@@ -5027,6 +5147,25 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
   },
+  allCancelledBanner: {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    backgroundColor: '#FEF3C7',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  allCancelledBannerText: {
+    flex: 1,
+    color: '#92400E',
+    fontSize: 13,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
 
   // ── Modal root (evita hit-test errado entre overlay e sheet no iOS) ──
   modalRoot: {
@@ -5177,6 +5316,20 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     textAlign: 'center',
   },
+  baseShipmentList: { gap: 8, marginTop: 6, marginBottom: 12 },
+  baseShipmentRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 8, paddingHorizontal: 12,
+    borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, backgroundColor: '#F9FAFB',
+  },
+  baseShipmentInfo: { flex: 1, minWidth: 0, paddingRight: 8 },
+  baseShipmentName: { fontSize: 14, fontWeight: '600', color: '#111827' },
+  baseShipmentMeta: { fontSize: 12, color: '#6B7280', marginTop: 2 },
+  baseShipmentBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, maxWidth: 160 },
+  baseShipmentBadgeText: { fontSize: 11, fontWeight: '600', textAlign: 'center' },
+  baseShipmentBadgeOk: { backgroundColor: '#D1FAE5' },
+  baseShipmentBadgeWarn: { backgroundColor: '#FEF3C7' },
+  baseShipmentBadgeWait: { backgroundColor: '#E5E7EB' },
   handoffCodeWrap: { marginBottom: 8 },
   handoffCodeBox: {
     alignSelf: 'center',

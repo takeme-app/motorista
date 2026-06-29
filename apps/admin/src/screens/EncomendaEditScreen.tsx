@@ -9,13 +9,15 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   fetchApprovedDriversForEncomendaUI,
   fetchEncomendaEditDetail,
+  fetchShipmentsForScheduledTrip,
   formatCurrencyBRL,
   updateDependentShipmentFields,
   updateScheduledTripFields,
   updateShipmentFields,
 } from '../data/queries';
-import type { EncomendaEditDetail } from '../data/types';
+import type { EncomendaEditDetail, TripShipmentListItem } from '../data/types';
 import MapView from '../components/MapView';
+import { ShipmentHandoffPinsBlock } from '../components/ShipmentHandoffPinsBlock';
 import PlacesAddressInput from '../components/PlacesAddressInput';
 import { DETAIL_TRIP_MAP_HEIGHT, webStyles } from '../styles/webStyles';
 import { useTripStops } from '../hooks/useTripStops';
@@ -301,6 +303,20 @@ export default function EncomendaEditScreen() {
 
   const scheduledTripId = detail?.kind === 'shipment' ? detail.scheduledTripId : null;
   const { waypoints: tripWaypoints, stops: tripStops, regenerate: regenerateStops } = useTripStops(scheduledTripId);
+
+  // Encomendas da mesma viagem (PINs por envio) — espelha a seção "Encomendas" da ViagemDetalhe.
+  const [linkedShipments, setLinkedShipments] = useState<TripShipmentListItem[]>([]);
+  useEffect(() => {
+    if (!scheduledTripId) {
+      setLinkedShipments([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchShipmentsForScheduledTrip(scheduledTripId).then((list) => {
+      if (!cancelled) setLinkedShipments(list);
+    });
+    return () => { cancelled = true; };
+  }, [scheduledTripId]);
 
   const coordsMatchSavedAddresses =
     !!detail
@@ -683,6 +699,83 @@ export default function EncomendaEditScreen() {
     style: { fontSize: 12, color: '#767676', margin: '0 0 8px', ...font },
   }, motoristaNoteCopy);
 
+  // --- Seção "Encomendas nesta viagem" (PINs por envio) ---
+  // Fallback (sem viagem agendada): monta um TripShipmentListItem a partir do detail enriquecido.
+  const currentAsListItem: TripShipmentListItem | null =
+    detail.kind === 'shipment'
+      ? {
+          id: detail.id,
+          packageSize: detail.packageSize ?? null,
+          amountCents: detail.amountCents,
+          recipientName: detail.recipientName,
+          recipientPhone: detail.recipientPhone ?? null,
+          senderName: detail.senderName,
+          originAddress: detail.originAddress,
+          destinationAddress: detail.destinationAddress,
+          originLat: detail.originLat,
+          originLng: detail.originLng,
+          destinationLat: detail.destinationLat,
+          destinationLng: detail.destinationLng,
+          instructions: detail.instructions ?? null,
+          photoUrl: detail.photoUrl ?? null,
+          status: detail.status,
+          supportConversationId: null,
+          baseId: detail.baseId,
+          pickupCode: detail.pickupCode,
+          passengerToPreparerCode: detail.passengerToPreparerCode,
+          preparerToBaseCode: detail.preparerToBaseCode,
+          baseToDriverCode: detail.baseToDriverCode,
+          deliveryCode: detail.deliveryCode,
+          pickedUpByPreparerAt: detail.pickedUpByPreparerAt,
+          deliveredToBaseAt: detail.deliveredToBaseAt,
+          pickedUpByDriverFromBaseAt: detail.pickedUpByDriverFromBaseAt,
+          baseToDriverConfirmedAt: detail.baseToDriverConfirmedAt,
+          pickedUpAt: detail.pickedUpAt,
+          deliveredAt: detail.deliveredAt,
+        }
+      : null;
+  // Lista final: irmãs da viagem (atual em primeiro) ou só a atual quando não há viagem.
+  const shipmentsToShow: TripShipmentListItem[] = (() => {
+    if (detail.kind !== 'shipment') return [];
+    if (linkedShipments.length > 0) {
+      const current = linkedShipments.filter((it) => it.id === detail.id);
+      const others = linkedShipments.filter((it) => it.id !== detail.id);
+      const ordered = [...current, ...others];
+      // Se a atual não voltou na query (RLS/filtro), prepende o fallback.
+      return current.length === 0 && currentAsListItem ? [currentAsListItem, ...ordered] : ordered;
+    }
+    return currentAsListItem ? [currentAsListItem] : [];
+  })();
+  const pinsSection =
+    detail.kind === 'shipment' && shipmentsToShow.length > 0
+      ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, paddingBottom: 32, borderBottom: '1px solid #e2e2e2' } },
+        React.createElement('h2', { style: { fontSize: 18, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } },
+          shipmentsToShow.length > 1 ? `Encomendas nesta viagem (${shipmentsToShow.length})` : 'PINs desta encomenda'),
+        shipmentsToShow.length > 1
+          ? React.createElement('p', { style: { fontSize: 12, color: '#767676', margin: 0, ...font } },
+            'Este passageiro tem mais de uma encomenda na mesma viagem. A encomenda aberta está destacada.')
+          : null,
+        ...shipmentsToShow.map((s) => {
+          const isCurrent = s.id === detail.id;
+          return React.createElement('div', {
+            key: s.id,
+            style: {
+              display: 'flex', flexDirection: 'column' as const, gap: 4,
+              border: isCurrent ? '2px solid #102d57' : '1px solid #e2e2e2',
+              borderRadius: 12, padding: 16, background: isCurrent ? '#f5f8ff' : '#fff',
+            },
+          },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' as const } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: '#0d0d0d', fontFamily: 'ui-monospace, Menlo, monospace' } }, `#${s.id.slice(0, 8)}`),
+              isCurrent
+                ? React.createElement('span', { style: { padding: '2px 10px', borderRadius: 999, background: '#102d57', color: '#fff', fontSize: 11, fontWeight: 700, ...font } }, 'Aberta')
+                : null,
+              React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } }, `Para ${s.recipientName || '—'}`)),
+            React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, `Coleta: ${s.originAddress || '—'} · Entrega: ${s.destinationAddress || '—'}`),
+            ShipmentHandoffPinsBlock({ shipment: s }));
+        }))
+      : null;
+
   return React.createElement(React.Fragment, null,
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%', maxWidth: 1044, margin: '0 auto', boxSizing: 'border-box' as const } },
     // Breadcrumb
@@ -835,6 +928,8 @@ export default function EncomendaEditScreen() {
           style: { flex: 1, border: 'none', background: 'transparent', fontSize: 14, color: '#0d0d0d', ...font },
         })),
       React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Alterar o horário de início atualizará automaticamente o tempo estimado de chegada.')),
+    // PINs por encomenda (atual + irmãs na mesma viagem)
+    pinsSection,
     // Motoristas disponíveis (Figma 1283-34111)
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, paddingBottom: 32, borderBottom: '1px solid #e2e2e2' } },
       motoristasComRota.length === 0

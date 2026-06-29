@@ -5,12 +5,14 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  KeyboardAvoidingView,
   Alert,
   Linking,
+  Platform,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -25,7 +27,6 @@ import { UploadField } from '../components/UploadField';
 import type { GoogleGeocodeResult } from '@take-me/shared';
 import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
 import { formatPhoneBR } from '../utils/formatPhone';
-import { currencyInputToCents, formatCurrencyBRLInput } from '../utils/formatCurrency';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CompletePreparadorEncomendas'>;
 
@@ -72,6 +73,7 @@ function RadioOption({
 
 export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset();
   const { showAlert } = useAppAlert();
 
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
@@ -101,8 +103,6 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
   const [cnhBackUri, setCnhBackUri] = useState<string | null>(null);
   const [criminalRecordUri, setCriminalRecordUri] = useState<string | null>(null);
 
-  const [deliveryFee, setDeliveryFee] = useState('');
-  const [perKmFee, setPerKmFee] = useState('');
 
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [acceptedNotifications, setAcceptedNotifications] = useState(false);
@@ -199,12 +199,13 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
     const expNum = parseInt(onlyDigits(experienceYears), 10);
     if (!expNum || expNum < 1 || expNum > 60) { showAlert('Atenção', 'Informe os anos de experiência (1–60).'); return; }
 
+    const phoneDigits = onlyDigits(vehiclePhone);
+    if (phoneDigits.length < 10) { showAlert('Atenção', 'Informe um telefone válido com DDD.'); return; }
+
     if (ownsVehicle) {
       if (!vehicleYear.trim() || onlyDigits(vehicleYear).length !== 4) { showAlert('Atenção', 'Informe o ano do veículo.'); return; }
       if (!vehicleModel.trim()) { showAlert('Atenção', 'Preencha o modelo do veículo.'); return; }
       if (!licensePlate.trim()) { showAlert('Atenção', 'Preencha a placa do veículo.'); return; }
-      const phoneDigits = onlyDigits(vehiclePhone);
-      if (phoneDigits.length < 10) { showAlert('Atenção', 'Informe um telefone válido com DDD.'); return; }
       if (!vehicleCapacity.trim()) { showAlert('Atenção', 'Preencha a capacidade do veículo.'); return; }
       if (!vehicleDocUri) { showAlert('Atenção', 'Envie o documento do veículo.'); return; }
       if (vehiclePhotosUris.length < 2) { showAlert('Atenção', 'Envie ao menos 2 fotos do veículo.'); return; }
@@ -212,18 +213,6 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
 
     if (!cnhFrontUri) { showAlert('Atenção', 'Envie a frente da CNH.'); return; }
     if (!cnhBackUri) { showAlert('Atenção', 'Envie o verso da CNH.'); return; }
-
-    // Preços são opcionais: vazio = usar padrão da plataforma.
-    const deliveryFeeCents = deliveryFee.trim() ? currencyInputToCents(deliveryFee) : null;
-    if (deliveryFee.trim() && (deliveryFeeCents == null || deliveryFeeCents < 0)) {
-      showAlert('Atenção', 'Valor por entrega inválido.');
-      return;
-    }
-    const perKmFeeCents = perKmFee.trim() ? currencyInputToCents(perKmFee) : null;
-    if (perKmFee.trim() && (perKmFeeCents == null || perKmFeeCents < 0)) {
-      showAlert('Atenção', 'Valor por km inválido.');
-      return;
-    }
 
     if (!acceptedTerms) { showAlert('Atenção', 'Aceite os Termos de Uso e a Política de Privacidade.'); return; }
 
@@ -262,6 +251,7 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
         full_name: fullName.trim(),
         cpf: cpfDigits,
         city: city.trim(),
+        phone: phoneDigits,
         updated_at: nowIso,
       }).eq('id', userId);
 
@@ -290,8 +280,9 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
         cnh_document_url: cnhFrontPath,
         cnh_document_back_url: cnhBackPath,
         background_check_url: criminalPath ?? vehicleDocPath,
-        shipment_delivery_fee_cents: deliveryFeeCents,
-        shipment_per_km_fee_cents: perKmFeeCents,
+        // Preparador não define mais preço; usa-se o padrão da plataforma (sem override).
+        shipment_delivery_fee_cents: null,
+        shipment_per_km_fee_cents: null,
         base_id: baseId,
         updated_at: nowIso,
       };
@@ -342,7 +333,7 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
   };
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior="padding">
+    <KeyboardAvoidingView style={styles.container} behavior="height">
       <StatusBar style="dark" />
       <View style={[styles.header, { paddingTop: insets.top }]}>
         <TouchableOpacity
@@ -382,7 +373,7 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 32 }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomInset + 32 }]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
@@ -453,6 +444,18 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
           />
         </FieldBlock>
 
+        <FieldBlock label="Telefone">
+          <TextInput
+            style={styles.input}
+            placeholder="Ex: (11) 98765-4321"
+            placeholderTextColor="#767676"
+            value={vehiclePhone}
+            onChangeText={(t) => setVehiclePhone(formatPhoneBR(t))}
+            keyboardType="phone-pad"
+            maxLength={16}
+          />
+        </FieldBlock>
+
         <Text style={styles.sectionTitle}>Veículo de entrega</Text>
         <Text style={styles.fieldLabel}>Possui veículo próprio? (opcional)</Text>
         <View style={styles.radioGroup}>
@@ -491,17 +494,6 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
                 onChangeText={(t) => setLicensePlate(t.toUpperCase())}
                 autoCapitalize="characters"
                 maxLength={10}
-              />
-            </FieldBlock>
-            <FieldBlock label="Telefone">
-              <TextInput
-                style={styles.input}
-                placeholder="Ex: (11) 98765-4321"
-                placeholderTextColor="#767676"
-                value={vehiclePhone}
-                onChangeText={(t) => setVehiclePhone(formatPhoneBR(t))}
-                keyboardType="phone-pad"
-                maxLength={16}
               />
             </FieldBlock>
             <FieldBlock label="Capacidade de carga (volumes)">
@@ -567,36 +559,6 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
           onPress={() => pickImage(setCriminalRecordUri)}
         />
 
-        <Text style={styles.sectionTitle}>Valores e precificação</Text>
-
-        <FieldBlock
-          label="Valor por entrega (R$)"
-          supporting="Se deixar em branco, usamos o valor padrão da plataforma."
-        >
-          <TextInput
-            style={styles.input}
-            placeholder="Ex: R$ 5,00"
-            placeholderTextColor="#767676"
-            value={deliveryFee ? `R$ ${deliveryFee}` : ''}
-            onChangeText={(t) => setDeliveryFee(formatCurrencyBRLInput(t))}
-            keyboardType="number-pad"
-          />
-        </FieldBlock>
-
-        <FieldBlock
-          label="Valor por km (R$)"
-          supporting="Se deixar em branco, usamos o valor padrão da plataforma."
-        >
-          <TextInput
-            style={styles.input}
-            placeholder="Ex: R$ 1,50"
-            placeholderTextColor="#767676"
-            value={perKmFee ? `R$ ${perKmFee}` : ''}
-            onChangeText={(t) => setPerKmFee(formatCurrencyBRLInput(t))}
-            keyboardType="number-pad"
-          />
-        </FieldBlock>
-
         <View style={styles.checksSection}>
           <View style={styles.checkboxRow}>
             <TouchableOpacity onPress={() => setAcceptedTerms((v) => !v)} activeOpacity={0.7} style={styles.checkboxHitArea}>
@@ -625,7 +587,7 @@ export function CompletePreparadorEncomendasScreen({ navigation }: Props) {
           </View>
         </View>
 
-        <View style={[styles.footerInScroll, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+        <View style={[styles.footerInScroll, { paddingBottom: bottomInset }]}>
           <TouchableOpacity
             style={[styles.submitBtn, (!credentialsReady || !sessionReady || loading) && styles.submitBtnDisabled]}
             onPress={validateAndSubmit}

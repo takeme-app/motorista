@@ -13,10 +13,13 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { SupportSheet } from '../../components/SupportSheet';
+import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
+import { excursionClientStatus } from '../../lib/excursionStatus';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ExcursionDetail'>;
 
@@ -72,6 +75,10 @@ type ExcursionDetail = {
   total_amount_cents: number | null;
   confirmed_at: string | null;
   scheduled_departure_at: string | null;
+  check_in_ida_started_at: string | null;
+  check_in_volta_started_at: string | null;
+  boarding_ida_done_at: string | null;
+  boarding_volta_done_at: string | null;
   driver_id: string | null;
   preparer_id: string | null;
   assignment_notes: AssignmentNotes | null;
@@ -116,27 +123,6 @@ function displayId(id: string): string {
   return id.length >= 6 ? `EX${id.slice(-6).toUpperCase()}` : id;
 }
 
-function getStatusBarLabel(status: string): string {
-  switch (status) {
-    case 'pending':
-    case 'in_analysis':
-      return 'Excursão em análise';
-    case 'quoted':
-      return 'Orçamento disponível';
-    case 'approved':
-    case 'scheduled':
-      return 'Excursão confirmada';
-    case 'in_progress':
-      return 'Em andamento';
-    case 'completed':
-      return 'Excursão concluída';
-    case 'cancelled':
-      return 'Excursão cancelada';
-    default:
-      return 'Excursão';
-  }
-}
-
 function getInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return '?';
@@ -162,6 +148,7 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
   const [showVehicleSheet, setShowVehicleSheet] = useState(false);
   const [supportSheetVisible, setSupportSheetVisible] = useState(false);
   const insets = useSafeAreaInsets();
+  const fabBottom = useBottomSafeInset({ extra: 16, androidMin: 24 });
   const [driverProfile, setDriverProfile] = useState<ProfileRow | null>(null);
   const [preparerProfile, setPreparerProfile] = useState<ProfileRow | null>(null);
 
@@ -173,7 +160,7 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
     }
     const { data: row, error } = await supabase
       .from('excursion_requests')
-      .select('id, user_id, destination, excursion_date, people_count, fleet_type, first_aid_team, recreation_team, children_team, special_needs_team, recreation_items, observations, status, sub_status, created_at, total_amount_cents, confirmed_at, scheduled_departure_at, driver_id, preparer_id, assignment_notes, vehicle_details, budget_lines, payment_method')
+      .select('id, user_id, destination, excursion_date, people_count, fleet_type, first_aid_team, recreation_team, children_team, special_needs_team, recreation_items, observations, status, sub_status, created_at, total_amount_cents, confirmed_at, scheduled_departure_at, check_in_ida_started_at, check_in_volta_started_at, boarding_ida_done_at, boarding_volta_done_at, driver_id, preparer_id, assignment_notes, vehicle_details, budget_lines, payment_method')
       .eq('id', excursionRequestId)
       .eq('user_id', user.id)
       .single();
@@ -181,7 +168,8 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
       setLoading(false);
       return;
     }
-    setDetail(row as ExcursionDetail);
+    // Cast via unknown: colunas check_in_*/boarding_* ainda fora dos tipos gerados.
+    setDetail(row as unknown as ExcursionDetail);
     const { count } = await supabase
       .from('excursion_passengers')
       .select('*', { count: 'exact', head: true })
@@ -190,9 +178,24 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
     setLoading(false);
   }, [excursionRequestId]);
 
-  useEffect(() => {
-    loadDetail();
-  }, [loadDetail]);
+  // Recarrega ao ganhar foco (ex.: voltar do pagamento) E assina Realtime na
+  // linha da excursão: qualquer mudança de status no servidor (admin avança,
+  // pagamento aprovado) reflete o tracking ao vivo, sem sair da tela.
+  useFocusEffect(
+    useCallback(() => {
+      loadDetail();
+      if (!excursionRequestId) return;
+      const channel = supabase
+        .channel(`client-excursion-detail-${excursionRequestId}`)
+        .on(
+          'postgres_changes' as never,
+          { event: '*', schema: 'public', table: 'excursion_requests', filter: `id=eq.${excursionRequestId}` } as never,
+          () => { loadDetail(); },
+        )
+        .subscribe();
+      return () => { void supabase.removeChannel(channel); };
+    }, [loadDetail, excursionRequestId]),
+  );
 
   const loadDriverProfile = useCallback(async (driverId: string) => {
     const { data } = await supabase
@@ -267,7 +270,7 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
     );
   }
 
-  const statusBarLabel = getStatusBarLabel(detail.status);
+  const statusBarLabel = excursionClientStatus(detail).label;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -333,20 +336,9 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
         )}
 
         <Text style={styles.sectionTitle}>Tracking de status</Text>
-        <StatusTimeline status={detail.status} />
+        <StatusTimeline detail={detail} />
 
         <Text style={styles.sectionTitle}>Detalhes</Text>
-        {detail.driver_id ? (
-          <TouchableOpacity style={styles.linkRow} onPress={() => setShowDriverSheet(true)}>
-            <Text style={styles.linkLabel}>Ver motorista</Text>
-            <Text style={styles.linkAction}>Ver detalhes</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.linkRow}>
-            <Text style={styles.linkLabelMuted}>Motorista</Text>
-            <Text style={styles.linkMuted}>Ainda não designado</Text>
-          </View>
-        )}
         {detail.preparer_id ? (
           <TouchableOpacity style={styles.linkRow} onPress={() => setShowPreparerSheet(true)}>
             <Text style={styles.linkLabel}>Ver preparador</Text>
@@ -365,8 +357,8 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         ) : (
           <View style={styles.linkRow}>
-            <Text style={styles.linkLabelMuted}>Veículo</Text>
-            <Text style={styles.linkMuted}>Ainda não designado</Text>
+            <Text style={styles.linkLabel}>Veículo</Text>
+            <Text style={styles.linkLabel}>{FLEET_LABELS[detail.fleet_type] ?? detail.fleet_type}</Text>
           </View>
         )}
 
@@ -391,14 +383,11 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         )}
 
-        {(detail.status === 'scheduled' || detail.status === 'approved' || detail.status === 'in_progress') && (
-          <TouchableOpacity style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>Acompanhar detalhes</Text>
-          </TouchableOpacity>
-        )}
-
         {detail.status === 'completed' && (
-          <TouchableOpacity style={styles.secondaryButton}>
+          <TouchableOpacity
+            style={styles.secondaryButton}
+            onPress={() => navigation.navigate('ExcursionBudget', { excursionRequestId })}
+          >
             <Text style={styles.secondaryButtonText}>Recibo</Text>
           </TouchableOpacity>
         )}
@@ -424,7 +413,7 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
         driverName={driverProfile?.full_name ?? null}
       />
 
-      <TouchableOpacity style={[styles.fab, { bottom: Math.max(24, insets.bottom + 16) }]} onPress={() => setSupportSheetVisible(true)} activeOpacity={0.8}>
+      <TouchableOpacity style={[styles.fab, { bottom: fabBottom }]} onPress={() => setSupportSheetVisible(true)} activeOpacity={0.8}>
         <Image source={require('../../../assets/icons/icon-chat.png')} style={styles.fabIcon} />
       </TouchableOpacity>
 
@@ -456,7 +445,12 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
   );
 }
 
-function StatusTimeline({ status }: { status: string }) {
+function StatusTimeline({ detail }: { detail: ExcursionDetail }) {
+  const status = detail.status;
+  // Embarque realmente iniciado (não basta status='in_progress', que o preparador
+  // dispara ao abrir a tela de embarque). "Concluída" cobre boarding de volta feito.
+  const boardingStarted = !!detail.check_in_ida_started_at;
+  const isDone = status === 'completed' || !!detail.boarding_volta_done_at;
   const isAnalysis = ['pending', 'in_analysis'].includes(status);
   const stepsAnalysis = [
     { key: 'sent', label: 'Pedido enviado', done: true },
@@ -468,8 +462,8 @@ function StatusTimeline({ status }: { status: string }) {
     { key: 'confirmed', label: 'Pedido confirmado', done: ['quoted', 'approved', 'scheduled', 'in_progress', 'completed'].includes(status) },
     { key: 'budget', label: 'Orçamento aprovado', done: ['approved', 'scheduled', 'in_progress', 'completed'].includes(status) },
     { key: 'scheduled', label: 'Excursão marcada', done: ['scheduled', 'in_progress', 'completed'].includes(status) },
-    { key: 'progress', label: 'Em andamento', done: ['in_progress', 'completed'].includes(status) },
-    { key: 'done', label: 'Concluída', done: status === 'completed' },
+    { key: 'progress', label: 'Em andamento', done: boardingStarted || isDone },
+    { key: 'done', label: 'Concluída', done: isDone },
   ];
   const steps = isAnalysis ? stepsAnalysis : stepsScheduled;
   return (
@@ -496,13 +490,14 @@ function DriverSheet({
   profile: ProfileRow | null;
   driverNote?: string;
 }) {
+  const insets = useSafeAreaInsets();
   const avatarUri = profile?.avatar_url
     ? (profile.avatar_url.startsWith('http') ? profile.avatar_url : `${supabaseUrl}/storage/v1/object/public/avatars/${profile.avatar_url}`)
     : null;
   return (
     <Modal visible={visible} transparent animationType="fade">
       <Pressable style={styles.sheetOverlay} onPress={onClose}>
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, { paddingBottom: 24 + insets.bottom }]}>
           <Pressable onPress={onClose} style={styles.sheetHeader}>
             <Text style={styles.sheetTitle}>Motorista responsável</Text>
             <MaterialIcons name="close" size={24} color={COLORS.black} />
@@ -553,13 +548,14 @@ function PreparerSheet({
   role?: string;
   preparerNote?: string;
 }) {
+  const insets = useSafeAreaInsets();
   const avatarUri = profile?.avatar_url
     ? (profile.avatar_url.startsWith('http') ? profile.avatar_url : `${supabaseUrl}/storage/v1/object/public/avatars/${profile.avatar_url}`)
     : null;
   return (
     <Modal visible={visible} transparent animationType="fade">
       <Pressable style={styles.sheetOverlay} onPress={onClose}>
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, { paddingBottom: 24 + insets.bottom }]}>
           <Pressable onPress={onClose} style={styles.sheetHeader}>
             <Text style={styles.sheetTitle}>Preparador designado</Text>
             <MaterialIcons name="close" size={24} color={COLORS.black} />
@@ -606,10 +602,11 @@ function VehicleSheet({
   vehicle: VehicleDetails | null;
   driverName: string | null;
 }) {
+  const insets = useSafeAreaInsets();
   return (
     <Modal visible={visible} transparent animationType="fade">
       <Pressable style={styles.sheetOverlay} onPress={onClose}>
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, { paddingBottom: 24 + insets.bottom }]}>
           <Pressable onPress={onClose} style={styles.sheetHeader}>
             <Text style={styles.sheetTitle}>Veículo designado</Text>
             <MaterialIcons name="close" size={24} color={COLORS.black} />

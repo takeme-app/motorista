@@ -15,12 +15,13 @@
     "userInterfaceStyle": "light",
     "ios": {
       "bundleIdentifier": "com.takeme.cliente",
-      "buildNumber": "1",
+      "buildNumber": "2",
       "googleServicesFile": "./GoogleService-Info-cliente.plist",
       "supportsTablet": true
     },
     "android": {
       "package": "com.takeme.cliente",
+      "softwareKeyboardLayoutMode": "pan",
       "googleServicesFile": "./google-services-cliente.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/logo.png",

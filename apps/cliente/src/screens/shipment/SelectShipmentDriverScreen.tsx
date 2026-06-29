@@ -11,6 +11,7 @@ import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ShipmentStackParamList } from '../../navigation/types';
 import { loadShipmentDriversForRoute } from '../../lib/loadShipmentDriversForRoute';
@@ -36,6 +37,7 @@ const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 
 export function SelectShipmentDriverScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset({ extra: 16 });
   const {
     origin,
     destination,
@@ -108,22 +110,7 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
     setQuoteError(null);
     setQuote(null);
     (async () => {
-      const res = await quoteShipmentForClient({
-        originAddress: origin.address,
-        destinationAddress: destination.address,
-        originLat: origin.latitude,
-        originLng: origin.longitude,
-        destinationLat: destination.latitude,
-        destinationLng: destination.longitude,
-        packageSize,
-      });
-      if (cancelled) return;
-      if (!res.ok) {
-        setQuoteError(res.error);
-        setQuote(null);
-      } else {
-        setQuote(res.quote);
-      }
+      // Resolve a base ANTES do quote: a tarifa da base sobrepõe o global no preço.
       let base: string | null = null;
       try {
         const resolved = await resolveShipmentBaseId({
@@ -135,6 +122,24 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
         base = null;
       }
       if (!cancelled) setResolvedBaseId(base);
+
+      const res = await quoteShipmentForClient({
+        originAddress: origin.address,
+        destinationAddress: destination.address,
+        originLat: origin.latitude,
+        originLng: origin.longitude,
+        destinationLat: destination.latitude,
+        destinationLng: destination.longitude,
+        packageSize,
+        baseId: base,
+      });
+      if (cancelled) return;
+      if (!res.ok) {
+        setQuoteError(res.error);
+        setQuote(null);
+      } else {
+        setQuote(res.quote);
+      }
       setQuoteLoading(false);
     })();
     return () => {
@@ -174,6 +179,9 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
         destinationLng: destination.longitude,
         packageSize,
         preparerId,
+        baseId: resolvedBaseId,
+        // O item selecionado é a viagem (rota) escolhida → aplica os ajustes da rota (fds/noturno/feriado).
+        scheduledTripId: selectedId,
       });
       if (cancelled) return;
       setSelectedQuote(res.ok ? res.quote : null);
@@ -192,6 +200,7 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
     destination.latitude,
     destination.longitude,
     packageSize,
+    resolvedBaseId,
   ]);
 
   const effectiveQuote = selectedQuote ?? quote;
@@ -214,6 +223,7 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
       priceRouteBaseCents: effectiveQuote.priceRouteBaseCents,
       pricingRouteId: effectiveQuote.pricingRouteId,
       adminPctApplied: effectiveQuote.adminPctApplied,
+      preparerPayoutCents: effectiveQuote.preparerPayoutCents,
       resolvedBaseId,
       clientPreferredDriverId: sel.driver_id,
       scheduledTripDepartureAt: sel.departure_at,
@@ -231,7 +241,7 @@ export function SelectShipmentDriverScreen({ navigation, route }: Props) {
       : 'Nenhum motorista disponível nesta rota no momento.';
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) }]}>
+    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: bottomInset }]}>
       <StatusBar style="dark" />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>

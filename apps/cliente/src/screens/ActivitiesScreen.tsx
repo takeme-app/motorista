@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { View, StyleSheet, TouchableOpacity, ScrollView, Image, type ImageSourcePropType } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, ScrollView, Image, AppState, type ImageSourcePropType } from 'react-native';
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,10 +14,10 @@ import {
   clientViagemStatusBadge,
   clientDependentActivityStatusBadge,
   clientShipmentActivityStatusBadge,
-  excursionRequestStatusToBadge,
   type ActivitySectionBadge,
-  type TripStatusBadge,
+  type StatusBadgeVariant,
 } from '../components/StatusBadge';
+import { excursionClientStatus, isExcursionConfirmed, type ExcursionStatusFields } from '../lib/excursionStatus';
 import { SupportSheet } from '../components/SupportSheet';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ActivitiesList'>;
@@ -40,7 +40,7 @@ export type ActivityItem = {
   /** Label do badge para excursões (Em análise, Agendado, Concluída, etc.) */
   excursionStatusLabel?: string;
   /** Status exibido no cartão (cores alinhadas a `StatusBadge` / Histórico de viagens). */
-  statusBadgeVariant: TripStatusBadge;
+  statusBadgeVariant: StatusBadgeVariant;
   /** Sobrescreve o texto padrão do variant (ex.: excursões). */
   statusBadgeLabel?: string;
 };
@@ -156,7 +156,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('shipments')
         .select(
-          'id, origin_address, destination_address, amount_cents, status, created_at, package_size, scheduled_trip_id, driver_id, cancellation_reason, scheduled_trips(status, driver_journey_started_at)',
+          'id, origin_address, destination_address, amount_cents, status, created_at, package_size, admin_approved_at, scheduled_trip_id, driver_id, cancellation_reason, scheduled_trips(status, driver_journey_started_at)',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -172,7 +172,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('excursion_requests')
         .select(
-          'id, destination, excursion_date, status, total_amount_cents, created_at, people_count',
+          'id, destination, excursion_date, status, total_amount_cents, created_at, people_count, check_in_ida_started_at, check_in_volta_started_at, boarding_ida_done_at, boarding_volta_done_at',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -284,6 +284,8 @@ export function ActivitiesScreen({ navigation }: Props) {
         tripStatusShip ?? null,
         undefined,
         tripJourneyStartedShip ?? null,
+        pkg,
+        (s as { admin_approved_at?: string | null }).admin_approved_at ?? null,
       );
       return {
         id: (s as { id: string }).id,
@@ -339,17 +341,13 @@ export function ActivitiesScreen({ navigation }: Props) {
         statusBadgeVariant,
       };
     });
-    const excursionItems: ActivityItem[] = (excursionsRes.data ?? []).map((e) => {
+    // Cast: colunas de embarque (check_in_*, boarding_*) ainda não estão nos tipos
+    // gerados em @take-me/shared; sem o cast o supabase-js infere SelectQueryError.
+    const excursionRows = (excursionsRes.data ?? []) as unknown as Record<string, unknown>[];
+    const excursionItems: ActivityItem[] = excursionRows.map((e) => {
       const status = (e as { status?: string }).status?.toLowerCase() ?? '';
-      const isConfirmed = ['quoted', 'contacted', 'approved', 'scheduled', 'in_progress', 'completed'].includes(status);
-      const sectionBadge: ActivitySectionBadge = isConfirmed ? 'confirmada' : 'planejada';
-      const excursionStatusLabel =
-        status === 'completed' ? 'Concluída'
-        : status === 'cancelled' ? 'Cancelada'
-        : status === 'in_progress' ? 'Em andamento'
-        : ['scheduled', 'approved'].includes(status) ? 'Agendado'
-        : ['quoted', 'in_analysis', 'pending', 'contacted'].includes(status) ? 'Em análise'
-        : 'Planejada';
+      const sectionBadge: ActivitySectionBadge = isExcursionConfirmed(status) ? 'confirmada' : 'planejada';
+      const clientStatus = excursionClientStatus(e as ExcursionStatusFields);
       const dest = (e as { destination?: string }).destination ?? 'Excursão';
       const excursionDate = (e as { excursion_date?: string }).excursion_date;
       const createdAt = (e as { created_at: string }).created_at;
@@ -374,11 +372,11 @@ export function ActivitiesScreen({ navigation }: Props) {
         priceFormatted,
         categoryLabel: 'Excursão',
         sectionBadge,
-        excursionStatusLabel,
+        excursionStatusLabel: clientStatus.label,
         created_at: createdAt,
         summaryLine: `${people} ${people === 1 ? 'pessoa' : 'pessoas'}`,
-        statusBadgeVariant: excursionRequestStatusToBadge(status),
-        statusBadgeLabel: excursionStatusLabel,
+        statusBadgeVariant: clientStatus.variant,
+        statusBadgeLabel: clientStatus.label,
       };
     });
     const combined = [...bookingItems, ...shipmentItems, ...dependentItems, ...excursionItems].sort(
@@ -394,50 +392,89 @@ export function ActivitiesScreen({ navigation }: Props) {
     }, [loadActivities])
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    let channel: ReturnType<typeof supabase.channel> | null = null;
-    (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user || cancelled) return;
-      const uid = user.id;
-      channel = supabase
-        .channel(`client-activities-${uid}`)
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'bookings', filter: `user_id=eq.${uid}` },
-          () => {
-            void loadActivities({ silent: true });
-          },
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'shipments', filter: `user_id=eq.${uid}` },
-          () => {
-            void loadActivities({ silent: true });
-          },
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'dependent_shipments', filter: `user_id=eq.${uid}` },
-          () => {
-            void loadActivities({ silent: true });
-          },
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'excursion_requests', filter: `user_id=eq.${uid}` },
-          () => {
-            void loadActivities({ silent: true });
-          },
-        )
-        .subscribe();
-    })();
-    return () => {
-      cancelled = true;
-      if (channel) void supabase.removeChannel(channel);
-    };
-  }, [loadActivities]);
+  // Atualização automática enquanto a tela está focada. Mantido em useFocusEffect
+  // (e não em useEffect de mount) porque o WebSocket do Realtime morre quando o app
+  // vai a background; assim re-assinamos ao focar. Além disso: reconecta+refetch ao
+  // voltar do background (AppState) e um polling leve como fallback caso algum evento
+  // se perca (ex.: RLS de scheduled_trips, que não tem user_id para filtrar).
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      let channel: ReturnType<typeof supabase.channel> | null = null;
+
+      const subscribe = async () => {
+        const { data: { session } } = await supabase.auth.getSession();
+        const user = session?.user;
+        if (!user || cancelled) return;
+        // Em RN, sem `setAuth` o WS pode inscrever sem JWT — Postgres Changes falha
+        // com CHANNEL_ERROR (RLS rejeita anon). Reforça o token antes do subscribe.
+        if (session?.access_token) {
+          supabase.realtime.setAuth(session.access_token);
+        }
+        const uid = user.id;
+        // Remove canal anterior antes de recriar (evita inscrições duplicadas).
+        if (channel) {
+          void supabase.removeChannel(channel);
+          channel = null;
+        }
+        channel = supabase
+          .channel(`client-activities-${uid}-${Date.now()}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'bookings', filter: `user_id=eq.${uid}` },
+            () => { void loadActivities({ silent: true }); },
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'shipments', filter: `user_id=eq.${uid}` },
+            () => { void loadActivities({ silent: true }); },
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'dependent_shipments', filter: `user_id=eq.${uid}` },
+            () => { void loadActivities({ silent: true }); },
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'excursion_requests', filter: `user_id=eq.${uid}` },
+            () => { void loadActivities({ silent: true }); },
+          )
+          // O badge depende de scheduled_trips.status (motorista marca completed/cancelled).
+          // Sem filter porque a tabela não tem user_id; loadActivities + RLS filtram o que retorna.
+          .on(
+            'postgres_changes',
+            { event: 'UPDATE', schema: 'public', table: 'scheduled_trips' },
+            () => { void loadActivities({ silent: true }); },
+          )
+          .subscribe();
+      };
+
+      void subscribe();
+
+      // O WebSocket do Realtime cai em background no RN. Como a aba continua focada,
+      // o useFocusEffect não re-roda ao voltar — então reconectamos e refazemos o
+      // fetch quando o app volta ao primeiro plano.
+      const appStateSub = AppState.addEventListener('change', (state) => {
+        if (state === 'active' && !cancelled) {
+          void loadActivities({ silent: true });
+          void subscribe();
+        }
+      });
+
+      // Fallback: garante atualização mesmo se um evento realtime for perdido ou o
+      // socket estiver instável (ex.: dev em Wi-Fi). Silencioso, só enquanto focado.
+      const pollId = setInterval(() => {
+        if (!cancelled) void loadActivities({ silent: true });
+      }, 20000);
+
+      return () => {
+        cancelled = true;
+        appStateSub.remove();
+        clearInterval(pollId);
+        if (channel) void supabase.removeChannel(channel);
+      };
+    }, [loadActivities]),
+  );
 
   useEffect(() => {
     loadFilterPreferences();

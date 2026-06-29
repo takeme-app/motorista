@@ -261,6 +261,21 @@ export type EncomendaEditDetail =
       whenOption: string;
       createdAt: string;
       scheduledAt: string | null;
+      /** Encomenda grande: quando o admin aprovou (NULL = aguardando aprovação). */
+      adminApprovedAt: string | null;
+      /** PINs de handoff (cadeia A→B→C→D com base, ou coleta/entrega direta). */
+      baseId: string | null;
+      pickupCode: string | null;
+      deliveryCode: string | null;
+      passengerToPreparerCode: string | null;
+      preparerToBaseCode: string | null;
+      baseToDriverCode: string | null;
+      pickedUpAt: string | null;
+      deliveredAt: string | null;
+      pickedUpByPreparerAt: string | null;
+      deliveredToBaseAt: string | null;
+      pickedUpByDriverFromBaseAt: string | null;
+      baseToDriverConfirmedAt: string | null;
     }
   | {
       kind: 'dependent_shipment';
@@ -618,6 +633,10 @@ export interface PricingRouteRow {
   accepted_payment_methods: string[];
   is_active: boolean;
   created_at: string;
+  /** Valor fixo por tamanho da ROTA (sobrepõe o global; null = usa global). Só driver. */
+  size_price_pequeno_cents?: number | null;
+  size_price_medio_cents?: number | null;
+  size_price_grande_cents?: number | null;
 }
 
 export type SurchargeType =

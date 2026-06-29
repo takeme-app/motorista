@@ -121,7 +121,12 @@ export async function createPricingRoute(body: {
   price_cents: number;
   driver_pct?: number;
   admin_pct?: number;
+  /** Valor fixo por tamanho da ROTA (sobrepõe o global; null = usa global). */
+  size_price_pequeno_cents?: number | null;
+  size_price_medio_cents?: number | null;
+  size_price_grande_cents?: number | null;
   surcharges?: Array<{ surcharge_id: string; value_cents?: number }>;
+  [key: string]: unknown;
 }) {
   return invokeEdgeFunction('manage-pricing-routes', 'POST', undefined, body);
 }
@@ -1107,6 +1112,20 @@ export async function fetchEncomendaEditDetail(id: string): Promise<EncomendaEdi
       whenOption: r.when_option ?? '',
       createdAt: r.created_at ?? '',
       scheduledAt: r.scheduled_at ?? null,
+      adminApprovedAt: r.admin_approved_at ?? null,
+      // PINs de handoff (para o painel exibir a cadeia A→B→C→D ou coleta/entrega). select('*') já traz.
+      baseId: r.base_id ?? null,
+      pickupCode: r.pickup_code ?? null,
+      deliveryCode: r.delivery_code ?? null,
+      passengerToPreparerCode: r.passenger_to_preparer_code ?? null,
+      preparerToBaseCode: r.preparer_to_base_code ?? null,
+      baseToDriverCode: r.base_to_driver_code ?? null,
+      pickedUpAt: r.picked_up_at ?? null,
+      deliveredAt: r.delivered_at ?? null,
+      pickedUpByPreparerAt: r.picked_up_by_preparer_at ?? null,
+      deliveredToBaseAt: r.delivered_to_base_at ?? null,
+      pickedUpByDriverFromBaseAt: r.picked_up_by_driver_from_base_at ?? null,
+      baseToDriverConfirmedAt: r.base_to_driver_confirmed_at ?? null,
     };
   }
   const { data: d, error: e2 } = await supabase.from('dependent_shipments').select('*').eq('id', id).maybeSingle();
@@ -1156,6 +1175,37 @@ export async function updateShipmentFields(
 ): Promise<{ error: string | null }> {
   if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
   const { error } = await (supabase.from('shipments') as any).update(patch).eq('id', id);
+  return { error: error ? (error as Error).message : null };
+}
+
+/** Aprova uma encomenda grande: libera a oferta ao motorista (trigger abre a fila). */
+export async function approveLargeShipment(id: string): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const { error } = await (supabase.from('shipments') as any)
+    .update({ admin_approved_at: new Date().toISOString() })
+    .eq('id', id)
+    .is('admin_approved_at', null);
+  return { error: error ? (error as Error).message : null };
+}
+
+/** Recusa uma encomenda grande: estorna (process-refund) e cancela. */
+export async function rejectLargeShipment(id: string): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  // Tenta o estorno; quando há PaymentIntent, process-refund já marca status='cancelled'.
+  try {
+    await invokeEdgeFunction('process-refund', 'POST', undefined, {
+      entity_type: 'shipment',
+      entity_id: id,
+      reason: 'admin_rejected_large',
+    });
+  } catch {
+    // Sem PaymentIntent (ex.: dinheiro) ou falha de estorno: cancela manualmente abaixo.
+  }
+  // Garante cancelamento + motivo (idempotente; não sobrescreve se já cancelado).
+  const { error } = await (supabase.from('shipments') as any)
+    .update({ status: 'cancelled', cancellation_reason: 'admin_rejected_large' })
+    .eq('id', id)
+    .neq('status', 'cancelled');
   return { error: error ? (error as Error).message : null };
 }
 
@@ -3206,10 +3256,17 @@ export async function fetchSupportHistoryForClient(
     const shortId = String(r.id).replace(/-/g, '').slice(0, 8).toUpperCase();
     const cat = catLabel[r.category] || r.category || 'Atendimento';
     const closed = String(r.status) === 'closed';
+    // Placeholders automáticos de encomenda (trigger 20260412020000) → rótulo de tipo limpo.
+    const cleanLastMessage = (() => {
+      const m = typeof r.last_message === 'string' ? r.last_message.trim() : '';
+      if (m === 'Encomenda dependente aguardando aprovação') return 'Encomenda de dependente';
+      if (m === 'Encomenda grande aguardando aprovação') return 'Encomenda grande';
+      return m;
+    })();
     const preview = typeof r.finish_note === 'string' && r.finish_note.trim()
       ? r.finish_note.trim()
-      : typeof r.last_message === 'string' && r.last_message.trim()
-        ? r.last_message.trim()
+      : cleanLastMessage
+        ? cleanLastMessage
         : closed
           ? 'Atendimento encerrado.'
           : 'Solicitação em andamento.';
@@ -3338,13 +3395,19 @@ export type BaseListItem = {
   lng: number | null;
   isActive: boolean;
   createdAt: string;
+  /** Pagamento do preparador de encomendas desta base (NULL = usa taxa global por km). */
+  preparerPricingMode: 'per_km' | 'fixed' | null;
+  preparerKmPriceCents: number | null;
+  preparerFixedCents: number | null;
 };
 
 export async function fetchBases(): Promise<BaseListItem[]> {
   if (!isSupabaseConfigured) return [];
   const { data, error } = await sb
     .from('bases')
-    .select('id, name, address, city, state, lat, lng, is_active, created_at')
+    .select(
+      'id, name, address, city, state, lat, lng, is_active, created_at, preparer_pricing_mode, preparer_km_price_cents, preparer_fixed_cents',
+    )
     .order('created_at', { ascending: false });
 
   if (error || !data) return [];
@@ -3358,7 +3421,26 @@ export async function fetchBases(): Promise<BaseListItem[]> {
     lng: b.lng,
     isActive: b.is_active,
     createdAt: fmtDate(b.created_at),
+    preparerPricingMode: (b.preparer_pricing_mode as 'per_km' | 'fixed' | null) ?? null,
+    preparerKmPriceCents: b.preparer_km_price_cents ?? null,
+    preparerFixedCents: b.preparer_fixed_cents ?? null,
   }));
+}
+
+/** Atualiza o pagamento do preparador de encomendas de uma base (por km ou valor fixo). */
+export async function updateBasePreparerPricing(
+  id: string,
+  input: { mode: 'per_km' | 'fixed'; kmCents?: number | null; fixedCents?: number | null },
+): Promise<{ error: string | null }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase not configured' };
+  const { error } = await (sb.from('bases') as any)
+    .update({
+      preparer_pricing_mode: input.mode,
+      preparer_km_price_cents: input.mode === 'per_km' ? (input.kmCents ?? null) : null,
+      preparer_fixed_cents: input.mode === 'fixed' ? (input.fixedCents ?? null) : null,
+    })
+    .eq('id', id);
+  return { error: error ? (error as Error).message : null };
 }
 
 export type CreateBaseInput = {
@@ -3396,6 +3478,9 @@ export async function createBase(input: CreateBaseInput): Promise<BaseListItem |
     lng: data.lng,
     isActive: data.is_active,
     createdAt: fmtDate(data.created_at),
+    preparerPricingMode: (data.preparer_pricing_mode as 'per_km' | 'fixed' | null) ?? null,
+    preparerKmPriceCents: data.preparer_km_price_cents ?? null,
+    preparerFixedCents: data.preparer_fixed_cents ?? null,
   };
 }
 
@@ -3650,26 +3735,51 @@ export async function fetchAllNotifications(): Promise<NotificationAdminRow[]> {
   }));
 }
 
-export async function createNotificationForUser(userId: string, title: string, message: string, category?: string): Promise<{ error: string | null }> {
+export type NotificationTargetApp = 'cliente' | 'motorista';
+
+export async function createNotificationForUser(
+  userId: string,
+  title: string,
+  message: string,
+  category?: string,
+  targetAppSlug: NotificationTargetApp = 'cliente',
+): Promise<{ error: string | null }> {
   const { error } = await (supabase as any).from('notifications').insert({
     user_id: userId,
     title,
     message,
     category: category || null,
+    target_app_slug: targetAppSlug,
   });
   return { error: error?.message ?? null };
 }
 
-export async function createNotificationBroadcast(title: string, message: string, category?: string): Promise<{ count: number; error: string | null }> {
-  // Fetch all active user IDs (non-workers — passengers)
-  const { data: profiles } = await supabase.from('profiles').select('id').limit(1000);
-  if (!profiles || profiles.length === 0) return { count: 0, error: null };
+export async function createNotificationBroadcast(
+  title: string,
+  message: string,
+  category?: string,
+  targetAppSlug: NotificationTargetApp = 'cliente',
+): Promise<{ count: number; error: string | null }> {
+  let userIds: string[] = [];
+  if (targetAppSlug === 'motorista') {
+    const { data } = await supabase
+      .from('worker_profiles')
+      .select('id')
+      .eq('status', 'approved')
+      .limit(2000);
+    userIds = (data ?? []).map((r: any) => r.id);
+  } else {
+    const { data } = await supabase.from('profiles').select('id').limit(2000);
+    userIds = (data ?? []).map((p: any) => p.id);
+  }
+  if (userIds.length === 0) return { count: 0, error: null };
 
-  const rows = profiles.map((p: any) => ({
-    user_id: p.id,
+  const rows = userIds.map((id) => ({
+    user_id: id,
     title,
     message,
     category: category || 'broadcast',
+    target_app_slug: targetAppSlug,
   }));
 
   const { error } = await (supabase as any).from('notifications').insert(rows);

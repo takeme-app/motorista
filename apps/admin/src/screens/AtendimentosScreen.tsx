@@ -46,7 +46,25 @@ type Ticket = {
   adminId: string | null;
   /** Categoria bruta da API (excursao, reembolso, …) */
   rawCategory: string;
+  /** Ticket automático de encomenda ainda no estado inicial (mostra pill "Aguardando aprovação"). */
+  aprovacaoPendente?: boolean;
 };
+
+/**
+ * Tickets automáticos de encomenda grande/dependente nascem com `last_message` sendo uma frase
+ * corrida (tipo + "aguardando aprovação"). Separa o status do tipo: descrição limpa + flag.
+ * Match exato dos placeholders do trigger (20260412020000); qualquer outro valor passa intacto.
+ */
+function normalizeAutoPlaceholder(lastMessage: string | null | undefined): { descricao: string; aprovacaoPendente: boolean } {
+  const msg = (lastMessage ?? '').trim();
+  if (msg === 'Encomenda dependente aguardando aprovação') {
+    return { descricao: 'Encomenda de dependente', aprovacaoPendente: true };
+  }
+  if (msg === 'Encomenda grande aguardando aprovação') {
+    return { descricao: 'Encomenda grande', aprovacaoPendente: true };
+  }
+  return { descricao: msg, aprovacaoPendente: false };
+}
 
 /** Figma 1062:26998 — segunda lista: ordem e rótulos; Ouvidoria/Denúncia filtram por `categoria`, resto por estado derivado. */
 const TODOS_ATENDIMENTOS_CHIPS_CONFIG: {
@@ -199,13 +217,15 @@ export default function AtendimentosScreen() {
           } else {
             ticketStatus = 'em_atendimento';
           }
+          const { descricao: descNorm, aprovacaoPendente } = normalizeAutoPlaceholder(c.last_message);
           return {
             id: String(c.id),
             nome: name,
             avatar: name.charAt(0).toUpperCase(),
             avatarUrl: null as string | null,
             categoria: categoryLabelMap[c.category || ''] || c.category || 'Outros',
-            descricao: c.last_message || 'Sem mensagens',
+            descricao: descNorm || 'Sem mensagens',
+            aprovacaoPendente,
             tempo,
             status: ticketStatus,
             adminId: c.admin_id ? String(c.admin_id) : null,
@@ -409,6 +429,15 @@ export default function AtendimentosScreen() {
               }, t.categoria)),
             // Description
             React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, lineHeight: 1.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, ...font } }, t.descricao),
+            // Pill de status para tickets automáticos de encomenda no estado inicial
+            t.aprovacaoPendente
+              ? React.createElement('span', {
+                style: {
+                  alignSelf: 'flex-start', padding: '2px 10px', borderRadius: 999, background: '#fef3c7',
+                  fontSize: 12, fontWeight: 600, color: '#92400e', whiteSpace: 'nowrap' as const, ...font,
+                },
+              }, 'Aguardando aprovação')
+              : null,
             // Time
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
               clockSvg,
@@ -513,7 +542,7 @@ export default function AtendimentosScreen() {
   const meuAtendimentoHeader = React.createElement('div', {
     style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' as const, gap: 12 },
   },
-    React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Atendimentos'),
+    React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Meus atendimentos'),
     React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
       React.createElement('button', {
         type: 'button',

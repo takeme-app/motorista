@@ -61,6 +61,7 @@ export type ShipmentRecipientParam = {
 };
 
 export type ShipmentStackParamList = {
+  PixPaliativo: { requestId: string };
   SelectShipmentAddress: undefined;
   SelectShipmentDriver: {
     origin: ShipmentPlaceParam;
@@ -90,6 +91,8 @@ export type ShipmentStackParamList = {
     platformFeeCents?: number;
     amountCents?: number;
     adminPctApplied?: number;
+    /** Perna Origem→Base (repasse do preparador); 0 quando não há base. */
+    preparerPayoutCents?: number;
     clientPreferredDriverId?: string;
     resolvedBaseId?: string | null;
     scheduledTripDepartureAt?: string | null;
@@ -117,6 +120,8 @@ export type ShipmentStackParamList = {
     pricingRouteId: string | null;
     /** % admin aplicada (snapshot). */
     adminPctApplied: number;
+    /** Perna Origem→Base (repasse do preparador); 0 quando não há base. */
+    preparerPayoutCents?: number;
     /** Motorista/preparador escolhido pelo cliente (opcional). */
     clientPreferredDriverId?: string;
     /** Base operacional resolvida pelo hub (ou `null` quando não existe). */
@@ -149,9 +154,11 @@ export type DependentShipmentFormParams = {
   instructions?: string;
   dependentId?: string;
   photoUri?: string;
+  photoUris?: string[];
 };
 
 export type DependentShipmentStackParamList = {
+  PixPaliativo: { requestId: string };
   DependentShipmentForm: undefined;
   AddDependent: undefined;
   DependentSuccess: undefined;
@@ -249,6 +256,7 @@ export type TripLiveDriverDisplay = {
 };
 
 export type TripStackParamList = {
+  PixPaliativo: { requestId: string };
   WhenNeeded: undefined;
   PlanTrip: undefined;
   PlanRide: { origin?: TripPlaceParam; destination?: TripPlaceParam; scheduledDateId?: string; scheduledTimeSlot?: string };

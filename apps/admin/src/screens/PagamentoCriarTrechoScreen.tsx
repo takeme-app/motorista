@@ -8,7 +8,7 @@
  */
 import React, { useState, useCallback, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { createPricingRoute, fetchSurchargeCatalog } from '../data/queries';
+import { createPricingRoute, fetchSurchargeCatalog, fetchBases, updateBasePreparerPricing, type BaseListItem } from '../data/queries';
 import type { SurchargeCatalogRow } from '../data/types';
 import PlacesAddressInput from '../components/PlacesAddressInput';
 import type { PlaceResolved } from '../components/PlacesAddressInput';
@@ -16,6 +16,14 @@ import type { PlaceResolved } from '../components/PlacesAddressInput';
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
 type TabTrecho = 'motorista' | 'prep_exc' | 'prep_enc';
+
+/** Tipo de adicional (surcharge_catalog.surcharge_type) próprio de cada aba: viagem é
+ * separada de encomenda/excursão, então cada trecho só oferece adicionais do seu contexto. */
+const SURCHARGE_TYPE_BY_TAB: Record<TabTrecho, string> = {
+  motorista: 'viagem',
+  prep_exc: 'preparador_excursoes',
+  prep_enc: 'preparador_encomendas',
+};
 
 type TrechoFormSlice = {
   origem: string;
@@ -25,6 +33,10 @@ type TrechoFormSlice = {
   encTipoValor: 'por_km' | 'fixo';
   encValorKm: string;
   encValorFixo: string;
+  /** Só aba encomendas: valor fixo por tamanho POR BASE (sobrepõe o global; vazio = usa global). */
+  encSizePequeno: string;
+  encSizeMedio: string;
+  encSizeGrande: string;
   ida: string;
   retorno: string;
   pctWorker: string;
@@ -38,6 +50,21 @@ function parseBRLToCents(s: string): number {
   const n = Number.parseFloat(t);
   if (!Number.isFinite(n)) return 0;
   return Math.round(n * 100);
+}
+
+function centsToBRLInput(cents: number | null | undefined): string {
+  if (cents == null || !Number.isFinite(cents)) return '';
+  return (cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** Máscara de moeda: só aceita dígitos e formata como R$ X,XX (impede letras/símbolos). */
+function maskBRL(raw: string): string {
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return '';
+  return (parseInt(digits, 10) / 100).toLocaleString('pt-BR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 const PLACEHOLDERS: Record<TabTrecho, { origem: string; destino: string; diaria: string }> = {
@@ -67,6 +94,9 @@ function initialForms(): Record<TabTrecho, TrechoFormSlice> {
       encTipoValor: 'por_km',
       encValorKm: '',
       encValorFixo: '',
+      encSizePequeno: '',
+      encSizeMedio: '',
+      encSizeGrande: '',
       ida: '2025-09-05T15:30',
       retorno: '2025-09-15T16:30',
       pctWorker: '',
@@ -81,6 +111,9 @@ function initialForms(): Record<TabTrecho, TrechoFormSlice> {
       encTipoValor: 'por_km',
       encValorKm: '',
       encValorFixo: '',
+      encSizePequeno: '',
+      encSizeMedio: '',
+      encSizeGrande: '',
       ida: '2025-10-06T10:30',
       retorno: '2025-10-12T14:30',
       pctWorker: '',
@@ -95,6 +128,9 @@ function initialForms(): Record<TabTrecho, TrechoFormSlice> {
       encTipoValor: 'por_km',
       encValorKm: '',
       encValorFixo: '',
+      encSizePequeno: '',
+      encSizeMedio: '',
+      encSizeGrande: '',
       ida: '2025-11-11T11:40',
       retorno: '2025-10-19T15:40',
       pctWorker: '',
@@ -202,9 +238,13 @@ export default function PagamentoCriarTrechoScreen() {
   // Coordenadas resolvidas pelo Google Places
   const [originCoord, setOriginCoord] = useState<{ lat: number; lng: number } | null>(null);
   const [destCoord, setDestCoord] = useState<{ lat: number; lng: number } | null>(null);
+  // Preparador de encomendas: pagamento é POR BASE (não por trecho origem→destino).
+  const [bases, setBases] = useState<BaseListItem[]>([]);
+  const [selectedBaseId, setSelectedBaseId] = useState('');
 
   useEffect(() => {
     fetchSurchargeCatalog().then(setSurcharges);
+    fetchBases().then(setBases);
   }, []);
 
   const f = forms[tab];
@@ -218,6 +258,34 @@ export default function PagamentoCriarTrechoScreen() {
   const salvar = useCallback(async () => {
     if (saving || toastSalvoOpen) return;
     setSaveErr(null);
+
+    // Preparador de encomendas: salva o valor (por km / fixo) NA BASE selecionada.
+    if (tab === 'prep_enc') {
+      if (!selectedBaseId) {
+        setSaveErr('Selecione uma base.');
+        return;
+      }
+      const mode = 'per_km' as const;
+      const cents = parseBRLToCents(f.encValorKm);
+      if (cents <= 0) {
+        setSaveErr('Indique um valor válido.');
+        return;
+      }
+      setSaving(true);
+      const { error } = await updateBasePreparerPricing(selectedBaseId, {
+        mode,
+        kmCents: cents,
+        fixedCents: null,
+      });
+      setSaving(false);
+      if (error) {
+        setSaveErr(error);
+        return;
+      }
+      setToastSalvoOpen(true);
+      return;
+    }
+
     const dest = f.destino.trim();
     if (!dest) {
       setSaveErr('Indique o destino do trecho.');
@@ -236,8 +304,8 @@ export default function PagamentoCriarTrechoScreen() {
       price_cents = parseBRLToCents(f.diaria);
     } else {
       role_type = 'preparer_shipments';
-      pricing_mode = f.encTipoValor === 'por_km' ? 'per_km' : 'fixed';
-      price_cents = f.encTipoValor === 'por_km' ? parseBRLToCents(f.encValorKm) : parseBRLToCents(f.encValorFixo);
+      pricing_mode = 'per_km';
+      price_cents = parseBRLToCents(f.encValorKm);
     }
     if (price_cents <= 0) {
       setSaveErr('Indique um valor válido (preço / diária).');
@@ -250,6 +318,21 @@ export default function PagamentoCriarTrechoScreen() {
       ? [{ surcharge_id: f.adicionalId }]
       : undefined;
 
+    // Valor fixo por tamanho da ROTA (só motorista): vazio → null (usa global); preenchido → centavos.
+    const sizeOrNull = (s: string): number | null => {
+      const t = s.trim();
+      if (!t) return null;
+      const c = parseBRLToCents(t);
+      return c > 0 ? c : null;
+    };
+    const sizeFields = tab === 'motorista'
+      ? {
+          size_price_pequeno_cents: sizeOrNull(f.encSizePequeno),
+          size_price_medio_cents: sizeOrNull(f.encSizeMedio),
+          size_price_grande_cents: sizeOrNull(f.encSizeGrande),
+        }
+      : {};
+
     setSaving(true);
     const { error } = await createPricingRoute({
       role_type,
@@ -260,6 +343,7 @@ export default function PagamentoCriarTrechoScreen() {
       price_cents,
       ...(Number.isFinite(dw) ? { driver_pct: dw } : {}),
       ...(Number.isFinite(da) ? { admin_pct: da } : {}),
+      ...sizeFields,
       surcharges,
       ...(originCoord ? { origin_lat: originCoord.lat, origin_lng: originCoord.lng } : {}),
       ...(destCoord ? { destination_lat: destCoord.lat, destination_lng: destCoord.lng } : {}),
@@ -270,7 +354,7 @@ export default function PagamentoCriarTrechoScreen() {
       return;
     }
     setToastSalvoOpen(true);
-  }, [saving, toastSalvoOpen, f, tab]);
+  }, [saving, toastSalvoOpen, f, tab, selectedBaseId]);
 
   useEffect(() => {
     if (!toastSalvoOpen) return;
@@ -422,18 +506,19 @@ export default function PagamentoCriarTrechoScreen() {
     ...font,
   };
   const salvarBtnStyleBusy: React.CSSProperties = saving ? { ...salvarBtnStyle, opacity: 0.65, cursor: 'not-allowed' } : salvarBtnStyle;
+  const salvarLabel = tab === 'prep_enc' ? 'Salvar valor da base' : 'Salvar trecho';
   const btnSalvarTop = React.createElement('button', {
     type: 'button',
     disabled: saving,
     onClick: () => { void salvar(); },
     style: salvarBtnStyleBusy,
-  }, checkWhiteSvg, saving ? 'A guardar…' : 'Salvar trecho');
+  }, checkWhiteSvg, saving ? 'A guardar…' : salvarLabel);
   const btnSalvarFooter = React.createElement('button', {
     type: 'button',
     disabled: saving,
     onClick: () => { void salvar(); },
     style: salvarBtnStyleBusy,
-  }, checkWhiteSvg, saving ? 'A guardar…' : 'Salvar trecho');
+  }, checkWhiteSvg, saving ? 'A guardar…' : salvarLabel);
   const saveErrEl = saveErr
     ? React.createElement('p', { style: { margin: 0, fontSize: 14, color: '#b53838', ...font } }, saveErr)
     : null;
@@ -501,27 +586,60 @@ export default function PagamentoCriarTrechoScreen() {
       }));
   };
 
-  const phEnc = PLACEHOLDERS.prep_enc;
-
   const cardDadosStd = React.createElement('div', { style: card },
     React.createElement('h2', { style: tituloCard }, 'Dados do trecho'),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
       React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
         fieldPlaces('Origem', f.origem, (v) => patch({ origem: v }), (p) => { patch({ origem: p.formattedAddress }); setOriginCoord({ lat: p.lat, lng: p.lng }); }, ph.origem),
         fieldPlaces('Destino', f.destino, (v) => patch({ destino: v }), (p) => { patch({ destino: p.formattedAddress }); setDestCoord({ lat: p.lat, lng: p.lng }); }, ph.destino)),
-      fieldText('Valor da diária (R$)', f.diaria, (v) => patch({ diaria: v }), ph.diaria, true)));
+      fieldText(tab === 'motorista' ? 'Valor por passageiro (R$)' : 'Valor da diária (R$)', f.diaria, (v) => patch({ diaria: maskBRL(v) }), ph.diaria, true)));
+
+  // Ao escolher a base, pré-preenche o tipo/valor com a config atual dela.
+  const onSelectBase = (id: string) => {
+    setSelectedBaseId(id);
+    const b = bases.find((x) => x.id === id);
+    if (!b) return;
+    // Só por km (valor fixo foi removido). Bases antigas com fixed caem no campo vazio.
+    if (b.preparerPricingMode === 'per_km') {
+      patch({ encTipoValor: 'por_km', encValorKm: centsToBRLInput(b.preparerKmPriceCents), encValorFixo: '' });
+    } else {
+      patch({ encTipoValor: 'por_km', encValorKm: '', encValorFixo: '' });
+    }
+  };
+
+  const baseSelect = React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
+    React.createElement('span', { style: labelField }, 'Base'),
+    React.createElement('div', { style: { position: 'relative' as const, width: '100%' } },
+      React.createElement('select', {
+        value: selectedBaseId,
+        onChange: (e: React.ChangeEvent<HTMLSelectElement>) => onSelectBase(e.target.value),
+        style: { ...inputGray, paddingRight: 44, appearance: 'none' as const, cursor: 'pointer', color: selectedBaseId ? '#0d0d0d' : '#767676' },
+      },
+        React.createElement('option', { value: '' }, 'Selecione a base'),
+        ...bases.map((b) => React.createElement('option', { key: b.id, value: b.id }, b.city ? `${b.name} — ${b.city}` : b.name))),
+      React.createElement('div', { style: { position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } }, chevronDownSvg)),
+    React.createElement('p', { style: { margin: '4px 0 0', fontSize: 12, color: '#767676', lineHeight: 1.5, ...font } },
+      'O preparador de encomendas só atua em uma base. Defina aqui quanto ele recebe por entrega dessa base — por km (distância base↔coleta, ida/volta, limitada à taxa da plataforma).'));
 
   const cardDadosEnc = React.createElement('div', { style: card },
-    React.createElement('h2', { style: tituloCard }, 'Dados do trecho'),
-    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
-      React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
-        fieldPlaces('Origem', f.origem, (v) => patch({ origem: v }), (p) => { patch({ origem: p.formattedAddress }); setOriginCoord({ lat: p.lat, lng: p.lng }); }, phEnc.origem),
-        fieldPlaces('Destino', f.destino, (v) => patch({ destino: v }), (p) => { patch({ destino: p.formattedAddress }); setDestCoord({ lat: p.lat, lng: p.lng }); }, phEnc.destino)),
+    React.createElement('h2', { style: tituloCard }, 'Pagamento por base'),
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' } },
+      baseSelect,
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', lineHeight: 1.4, ...font } }, 'Tipo de valor'),
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', lineHeight: 1.4, ...font } }, 'Valor por KM'),
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 12, width: '100%' } },
-          radioValorEncRow('por_km', 'Valor por KM', f.encValorKm, (v) => patch({ encValorKm: v }), 'Ex: R$ 1,80'),
-          radioValorEncRow('fixo', 'Valor fixo', f.encValorFixo, (v) => patch({ encValorFixo: v }), 'Ex: R$ 180,00')))));
+          radioValorEncRow('por_km', 'Valor por KM', f.encValorKm, (v) => patch({ encValorKm: maskBRL(v) }), 'Ex: R$ 1,80')))));
+
+  // Card de valor fixo por tamanho POR ROTA (sobrepõe o global de Configurações).
+  // Vale para encomendas que rodam neste trecho do motorista.
+  const cardSizesRoute = React.createElement('div', { style: card },
+    React.createElement('h2', { style: tituloCard }, 'Valor fixo por tamanho (sobrepõe o global)'),
+    React.createElement('p', { style: { margin: '0 0 4px', fontSize: 12, color: '#767676', lineHeight: 1.5, ...font } },
+      'Somado ao repasse do motorista conforme o tamanho do pacote, para encomendas que rodam neste trecho. Em branco, usa o valor global definido em Configurações.'),
+    React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 16, width: '100%' } },
+      fieldText('Encomenda pequena (R$)', f.encSizePequeno, (v) => patch({ encSizePequeno: maskBRL(v) }), 'Usa global'),
+      fieldText('Encomenda média (R$)', f.encSizeMedio, (v) => patch({ encSizeMedio: maskBRL(v) }), 'Usa global'),
+      fieldText('Encomenda grande (R$)', f.encSizeGrande, (v) => patch({ encSizeGrande: maskBRL(v) }), 'Usa global')));
 
   const cardDados = tab === 'prep_enc' ? cardDadosEnc : cardDadosStd;
 
@@ -589,7 +707,7 @@ export default function PagamentoCriarTrechoScreen() {
         },
       },
         React.createElement('option', { value: '' }, 'Selecione adicional'),
-        ...surcharges.filter((s) => s.is_active && s.surcharge_mode === 'manual').map((s) =>
+        ...surcharges.filter((s) => s.is_active && s.surcharge_mode === 'manual' && s.surcharge_type === SURCHARGE_TYPE_BY_TAB[tab]).map((s) =>
           React.createElement('option', { key: s.id, value: s.id }, s.name))),
       React.createElement('div', { style: { position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } }, chevronDownSvg)));
 
@@ -637,12 +755,17 @@ export default function PagamentoCriarTrechoScreen() {
 
   const footerSalvar = React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', width: '100%', marginTop: 8 } }, btnSalvarFooter);
 
-  const formStack = [
-    cardDados,
-    cardHorarios,
-    ...(showPercentuais ? [cardPct] : []),
-    cardCustos,
-  ];
+  // Preparador de encomendas: só o card de pagamento por base (sem Horários/Percentuais/Custos,
+  // que pertencem ao modelo por trecho).
+  const formStack = tab === 'prep_enc'
+    ? [cardDados]
+    : [
+        cardDados,
+        ...(tab === 'motorista' ? [cardSizesRoute] : []),
+        cardHorarios,
+        ...(showPercentuais ? [cardPct] : []),
+        cardCustos,
+      ];
 
   const toastSalvoTrecho = toastSalvoOpen
     ? React.createElement('div', {

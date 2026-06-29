@@ -36,7 +36,8 @@ import { getCachedRoute, setCachedRoute, hashWaypoints } from '../../lib/routeCa
 import { useNetworkStatus } from '../../hooks/useNetworkStatus';
 import { useRouteOfflinePack } from '../../hooks/useRouteOfflinePack';
 import { MapNetworkBadge } from '../../components/MapNetworkBadge';
-import { formatShipmentCode } from '@take-me/shared';
+import { formatShipmentCode, getOrCreateActiveSupportConversationId } from '@take-me/shared';
+import { useAppAlert } from '../../contexts/AppAlertContext';
 
 let Location: any = null;
 try {
@@ -116,10 +117,11 @@ function regionFocusedOnPickup(origin: LatLng | null, dest: LatLng | null): MapR
   return regionFromLatLngPoints([]);
 }
 
-const SUPPORT_PHONE = '+5500000000000';
-const SUPPORT_WHATSAPP = '+5500000000000';
+const SUPPORT_PHONE = 'tel:+5583999999999';
+const SUPPORT_WHATSAPP = 'https://wa.me/5583999999999';
 
 export function DetalhesEncomendaScreen({ navigation, route }: Props) {
+  const { showAlert } = useAppAlert();
   const { shipmentId } = route.params;
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<ShipmentDetail | null>(null);
@@ -137,7 +139,7 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
     const { data } = await supabase
       .from('shipments')
       .select(
-        'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, package_size, amount_cents, instructions, created_at, scheduled_at, status, user_id, base_id',
+        'id, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng, package_size, amount_cents, preparer_payout_cents, instructions, created_at, scheduled_at, status, user_id, base_id',
       )
       .eq('id', shipmentId)
       .maybeSingle();
@@ -147,7 +149,7 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
       id: string; origin_address: string; destination_address: string;
       origin_lat: number | null; origin_lng: number | null;
       destination_lat: number | null; destination_lng: number | null;
-      package_size: string; amount_cents: number; instructions: string | null;
+      package_size: string; amount_cents: number; preparer_payout_cents: number | null; instructions: string | null;
       created_at: string; scheduled_at: string | null; status: string; user_id: string;
       base_id: string | null;
     };
@@ -185,7 +187,9 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
       baseAddress: baseAddress || '—',
       baseName,
       packageSize: packageSizeLabel(row.package_size),
-      amountCents: row.amount_cents,
+      // "Valor" exibido ao preparador = a parcela dele (preparer_payout_cents),
+      // nao o total pago pelo cliente (amount_cents).
+      amountCents: row.preparer_payout_cents ?? 0,
       instructions: row.instructions,
       createdAt: formatDateTime(row.created_at),
       scheduledAt: row.scheduled_at ? formatDateTime(row.scheduled_at) : null,
@@ -302,13 +306,31 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
   );
 
   const handleCall = () => {
-    Linking.openURL(`tel:${SUPPORT_PHONE}`);
     setSupportVisible(false);
+    void Linking.openURL(SUPPORT_PHONE);
   };
 
   const handleWhatsApp = () => {
-    Linking.openURL(`https://wa.me/${SUPPORT_WHATSAPP.replace('+', '')}`);
     setSupportVisible(false);
+    void Linking.openURL(SUPPORT_WHATSAPP);
+  };
+
+  const handleChatSupport = () => {
+    setSupportVisible(false);
+    void (async () => {
+      const { conversationId, error } = await getOrCreateActiveSupportConversationId(supabase);
+      if (error || !conversationId) {
+        showAlert('Suporte', error ?? 'Não foi possível abrir o chat.');
+        return;
+      }
+      const parent = navigation.getParent() as
+        | { navigate: (screen: string, params?: unknown) => void }
+        | undefined;
+      parent?.navigate('ChatEnc', {
+        screen: 'ChatEncThread',
+        params: { conversationId, participantName: 'Suporte Take Me' },
+      });
+    })();
   };
 
   return (
@@ -320,7 +342,7 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
           <MaterialIcons name="arrow-back" size={22} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Detalhes do pedido</Text>
-        <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7} onPress={() => navigation.navigate('Notifications')}>
           <MaterialIcons name="notifications-none" size={22} color="#111827" />
         </TouchableOpacity>
       </View>
@@ -527,7 +549,7 @@ export function DetalhesEncomendaScreen({ navigation, route }: Props) {
             </View>
             <Text style={styles.supportOptionText}>WhatsApp do Take Me</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.supportOption} onPress={() => setSupportVisible(false)} activeOpacity={0.85}>
+          <TouchableOpacity style={styles.supportOption} onPress={handleChatSupport} activeOpacity={0.85}>
             <View style={styles.supportOptionIcon}>
               <MaterialIcons name="headset-mic" size={24} color="#92400E" />
             </View>

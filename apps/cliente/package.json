@@ -1,6 +1,6 @@
 {
   "name": "cliente",
-  "version": "1.0.10",
+  "version": "1.0.26",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -45,6 +45,8 @@
     "expo-linear-gradient": "~15.0.8",
     "expo-linking": "~8.0.11",
     "expo-location": "~19.0.8",
+    "expo-print": "~15.0.8",
+    "expo-sharing": "~14.0.8",
     "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
     "expo-updates": "~29.0.16",

@@ -5,12 +5,14 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  KeyboardAvoidingView,
   Linking,
   Alert,
+  Platform,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Text } from '../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList, RegistrationType } from '../navigation/types';
@@ -44,6 +46,7 @@ function FieldBlock({ label, children }: { label: string; children: ReactNode })
 export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
   const { driverType } = route.params;
   const insets = useSafeAreaInsets();
+  const bottomInset = useBottomSafeInset();
   const { showAlert } = useAppAlert();
   const { setFormData } = useRegistrationForm();
 
@@ -308,7 +311,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
   const sectionTitle = (title: string) => <Text style={styles.sectionTitle}>{title}</Text>;
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior="padding">
+    <KeyboardAvoidingView style={styles.container} behavior="height">
       <StatusBar style="dark" />
       <View style={[styles.navbar, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity
@@ -352,7 +355,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 32 }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomInset + 32 }]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
@@ -702,7 +705,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
           </View>
         </View>
 
-        <View style={[styles.footerInScroll, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+        <View style={[styles.footerInScroll, { paddingBottom: bottomInset }]}>
           <TouchableOpacity
             style={[styles.submitBtn, !credentialsReady && styles.submitBtnDisabled]}
             onPress={validateAndSubmit}

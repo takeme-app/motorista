@@ -133,15 +133,16 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Defesa em profundidade: passageiro não cancela quando o motorista já iniciou
-    // a viagem (scheduled_trip em execução/encerrada). A partir daí o fluxo pertence
-    // ao motorista ("cancelar embarque") e o reembolso segue política de no-show.
+    // Defesa em profundidade: só bloqueia se a viagem chegou a um estado FINAL
+    // (completed/cancelled). Atenção: `trip.status='active'` é o default desde
+    // a criação da trip — NÃO indica que motorista iniciou. O sinal correto é
+    // `driver_journey_started_at IS NOT NULL`, mas a regra atual de produto
+    // permite passageiro cancelar mesmo após o motorista iniciar (penalty
+    // calculada pelo refund flow abaixo conforme a janela freeWindowHours).
     const tripStatus = (booking.scheduled_trips?.status ?? "")
       .toString()
       .toLowerCase();
     const blockedTripStatuses = new Set([
-      "active",
-      "in_progress",
       "completed",
       "cancelled",
       "canceled",
@@ -149,10 +150,7 @@ Deno.serve(async (req) => {
     if (blockedTripStatuses.has(tripStatus)) {
       return new Response(
         JSON.stringify({
-          error:
-            tripStatus === "active" || tripStatus === "in_progress"
-              ? "A viagem já foi iniciada pelo motorista. Fale com o motorista ou com o suporte."
-              : `Viagem não pode mais ser cancelada (status: ${tripStatus}).`,
+          error: `Viagem não pode mais ser cancelada (status: ${tripStatus}).`,
         }),
         {
           status: 409,
@@ -269,6 +267,22 @@ Deno.serve(async (req) => {
         .eq("entity_type", "booking")
         .eq("entity_id", bookingId)
         .in("status", ["pending", "processing"]);
+    }
+
+    // Encerra conversation ativa associada a esta reserva (driver_client).
+    // Mantém histórico no banco, mas remove da lista "Recentes" do motorista
+    // e do passageiro. Falhas aqui não bloqueiam o cancelamento.
+    try {
+      await admin
+        .from("conversations")
+        .update({
+          status: "closed",
+          updated_at: nowIso,
+        } as never)
+        .eq("booking_id", bookingId)
+        .eq("status", "active");
+    } catch (e) {
+      console.warn("[cancel-booking] close conversation warn:", e);
     }
 
     // Notificação para o passageiro.

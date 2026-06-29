@@ -5,16 +5,17 @@ import {
   TextInput,
   StyleSheet,
   FlatList,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   Image,
   Alert,
+  Modal,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -147,13 +148,15 @@ const cameraPickerOptions: ImagePicker.ImagePickerOptions = {
 
 export function ChatScreen({ navigation, route }: Props) {
   const { conversationId, participantName, participantAvatar } = route.params;
-  const insets = useSafeAreaInsets();
+  const composerBottom = useBottomSafeInset({ extra: 6 });
   const { showAlert } = useAppAlert();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [attachSheetVisible, setAttachSheetVisible] = useState(false);
+  const attachSheetBottom = useBottomSafeInset({ extra: 16 });
   const [conversationStatus, setConversationStatus] = useState<'active' | 'closed'>('active');
   const [myId, setMyId] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -198,6 +201,8 @@ export function ChatScreen({ navigation, route }: Props) {
     void supabase.from('conversations').update({ unread_driver: 0 }).eq('id', conversationId);
     loadMessages();
     loadConversation();
+    // Marca as mensagens recebidas como lidas → o remetente vê "visualizado" (✓✓).
+    void supabase.rpc('mark_messages_read' as never, { p_conversation_id: conversationId } as never);
 
     const channel = supabase
       .channel(`chat:${conversationId}`)
@@ -211,6 +216,16 @@ export function ChatScreen({ navigation, route }: Props) {
             return [...prev, newMsg];
           });
           setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+          // Chat aberto → marca a mensagem que chegou como lida.
+          void supabase.rpc('mark_messages_read' as never, { p_conversation_id: conversationId } as never);
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${conversationId}` },
+        (payload) => {
+          const upd = payload.new as Message;
+          setMessages((prev) => prev.map((m) => (m.id === upd.id ? { ...m, read_at: upd.read_at } : m)));
         },
       )
       .subscribe();
@@ -280,21 +295,7 @@ export function ChatScreen({ navigation, route }: Props) {
   };
 
   const openAttachmentMenu = () => {
-    Alert.alert('Enviar anexo', 'Escolha uma opção', [
-      {
-        text: 'Galeria de fotos',
-        onPress: () => { void pickFromGallery(); },
-      },
-      {
-        text: 'Tirar foto',
-        onPress: () => { void openCamera(); },
-      },
-      {
-        text: 'Arquivo',
-        onPress: () => { void pickDocument(); },
-      },
-      { text: 'Cancelar', style: 'cancel' },
-    ]);
+    setAttachSheetVisible(true);
   };
 
   const pickFromGallery = async () => {
@@ -534,11 +535,10 @@ export function ChatScreen({ navigation, route }: Props) {
         <View style={styles.headerSpacer} />
       </View>
 
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior="padding"
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : insets.top + 56}
-      >
+      {/* Sem KeyboardAvoidingView: o app usa ADJUST_PAN global (App.tsx) para
+          trazer o composer acima do teclado. Um KAV aqui conflitava com o pan
+          e escondia o campo de texto. */}
+      <View style={styles.flex}>
         {loading ? (
           <View style={styles.center}>
             <ActivityIndicator size="large" color={GOLD} />
@@ -565,7 +565,7 @@ export function ChatScreen({ navigation, route }: Props) {
           <View
             style={[
               styles.composer,
-              { paddingBottom: Math.max(insets.bottom, 10) + 6 },
+              { paddingBottom: composerBottom },
             ]}
           >
             {isRecording ? (
@@ -638,13 +638,65 @@ export function ChatScreen({ navigation, route }: Props) {
             </View>
           </View>
         )}
-      </KeyboardAvoidingView>
+      </View>
+
+      {/* Sheet de anexo (padrão do app, no lugar do Alert nativo) */}
+      <Modal
+        visible={attachSheetVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAttachSheetVisible(false)}
+      >
+        <View style={styles.attachOverlay}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setAttachSheetVisible(false)} />
+          <View style={[styles.attachSheet, { paddingBottom: attachSheetBottom }]}>
+            <View style={styles.attachHandle} />
+            <Text style={styles.attachTitle}>Enviar anexo</Text>
+            <TouchableOpacity
+              style={styles.attachRow}
+              activeOpacity={0.8}
+              onPress={() => { setAttachSheetVisible(false); void pickFromGallery(); }}
+            >
+              <View style={styles.attachIcon}><MaterialIcons name="photo-library" size={22} color={COLORS.black} /></View>
+              <Text style={styles.attachRowText}>Galeria de fotos</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.attachRow}
+              activeOpacity={0.8}
+              onPress={() => { setAttachSheetVisible(false); void openCamera(); }}
+            >
+              <View style={styles.attachIcon}><MaterialIcons name="photo-camera" size={22} color={COLORS.black} /></View>
+              <Text style={styles.attachRowText}>Tirar foto</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.attachRow}
+              activeOpacity={0.8}
+              onPress={() => { setAttachSheetVisible(false); void pickDocument(); }}
+            >
+              <View style={styles.attachIcon}><MaterialIcons name="insert-drive-file" size={22} color={COLORS.black} /></View>
+              <Text style={styles.attachRowText}>Arquivo</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.attachCancel} activeOpacity={0.8} onPress={() => setAttachSheetVisible(false)}>
+              <Text style={styles.attachCancelText}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
+  attachOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.45)' },
+  attachSheet: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 20, paddingTop: 10 },
+  attachHandle: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: '#E5E7EB', marginBottom: 14 },
+  attachTitle: { fontSize: 16, fontWeight: '700', color: COLORS.black, marginBottom: 8 },
+  attachRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14 },
+  attachIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  attachRowText: { fontSize: 16, color: COLORS.black, fontWeight: '500' },
+  attachCancel: { marginTop: 6, paddingVertical: 14, alignItems: 'center' },
+  attachCancelText: { fontSize: 16, fontWeight: '600', color: COLORS.neutral700 },
   flex: { flex: 1 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 

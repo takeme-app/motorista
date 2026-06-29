@@ -7,7 +7,6 @@ import {
   ActivityIndicator,
   Alert,
   Dimensions,
-  Switch,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { DriverLocationFocusButton } from '../../components/DriverLocationFocusButton';
@@ -15,7 +14,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useFocusEffect } from '@react-navigation/native';
 import type { ColetasExcursoesStackParamList } from '../../navigation/ColetasExcursoesStack';
+import { boardingCta } from './excursionStatus';
 import { SCREEN_TOP_EXTRA_PADDING } from '../../theme/screenLayout';
 import { googleForwardGeocode } from '@take-me/shared';
 import { supabase } from '../../lib/supabase';
@@ -130,6 +131,10 @@ type ExcursionDetail = {
   clientUserId: string;
   clientAvatarUrl: string | null;
   registeredPassengerCount: number;
+  checkInIdaStartedAt: string | null;
+  checkInVoltaStartedAt: string | null;
+  boardingIdaDoneAt: string | null;
+  boardingVoltaDoneAt: string | null;
 };
 
 const CARD_GOLD = '#C9A227';
@@ -220,46 +225,9 @@ function timelineSteps(status: string): boolean[] {
 }
 
 const TIMELINE_LABELS = ['Pedido feito', 'Pagamento aprovado', 'Embarque confirmado', 'Ônibus partiu'];
-const BOARDING_ACTION_STATUSES = ['approved', 'scheduled', 'in_progress', 'payment_done', 'paid', 'active'];
-
-const BOARDING_SEQ = ['not_embarked', 'embarked', 'disembarked'] as const;
-
-function nextBoardingStatus(cur: string | null | undefined): string | null {
-  const c = cur ?? 'not_embarked';
-  const i = BOARDING_SEQ.indexOf(c as (typeof BOARDING_SEQ)[number]);
-  if (i < 0 || i >= BOARDING_SEQ.length - 1) return null;
-  return BOARDING_SEQ[i + 1]!;
-}
-
-function maskCpf(cpf: string | null | undefined): string {
-  const d = (cpf ?? '').replace(/\D/g, '');
-  if (d.length < 4) return '—';
-  return `***.***.***-${d.slice(-2)}`;
-}
-
-function boardingLabel(kind: 'ida' | 'volta', status: string | null | undefined): string {
-  const s = status ?? 'not_embarked';
-  if (kind === 'ida') {
-    if (s === 'embarked') return 'A bordo (ida)';
-    if (s === 'disembarked') return 'Desembarcou (ida)';
-    return 'Aguardando embarque (ida)';
-  }
-  if (s === 'embarked') return 'A bordo (volta)';
-  if (s === 'disembarked') return 'Desembarcou (volta)';
-  return 'Aguardando embarque (volta)';
-}
-
-type ExcursionPassengerRow = {
-  id: string;
-  full_name: string;
-  cpf: string | null;
-  phone: string | null;
-  age: string | null;
-  gender: string | null;
-  status_departure: string | null;
-  status_return: string | null;
-  observations: string | null;
-};
+// `approved` = aguardando aceite do preparador (mostra Aceitar/Recusar). O embarque
+// só libera depois do aceite (status vira `scheduled`). Por isso `approved` fica fora.
+const BOARDING_ACTION_STATUSES = ['scheduled', 'in_progress', 'payment_done', 'paid', 'active'];
 
 export function DetalhesExcursaoScreen({ navigation, route }: Props) {
   const { excursionId } = route.params;
@@ -274,9 +242,6 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
   /** Fallback para origem só em texto (sem origin_lat no banco). */
   const [geocodedOriginCoord, setGeocodedOriginCoord] = useState<[number, number] | null>(null);
   const [openingChat, setOpeningChat] = useState(false);
-  const [passengers, setPassengers] = useState<ExcursionPassengerRow[]>([]);
-  const [sortPassengersByAge, setSortPassengersByAge] = useState(false);
-  const [passengerUpdatingId, setPassengerUpdatingId] = useState<string | null>(null);
   const [excursionActionLoading, setExcursionActionLoading] = useState(false);
   const excursionMapRef = useRef<GoogleMapsMapRef>(null);
   const [followMyLocation, setFollowMyLocation] = useState(false);
@@ -286,13 +251,17 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
     followRef.current = followMyLocation;
   }, [followMyLocation]);
 
+  const hasLoadedRef = useRef(false);
+
   const load = useCallback(async () => {
-    setLoading(true);
+    if (!hasLoadedRef.current) setLoading(true);
     const { data } = await supabase
       .from('excursion_requests')
       .select(
         [
-          'id, destination, origin, excursion_date, scheduled_departure_at, fleet_type, status, user_id,',
+          'id, origin, destination, excursion_date, scheduled_departure_at, scheduled_return_at, excursion_time,',
+          'check_in_ida_started_at, check_in_volta_started_at, boarding_ida_done_at, boarding_volta_done_at,',
+          'fleet_type, status, user_id,',
           'created_at, confirmed_at, origin_lat, origin_lng, destination_lat, destination_lng',
         ].join(' '),
       )
@@ -302,17 +271,10 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
     if (!data) { setLoading(false); return; }
     const r = data as any;
 
-    const { data: psgRows, error: psgErr } = await supabase
+    const { data: psgRows } = await supabase
       .from('excursion_passengers')
-      .select('id, full_name, cpf, phone, age, gender, status_departure, status_return, observations')
-      .eq('excursion_request_id', r.id)
-      .order('full_name');
-    if (psgErr) {
-      console.warn('[DetalhesExcursao] excursion_passengers', psgErr.message);
-      setPassengers([]);
-    } else {
-      setPassengers((psgRows ?? []) as ExcursionPassengerRow[]);
-    }
+      .select('id')
+      .eq('excursion_request_id', r.id);
 
     let responsible: string | null = null;
     let clientPhone: string | null = null;
@@ -331,7 +293,7 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
     if (!responsible) responsible = 'Cliente';
 
     const depIso = r.scheduled_departure_at ?? r.excursion_date ?? null;
-    const retIso = null;
+    const retIso = r.scheduled_return_at ?? null;
 
     setDetail({
       id: r.id,
@@ -341,7 +303,7 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
       returnTime: retIso,
       transportType: fleetTypeLabel(r.fleet_type),
       responsible,
-      direction: 'Ida',
+      direction: r.check_in_volta_started_at ? 'Retorno' : 'Ida',
       status: r.status ?? 'pending',
       originLat: toFiniteNumber(r.origin_lat),
       originLng: toFiniteNumber(r.origin_lng),
@@ -353,11 +315,17 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
       clientUserId: r.user_id as string,
       clientAvatarUrl,
       registeredPassengerCount: (psgRows ?? []).length,
+      checkInIdaStartedAt: r.check_in_ida_started_at ?? null,
+      checkInVoltaStartedAt: r.check_in_volta_started_at ?? null,
+      boardingIdaDoneAt: r.boarding_ida_done_at ?? null,
+      boardingVoltaDoneAt: r.boarding_volta_done_at ?? null,
     });
+    hasLoadedRef.current = true;
     setLoading(false);
   }, [excursionId]);
 
-  useEffect(() => { load(); }, [load]);
+  // Recarrega ao focar (volta da lista/embarque ou após aceitar) p/ refletir status atual.
+  useFocusEffect(useCallback(() => { void load(); }, [load]));
 
   // GPS: última posição + fix atual + atualizações periódicas (mapa “começa em você”).
   useEffect(() => {
@@ -423,6 +391,7 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
     }
     setOpeningChat(true);
     const res = await ensureExcursionClientConversation({
+      excursionRequestId: detail.id,
       clientUserId: detail.clientUserId,
       participantName: detail.responsible,
       participantAvatar: detail.clientAvatarUrl,
@@ -439,73 +408,31 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
     });
   }, [detail, navigation]);
 
-  const sortedPassengers = useMemo(() => {
-    const list = [...passengers];
-    if (sortPassengersByAge) {
-      list.sort((a, b) => (parseInt(String(a.age ?? ''), 10) || 0) - (parseInt(String(b.age ?? ''), 10) || 0));
-    }
-    return list;
-  }, [passengers, sortPassengersByAge]);
-
-  const idaEmbarkedCount = useMemo(
-    () => passengers.filter((p) => p.status_departure === 'embarked' || p.status_departure === 'disembarked').length,
-    [passengers],
-  );
-
-  const persistPassengerPatch = useCallback(
-    async (id: string, patch: Partial<Pick<ExcursionPassengerRow, 'status_departure' | 'status_return'>>) => {
-      setPassengerUpdatingId(id);
-      const { error } = await supabase
-        .from('excursion_passengers')
-        .update({ ...patch, updated_at: new Date().toISOString() } as never)
-        .eq('id', id);
-      setPassengerUpdatingId(null);
-      if (error) {
-        Alert.alert('Erro', 'Não foi possível atualizar o passageiro.');
-        return;
-      }
-      setPassengers((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
-      // Marca início do check-in de ida/volta (uma única vez) para disparar push ao cliente.
-      if (patch.status_departure) {
-        void supabase
-          .from('excursion_requests')
-          .update({ check_in_ida_started_at: new Date().toISOString() } as never)
-          .eq('id', excursionId)
-          .is('check_in_ida_started_at', null);
-      }
-      if (patch.status_return) {
-        void supabase
-          .from('excursion_requests')
-          .update({ check_in_volta_started_at: new Date().toISOString() } as never)
-          .eq('id', excursionId)
-          .is('check_in_volta_started_at', null);
-      }
-    },
-    [excursionId],
-  );
-
-  const handleStartExcursion = useCallback(async () => {
+  const handleAcceptExcursion = useCallback(async () => {
     if (!detail) return;
     setExcursionActionLoading(true);
     const { error } = await supabase
       .from('excursion_requests')
-      .update({ status: 'in_progress', updated_at: new Date().toISOString() } as never)
+      .update({
+        status: 'scheduled',
+        confirmed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as never)
       .eq('id', detail.id);
     setExcursionActionLoading(false);
     if (error) {
-      Alert.alert('Erro', 'Não foi possível iniciar a excursão.');
+      Alert.alert('Erro', 'Não foi possível aceitar a excursão.');
       return;
     }
-    setDetail((d) => (d ? { ...d, status: 'in_progress' } : d));
+    setDetail((d) => (d ? { ...d, status: 'scheduled' } : d));
   }, [detail]);
 
   const handleCompleteExcursion = useCallback(() => {
     if (!detail) return;
-    Alert.alert('Concluir excursão', 'Confirma que a excursão foi finalizada?', [
-      { text: 'Cancelar', style: 'cancel' },
+    Alert.alert('Concluir excursão', 'Deseja realmente concluir a excursão?', [
+      { text: 'Não', style: 'cancel' },
       {
-        text: 'Concluir',
-        style: 'destructive',
+        text: 'Sim',
         onPress: async () => {
           setExcursionActionLoading(true);
           const { error } = await supabase
@@ -517,11 +444,40 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
             Alert.alert('Erro', 'Não foi possível concluir a excursão.');
             return;
           }
-          setDetail((d) => (d ? { ...d, status: 'completed' } : d));
+          await load();
         },
       },
     ]);
-  }, [detail]);
+  }, [detail, load]);
+
+  const handleRejectExcursion = useCallback(() => {
+    if (!detail) return;
+    Alert.alert(
+      'Recusar excursão',
+      'Tem certeza que deseja recusar esta excursão? O cliente já efetuou o pagamento — o estorno será tratado manualmente.',
+      [
+        { text: 'Voltar', style: 'cancel' },
+        {
+          text: 'Recusar',
+          style: 'destructive',
+          onPress: async () => {
+            setExcursionActionLoading(true);
+            const { error } = await supabase
+              .from('excursion_requests')
+              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+              .eq('id', detail.id);
+            setExcursionActionLoading(false);
+            if (error) {
+              Alert.alert('Erro', 'Não foi possível recusar a excursão.');
+              return;
+            }
+            setDetail((d) => (d ? { ...d, status: 'cancelled' } : d));
+            if (navigation.canGoBack()) navigation.goBack();
+          },
+        },
+      ],
+    );
+  }, [detail, navigation]);
 
   const destCoord = useMemo(() => {
     if (!detail || detail.destLat == null || detail.destLng == null) return null;
@@ -732,6 +688,14 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
   const steps = detail ? timelineSteps(detail.status) : [true, false, false, false];
   const timelineSubs = detail ? timelineSubtitlesForDetail(detail) : ['—', '—', '—', '—'];
   const canBoardingActions = detail ? BOARDING_ACTION_STATUSES.includes(detail.status) : false;
+  const boarding = detail
+    ? boardingCta({
+        check_in_ida_started_at: detail.checkInIdaStartedAt,
+        check_in_volta_started_at: detail.checkInVoltaStartedAt,
+        boarding_ida_done_at: detail.boardingIdaDoneAt,
+        boarding_volta_done_at: detail.boardingVoltaDoneAt,
+      })
+    : null;
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -944,105 +908,55 @@ export function DetalhesExcursaoScreen({ navigation, route }: Props) {
               ) : null}
             </View>
 
-            <View style={[styles.card, styles.passengersCard]}>
-              <View style={styles.passengersHeaderRow}>
-                <Text style={styles.historicoTitle}>Passageiros</Text>
-                <Text style={styles.passengersCountBadge}>
-                  {idaEmbarkedCount} / {passengers.length} embarque (ida)
-                </Text>
-              </View>
-              <View style={styles.sortRow}>
-                <Text style={styles.sortLabel}>Ordenar por idade</Text>
-                <Switch
-                  value={sortPassengersByAge}
-                  onValueChange={setSortPassengersByAge}
-                  trackColor={{ false: '#E5E7EB', true: '#111827' }}
-                  thumbColor="#FFFFFF"
-                />
-              </View>
-              {sortedPassengers.length === 0 ? (
-                <Text style={styles.passengersEmpty}>Nenhum passageiro cadastrado nesta excursão.</Text>
-              ) : (
-                sortedPassengers.map((p) => {
-                  const nextDep = nextBoardingStatus(p.status_departure);
-                  const nextRet = nextBoardingStatus(p.status_return);
-                  const busy = passengerUpdatingId === p.id;
-                  return (
-                    <View key={p.id} style={styles.passengerBlock}>
-                      <Text style={styles.passengerName}>{p.full_name}</Text>
-                      <Text style={styles.passengerMeta}>
-                        CPF {maskCpf(p.cpf)}
-                        {p.phone?.trim() ? ` · ${p.phone.trim()}` : ''}
-                        {p.age?.trim() ? ` · ${p.age.trim()} anos` : ''}
-                      </Text>
-                      {p.observations?.trim() ? (
-                        <Text style={styles.passengerObs} numberOfLines={3}>
-                          {p.observations.trim()}
-                        </Text>
-                      ) : null}
-                      <Text style={styles.passengerStatusLine}>{boardingLabel('ida', p.status_departure)}</Text>
-                      <Text style={styles.passengerStatusLine}>{boardingLabel('volta', p.status_return)}</Text>
-                      <View style={styles.passengerBtnRow}>
-                        <TouchableOpacity
-                          style={[styles.passengerBtn, (!nextDep || busy) && styles.passengerBtnDisabled]}
-                          disabled={!nextDep || busy}
-                          onPress={() => void persistPassengerPatch(p.id, { status_departure: nextDep! })}
-                        >
-                          {busy ? (
-                            <ActivityIndicator size="small" color="#FFFFFF" />
-                          ) : (
-                            <Text style={styles.passengerBtnText}>
-                              {p.status_departure === 'not_embarked'
-                                ? 'Embarcar (ida)'
-                                : p.status_departure === 'embarked'
-                                  ? 'Desembarcar (ida)'
-                                  : 'Ida concluída'}
-                            </Text>
-                          )}
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[styles.passengerBtnOutline, (!nextRet || busy) && styles.passengerBtnDisabled]}
-                          disabled={!nextRet || busy}
-                          onPress={() => void persistPassengerPatch(p.id, { status_return: nextRet! })}
-                        >
-                          <Text style={styles.passengerBtnOutlineText}>
-                            {p.status_return === 'not_embarked'
-                              ? 'Embarcar (volta)'
-                              : p.status_return === 'embarked'
-                                ? 'Desembarcar (volta)'
-                                : 'Volta concluída'}
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  );
-                })
-              )}
-
-              {detail.status === 'scheduled' ? (
+            <View style={styles.card}>
+              {detail.status === 'approved' ? (
+                <>
+                  <TouchableOpacity
+                    style={[styles.excursionActionBtn, excursionActionLoading && { opacity: 0.7 }]}
+                    onPress={() => void handleAcceptExcursion()}
+                    disabled={excursionActionLoading}
+                    activeOpacity={0.85}
+                  >
+                    {excursionActionLoading ? (
+                      <ActivityIndicator color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.excursionActionBtnText}>Aceitar excursão</Text>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.excursionRejectBtn, excursionActionLoading && { opacity: 0.7 }]}
+                    onPress={handleRejectExcursion}
+                    disabled={excursionActionLoading}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.excursionRejectBtnText}>Recusar excursão</Text>
+                  </TouchableOpacity>
+                </>
+              ) : null}
+              {canBoardingActions && boarding ? (
                 <TouchableOpacity
                   style={[styles.excursionActionBtn, excursionActionLoading && { opacity: 0.7 }]}
-                  onPress={() => void handleStartExcursion()}
+                  onPress={() =>
+                    boarding.complete
+                      ? handleCompleteExcursion()
+                      : navigation.navigate('RealizarEmbarques', {
+                          excursionId: detail.id,
+                          phase: boarding.phase,
+                        })
+                  }
                   disabled={excursionActionLoading}
                   activeOpacity={0.85}
                 >
-                  {excursionActionLoading ? (
-                    <ActivityIndicator color="#FFFFFF" />
-                  ) : (
-                    <Text style={styles.excursionActionBtnText}>Iniciar excursão</Text>
-                  )}
+                  <Text style={styles.excursionActionBtnText}>{boarding.label}</Text>
                 </TouchableOpacity>
               ) : null}
-              {detail.status === 'in_progress' ? (
-                <TouchableOpacity
-                  style={[styles.excursionActionBtnSecondary, excursionActionLoading && { opacity: 0.7 }]}
-                  onPress={handleCompleteExcursion}
-                  disabled={excursionActionLoading}
-                  activeOpacity={0.85}
-                >
-                  <Text style={styles.excursionActionBtnSecondaryText}>Concluir excursão</Text>
-                </TouchableOpacity>
-              ) : null}
+              <TouchableOpacity
+                style={styles.excursionActionBtnSecondary}
+                onPress={() => (navigation.canGoBack() ? navigation.goBack() : undefined)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.excursionActionBtnSecondaryText}>Voltar</Text>
+              </TouchableOpacity>
             </View>
           </ScrollView>
       )}
@@ -1327,6 +1241,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   excursionActionBtnText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+  excursionRejectBtn: {
+    marginTop: 10,
+    borderWidth: 1.5,
+    borderColor: '#B24A44',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  excursionRejectBtnText: { fontSize: 15, fontWeight: '700', color: '#B24A44' },
   excursionActionBtnSecondary: {
     marginTop: 10,
     borderWidth: 1.5,

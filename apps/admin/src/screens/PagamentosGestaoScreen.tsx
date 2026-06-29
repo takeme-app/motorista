@@ -18,6 +18,7 @@ import {
   fetchMotoristas,
   fetchBases,
   createBase,
+  updateBasePreparerPricing,
   deletePricingRoute,
   updatePricingRoute,
   fetchPreparadores,
@@ -246,29 +247,60 @@ export default function PagamentosGestaoScreen() {
   const [editEncRow, setEditEncRow] = useState<EncomendaTrechoRow | null>(null);
   const [editEncTipo, setEditEncTipo] = useState('');
   const [editEncValor, setEditEncValor] = useState('');
+  // Valor fixo por tamanho da rota (só linhas de Motorista); vazio = usa o global.
+  const [editEncSizeP, setEditEncSizeP] = useState('');
+  const [editEncSizeM, setEditEncSizeM] = useState('');
+  const [editEncSizeG, setEditEncSizeG] = useState('');
   const abrirEditEnc = useCallback((row: EncomendaTrechoRow) => {
     setEditEncRow(row);
-    setEditEncTipo(row.tipo);
-    setEditEncValor(row.valor);
+    setEditEncTipo(row.tipo === 'Não definido' ? 'Por KM' : row.tipo);
+    setEditEncValor(row.valor === '—' ? '' : row.valor);
     setEditEncOpen(true);
   }, []);
   const fecharEditEnc = useCallback(() => setEditEncOpen(false), []);
   const salvarEditEnc = useCallback(async () => {
     if (editEncRow?.id) {
-      const modeMap: Record<string, string> = { 'Pequena': 'fixed', 'Média': 'fixed', 'Grande': 'fixed', 'Por KM': 'per_km', 'Fixo': 'fixed', 'Diária': 'daily_rate' };
-      const valNum = parseFloat(editEncValor.replace('R$', '').replace('.', '').replace(',', '.').trim()) * 100;
-      await updatePricingRoute(editEncRow.id, { price_cents: Math.round(valNum) });
-      // Refresh data
-      const updated = await fetchPricingRoutes('preparer_shipments');
-      setPricingEncRoutes(updated);
+      const valNum = Math.round(parseFloat(editEncValor.replace('R$', '').replace(/\./g, '').replace(',', '.').trim()) * 100);
+      if (activeTab === 'Encomenda') {
+        // Aba Encomenda = pagamento POR BASE (editEncRow.id é o id da base). Só por km (fixo removido).
+        if (Number.isFinite(valNum) && valNum > 0) {
+          const { error } = await updateBasePreparerPricing(editEncRow.id, {
+            mode: 'per_km',
+            kmCents: valNum,
+            fixedCents: null,
+          });
+          if (error) { window.alert(`Erro ao salvar valor da base: ${error}`); return; }
+          setBasesData(await fetchBases());
+        }
+      } else {
+        // Aba Trecho = pricing_routes (3 categorias); propaga aos worker_routes vinculados (edge).
+        // Valor fixo por tamanho só faz sentido na rota do Motorista (vazio = usa global).
+        const parseSize = (s: string): number | null => {
+          const t = s.trim();
+          if (!t) return null;
+          const c = Math.round(parseFloat(t.replace('R$', '').replace(/\./g, '').replace(',', '.').trim()) * 100);
+          return Number.isFinite(c) && c > 0 ? c : null;
+        };
+        const sizePatch = editEncRow.tipo === 'Motorista'
+          ? {
+              size_price_pequeno_cents: parseSize(editEncSizeP),
+              size_price_medio_cents: parseSize(editEncSizeM),
+              size_price_grande_cents: parseSize(editEncSizeG),
+            }
+          : {};
+        const { error } = await updatePricingRoute(editEncRow.id, { price_cents: valNum, ...sizePatch });
+        if (error) { window.alert(`Erro ao salvar valor do trecho: ${error}`); return; }
+        await refreshTrechoRoutes();
+      }
     }
     setEditEncOpen(false);
-  }, [editEncRow, editEncTipo, editEncValor]);
+  }, [editEncRow, editEncTipo, editEncValor, editEncSizeP, editEncSizeM, editEncSizeG, activeTab]);
   const confirmarRemoveEnc = useCallback(async () => {
     if (editEncRow?.id) {
-      await deletePricingRoute(editEncRow.id);
-      const updated = await fetchPricingRoutes('preparer_shipments');
-      setPricingEncRoutes(updated);
+      // A lista de Trecho mistura as 3 categorias (driver/excursões/encomendas) — refazer todas.
+      const { error } = await deletePricingRoute(editEncRow.id);
+      if (error) { window.alert(`Erro ao remover trecho: ${error}`); return; }
+      await refreshTrechoRoutes();
     }
     setRemoveEncOpen(false);
   }, [editEncRow]);
@@ -411,6 +443,29 @@ export default function PagamentosGestaoScreen() {
   const [ratings, setRatings] = useState<RatingListItem[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
 
+  // Refaz as 3 categorias de pricing_routes que alimentam a lista de Trecho.
+  const refreshTrechoRoutes = useCallback(async () => {
+    const [d, x, e] = await Promise.all([
+      fetchPricingRoutes('driver'),
+      fetchPricingRoutes('preparer_excursions'),
+      fetchPricingRoutes('preparer_shipments'),
+    ]);
+    setPricingDriverRoutes(d);
+    setPricingExcRoutes(x);
+    setPricingEncRoutes(e);
+  }, []);
+
+  // Prefill dos valores por tamanho ao abrir o modal de editar trecho (só linhas de Motorista).
+  useEffect(() => {
+    if (!editEncOpen || editEncRow?.tipo !== 'Motorista') return;
+    const r = pricingDriverRoutes.find((x) => x.id === editEncRow.id);
+    const toBRL = (c: number | null | undefined) =>
+      c != null && Number.isFinite(c) ? (c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
+    setEditEncSizeP(toBRL(r?.size_price_pequeno_cents));
+    setEditEncSizeM(toBRL(r?.size_price_medio_cents));
+    setEditEncSizeG(toBRL(r?.size_price_grande_cents));
+  }, [editEncOpen, editEncRow, pricingDriverRoutes]);
+
   useEffect(() => {
     let cancelled = false;
     Promise.all([
@@ -442,25 +497,51 @@ export default function PagamentosGestaoScreen() {
 
   // ── Computed rows from real Supabase data ─────────────────────────────
   const fmtCents = (c: number) => `R$ ${(c / 100).toFixed(2).replace('.', ',')}`;
+  // Máscara de moeda: só dígitos → R$ X,XX (impede letras/símbolos no campo de valor).
+  const maskBRL = (raw: string): string => {
+    const digits = raw.replace(/\D/g, '');
+    if (!digits) return '';
+    return (parseInt(digits, 10) / 100).toLocaleString('pt-BR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  };
+  // Pagamento do preparador de encomendas é POR BASE: a aba "Encomenda" lista as bases
+  // e o valor (por km / fixo) configurado em cada uma. "Origem"=Base, "Destino"=Cidade.
   const realEncRows: EncomendaTrechoRow[] = useMemo(() =>
-    pricingEncRoutes.map(r => ({
-      id: r.id,
-      codigo: `#${r.id.slice(0, 5)}`,
-      origem: r.origin_address || '—',
-      destino: r.destination_address,
-      tipo: r.pricing_mode === 'per_km' ? 'Por KM' : r.pricing_mode === 'fixed' ? 'Fixo' : 'Diária',
-      valor: fmtCents(r.price_cents),
-    })), [pricingEncRoutes]);
+    basesData.map(b => {
+      const cents = b.preparerPricingMode === 'fixed'
+        ? b.preparerFixedCents
+        : b.preparerPricingMode === 'per_km'
+          ? b.preparerKmPriceCents
+          : null;
+      return {
+        id: b.id,
+        codigo: `#${b.id.slice(0, 5)}`,
+        origem: b.name,
+        destino: b.city || '—',
+        tipo: b.preparerPricingMode === 'per_km' ? 'Por KM' : b.preparerPricingMode === 'fixed' ? 'Fixo' : 'Não definido',
+        valor: cents != null ? fmtCents(cents) : '—',
+      };
+    }), [basesData]);
 
-  const realTrechoRows: EncomendaTrechoRow[] = useMemo(() =>
-    pricingDriverRoutes.map(r => ({
-      id: r.id,
-      codigo: `#${r.id.slice(0, 5)}`,
-      origem: r.origin_address || '—',
-      destino: r.destination_address,
-      tipo: r.pricing_mode === 'per_km' ? 'Por KM' : r.pricing_mode === 'fixed' ? 'Fixo' : 'Viagem',
-      valor: fmtCents(r.price_cents),
-    })), [pricingDriverRoutes]);
+  const realTrechoRows: EncomendaTrechoRow[] = useMemo(() => {
+    // "Tipo" = categoria do trabalhador (role_type), não o modo de preço.
+    const mapRows = (rows: PricingRouteRow[], categoria: string): EncomendaTrechoRow[] =>
+      rows.map(r => ({
+        id: r.id,
+        codigo: `#${r.id.slice(0, 5)}`,
+        origem: r.origin_address || '—',
+        destino: r.destination_address,
+        tipo: categoria,
+        valor: fmtCents(r.price_cents),
+      }));
+    return [
+      ...mapRows(pricingDriverRoutes, 'Motorista'),
+      ...mapRows(pricingExcRoutes, 'Preparador de excursões'),
+      ...mapRows(pricingEncRoutes, 'Preparador de encomendas'),
+    ];
+  }, [pricingDriverRoutes, pricingExcRoutes, pricingEncRoutes]);
 
   const realAdicRows: AdicionalRow[] = useMemo(() =>
     surcharges.map(s => ({
@@ -1027,13 +1108,21 @@ export default function PagamentosGestaoScreen() {
 
   const encTableToolbar = React.createElement('div', {
     style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 64, padding: '16px 28px', background: '#f6f6f6', borderRadius: '16px 16px 0 0' },
-  }, React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Lista de trechos de encomendas'));
+  }, React.createElement('p', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Pagamento do preparador por base'));
 
   const encTableHeader = React.createElement('div', {
     style: { display: 'flex', height: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9', padding: '0 16px', alignItems: 'center' },
   }, ...encomendaCols.map((c) => React.createElement('div', {
     key: c.label, style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 6px', display: 'flex', alignItems: 'center', height: '100%' },
   }, c.label)));
+
+  // Cabeçalho da aba Encomenda (por base): "Origem"→Base, "Destino"→Cidade, sem Remover.
+  const baseEncColLabels = ['Código (ID)', 'Base', 'Cidade', 'Tipo', 'Valor', 'Editar'];
+  const encBaseTableHeader = React.createElement('div', {
+    style: { display: 'flex', height: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9', padding: '0 16px', alignItems: 'center' },
+  }, ...encomendaCols.map((c, i) => React.createElement('div', {
+    key: c.label, style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 6px', display: 'flex', alignItems: 'center', height: '100%' },
+  }, baseEncColLabels[i])));
 
   const encTableRowEls = activeEncRows.map((row, idx) =>
     React.createElement('div', {
@@ -1045,14 +1134,13 @@ export default function PagamentosGestaoScreen() {
       React.createElement('div', { style: { ...cellBase, flex: encomendaCols[3].flex, minWidth: encomendaCols[3].minWidth, fontWeight: 500 } }, row.tipo),
       React.createElement('div', { style: { ...cellBase, flex: encomendaCols[4].flex, minWidth: encomendaCols[4].minWidth, fontWeight: 600 } }, row.valor),
       React.createElement('div', { style: { flex: encomendaCols[5].flex, minWidth: encomendaCols[5].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 } },
-        React.createElement('button', { type: 'button', onClick: () => abrirEditEnc(row), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Editar' }, pencilSvg),
-        React.createElement('button', { type: 'button', onClick: () => abrirRemoveEnc(row), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Remover' }, trashSvg))));
+        React.createElement('button', { type: 'button', onClick: () => abrirEditEnc(row), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Editar valor da base' }, pencilSvg))));
 
   const encTableSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' },
   }, React.createElement('div', { style: { background: '#fff', borderRadius: 16, overflow: 'hidden', width: '100%' } },
     encTableToolbar,
-    React.createElement('div', { style: { width: '100%', overflowX: 'auto' as const } }, encTableHeader, ...encTableRowEls)));
+    React.createElement('div', { style: { width: '100%', overflowX: 'auto' as const } }, encBaseTableHeader, ...encTableRowEls)));
 
   // ── Trecho table (reuses encomenda cols but with trechoRows) ────────
   const trechoTableToolbar = React.createElement('div', {
@@ -1324,8 +1412,8 @@ export default function PagamentosGestaoScreen() {
           React.createElement('div', { style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 24, width: '100%' } },
             React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
               React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
-                React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.25, ...font } }, 'Editar valor de encomenda'),
-                React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, lineHeight: 1.5, ...font } }, `Atualize o tipo e o valor da encomenda ${editEncRow?.codigo ?? ''}`)),
+                React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, lineHeight: 1.25, ...font } }, activeTab === 'Encomenda' ? 'Editar valor da base' : 'Editar valor do trecho'),
+                React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, lineHeight: 1.5, ...font } }, activeTab === 'Encomenda' ? `Atualize o tipo e o valor da base ${editEncRow?.codigo ?? ''}` : `Atualize o valor do trecho ${editEncRow?.codigo ?? ''}`)),
               React.createElement('button', {
                 type: 'button', onClick: fecharEditEnc, 'aria-label': 'Fechar',
                 style: { width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0 },
@@ -1333,29 +1421,31 @@ export default function PagamentosGestaoScreen() {
                 React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))))),
           // Form
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
-            // Tipo
-            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' } },
-              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Tipo'),
-              React.createElement('div', { style: { position: 'relative' as const, width: '100%' } },
-                React.createElement('select', {
-                  value: editEncTipo,
-                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setEditEncTipo(e.target.value),
-                  style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', boxSizing: 'border-box' as const, appearance: 'none' as const, WebkitAppearance: 'none' as const, cursor: 'pointer', ...font },
-                },
-                  React.createElement('option', { value: 'Pequena' }, 'Pequena'),
-                  React.createElement('option', { value: 'Média' }, 'Média'),
-                  React.createElement('option', { value: 'Grande' }, 'Grande')),
-                React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { position: 'absolute' as const, right: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } },
-                  React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })))),
+            // Tipo removido: base (encomenda) é sempre Por KM; trecho de motorista não usa tipo.
             // Valor
             React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' } },
               React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Valor'),
               React.createElement('input', {
-                type: 'text', value: editEncValor,
-                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEditEncValor(e.target.value),
+                type: 'text', inputMode: 'decimal', value: editEncValor,
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEditEncValor(maskBRL(e.target.value)),
                 placeholder: 'R$ 75,00',
                 style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: editEncValor ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
-              }))),
+              })),
+            // Valor fixo por tamanho (só rota de Motorista; vazio = usa o global)
+            editEncRow?.tipo === 'Motorista'
+              ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' } },
+                React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Valor fixo por tamanho (sobrepõe o global)'),
+                React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Somado ao motorista por encomenda neste trecho. Em branco, usa o global.'),
+                ...([['Encomenda pequena (R$)', editEncSizeP, setEditEncSizeP], ['Encomenda média (R$)', editEncSizeM, setEditEncSizeM], ['Encomenda grande (R$)', editEncSizeG, setEditEncSizeG]] as const).map(([lbl, val, set]) =>
+                  React.createElement('div', { key: lbl, style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+                    React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#0d0d0d', ...font } }, lbl),
+                    React.createElement('input', {
+                      type: 'text', inputMode: 'decimal', value: val,
+                      onChange: (e: React.ChangeEvent<HTMLInputElement>) => set(maskBRL(e.target.value)),
+                      placeholder: 'Usa global',
+                      style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: val ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
+                    }))))
+              : null),
           // CTA
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
             React.createElement('button', {

@@ -174,6 +174,34 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Promoção de excursão: o desconto incide no valor que o CLIENTE paga. A plataforma
+    // absorve (cap no admin_earning para o repasse do worker permanecer intacto). Mantemos
+    // o orçamento manual (não mexe em total/worker/admin); só gravamos promotion_id +
+    // promo_discount_cents e cobramos o líquido.
+    let discountCents = 0;
+    let promotionId: string | null = null;
+    try {
+      const { data: promo } = await admin.rpc("apply_active_promotion", {
+        p_order_type: "excursions",
+        p_user_id: userId,
+        p_amount_cents: amountCents,
+      });
+      const promoRow = (Array.isArray(promo) ? promo[0] : promo) as
+        | { promotion_id?: string | null; promo_discount_cents?: number | null }
+        | null;
+      if (promoRow) {
+        const adminCap = Math.max(0, Number(s.admin_earning_cents ?? 0));
+        discountCents = Math.max(0, Math.min(Math.floor(Number(promoRow.promo_discount_cents) || 0), adminCap));
+        promotionId = promoRow.promotion_id ?? null;
+      }
+    } catch (_e) {
+      /* sem promoção ativa */
+    }
+    const chargeCents = Math.max(1, amountCents - discountCents);
+    const promoUpdate: Record<string, unknown> = discountCents > 0
+      ? { promo_discount_cents: discountCents, ...(promotionId ? { promotion_id: promotionId } : {}) }
+      : {};
+
     // Metodo de pagamento: prioriza o que veio no body; fallback pro salvo na row.
     const resolvedMethod = paymentMethodChoice ?? s.payment_method;
     if (!resolvedMethod || !["credit_card", "debit_card", "pix"].includes(resolvedMethod)) {
@@ -222,7 +250,7 @@ Deno.serve(async (req) => {
         );
       }
       const pixParams = new URLSearchParams({
-        amount: String(amountCents),
+        amount: String(chargeCents),
         currency: "brl",
         customer: customerId,
         "payment_method_types[]": "pix",
@@ -251,6 +279,7 @@ Deno.serve(async (req) => {
           .update({
             stripe_payment_intent_id: piPix.id,
             payment_method: resolvedMethod,
+            ...promoUpdate,
             updated_at: new Date().toISOString(),
           })
           .eq("id", excursionId);
@@ -316,7 +345,7 @@ Deno.serve(async (req) => {
     }
 
     const piParams = new URLSearchParams({
-      amount: String(amountCents),
+      amount: String(chargeCents),
       currency: "brl",
       customer: customerId,
       payment_method: stripePaymentMethodId,
@@ -356,6 +385,7 @@ Deno.serve(async (req) => {
         .update({
           stripe_payment_intent_id: pi.id,
           payment_method: resolvedMethod,
+          ...promoUpdate,
           updated_at: new Date().toISOString(),
         })
         .eq("id", excursionId);

@@ -32,37 +32,6 @@ function getRecordFromBody(body: any): Record<string, unknown> | null {
   return null;
 }
 
-/** Converte `notifications.data` (jsonb) em mapa string→string (FCM) e lê metadados de colapso/tag. */
-function parseNotificationDataJson(record: Record<string, unknown>): {
-  flat: Record<string, string>;
-  fcmAndroidTag?: string;
-  fcmCollapseKey?: string;
-  fcmDataOnly: boolean;
-} {
-  const raw = record.data;
-  let obj: Record<string, unknown> = {};
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    obj = raw as Record<string, unknown>;
-  } else if (typeof raw === "string") {
-    try {
-      const p = JSON.parse(raw);
-      if (p && typeof p === "object" && !Array.isArray(p)) obj = p as Record<string, unknown>;
-    } catch {
-      /* manter vazio */
-    }
-  }
-  const fcmAndroidTag = obj.fcm_android_tag != null ? String(obj.fcm_android_tag) : undefined;
-  const fcmCollapseKey = obj.fcm_collapse_key != null ? String(obj.fcm_collapse_key) : undefined;
-  const fcmDataOnly = obj.fcm_data_only === true || obj.fcm_data_only === "true";
-  const flat: Record<string, string> = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (v == null) continue;
-    if (typeof v === "object") flat[k] = JSON.stringify(v);
-    else flat[k] = String(v);
-  }
-  return { flat, fcmAndroidTag, fcmCollapseKey, fcmDataOnly };
-}
-
 async function getAccessToken(clientEmail: string, privateKey: string): Promise<string> {
   return await new Promise((resolve, reject) => {
     const jwtClient = new JWT({
@@ -76,29 +45,6 @@ async function getAccessToken(clientEmail: string, privateKey: string): Promise<
       resolve(tokens.access_token);
     });
   });
-}
-
-/** Resposta HTTP v1 da FCM: token inválido/desinstalado — remover linha em profile_fcm_tokens. */
-function fcmErrorIndicatesStaleToken(resJson: unknown): boolean {
-  if (!resJson || typeof resJson !== "object") return false;
-  const root = resJson as { error?: unknown };
-  const err = root.error;
-  if (!err || typeof err !== "object") return false;
-  const e = err as { status?: string; message?: string; details?: unknown[] };
-  if (e.status === "NOT_FOUND") return true;
-  const details = e.details;
-  if (Array.isArray(details)) {
-    for (const d of details) {
-      if (d && typeof d === "object" && (d as { errorCode?: string }).errorCode === "UNREGISTERED") {
-        return true;
-      }
-    }
-  }
-  if (typeof e.message === "string") {
-    if (/Requested entity was not found/i.test(e.message)) return true;
-    if (/not a valid FCM registration token/i.test(e.message)) return true;
-  }
-  return false;
 }
 
 Deno.serve(async (req) => {
@@ -138,6 +84,14 @@ Deno.serve(async (req) => {
 
     if (payload?.table && payload.table !== "notifications") {
       return json(200, { ok: true, info: "Ignored: other table", error_id });
+    }
+
+    // Só envia push em INSERT. O trigger `notifications_push` dispara em
+    // AFTER INSERT OR UPDATE; sem este guard, qualquer UPDATE da linha
+    // (ex.: marcar como lida -> read_at) reenviava o MESMO push, gerando
+    // notificação duplicada no device.
+    if (payload?.type === "UPDATE" || payload?.type === "DELETE") {
+      return json(200, { ok: true, info: `Ignored: ${payload.type} (no re-send)`, error_id });
     }
 
     const record = getRecordFromBody(payload);
@@ -190,62 +144,77 @@ Deno.serve(async (req) => {
 
     const title = String(record.title ?? "Nova notificação");
     const bodyText = record.message != null ? String(record.message) : "";
-    const parsed = parseNotificationDataJson(record);
     const customData: Record<string, string> = {
       notification_id: String(record.id ?? ""),
       category: String(record.category ?? ""),
       target_app_slug: targetAppSlug,
       read_at: record.read_at != null ? String(record.read_at) : "",
       created_at: String(record.created_at ?? ""),
-      ...parsed.flat,
     };
+
+    // Deeplink: `notifications.data` guarda `{ route, params }`. O FCM só aceita
+    // valores string em `data`, então enviamos `route` como string e `params`
+    // como JSON string (o parser dos apps já desserializa params string).
+    // Sem isto, o app recebe a push mas não sabe para onde navegar ao tocar.
+    let deeplink: Record<string, unknown> | null = null;
+    const rawData = record.data;
+    if (rawData && typeof rawData === "object") {
+      deeplink = rawData as Record<string, unknown>;
+    } else if (typeof rawData === "string" && rawData.trim()) {
+      try {
+        const parsed = JSON.parse(rawData);
+        if (parsed && typeof parsed === "object") {
+          deeplink = parsed as Record<string, unknown>;
+        }
+      } catch {
+        /* data não era JSON válido — segue sem deeplink */
+      }
+    }
+    if (deeplink && typeof deeplink.route === "string" && deeplink.route.trim()) {
+      customData.route = deeplink.route.trim();
+      if (deeplink.params != null) {
+        customData.params =
+          typeof deeplink.params === "string"
+            ? deeplink.params
+            : JSON.stringify(deeplink.params);
+      }
+    }
 
     const fcmUrl = `https://fcm.googleapis.com/v1/projects/${GOOGLE_PROJECT_ID}/messages:send`;
     const results: unknown[] = [];
 
-    // Channel id precisa bater com o criado em runtime por cada app via
-    // Notifee (react-native-notify-kit): garante que o FCM em background e
-    // o display local em foreground usem o mesmo canal HIGH, evitando canais
-    // duplicados e "heads-up" faltando no Android.
-    const androidChannelId =
-      targetAppSlug === "motorista" ? "motorista-default" : "cliente-default";
-
     for (const token of tokens) {
-      const androidNotif: Record<string, unknown> = {
-        sound: "default",
-        channel_id: androidChannelId,
+      // Android: data-only (SEM o bloco `notification`) — o sistema NÃO auto-exibe
+      // na bandeja; o app renderiza exatamente 1x via Notifee (foreground onMessage
+      // + setBackgroundMessageHandler). Isso elimina a dupla (bandeja do sistema +
+      // Notifee). title/body viajam no `data` (display_title/display_body), que o app
+      // já lê. iOS: alerta via apns (sem `content-available`, p/ não acionar o handler
+      // de background no iOS e evitar dupla lá também).
+      const dataPayload: Record<string, string> = {
+        ...customData,
+        display_title: title,
+        display_body: bodyText,
+        // id estável p/ o Notifee (substitui/colapsa em vez de empilhar duplicado).
+        fcm_android_tag: String(record.id ?? ""),
       };
-      if (parsed.fcmAndroidTag) {
-        androidNotif.tag = parsed.fcmAndroidTag;
-      }
-
-      const messageInner: Record<string, unknown> = parsed.fcmDataOnly
-        ? {
+      const messagePayload = {
+        message: {
           token,
-          data: {
-            ...customData,
-            display_title: title,
-            display_body: bodyText,
-          },
+          data: dataPayload,
           android: {
             priority: "HIGH",
-            ...(parsed.fcmCollapseKey || parsed.fcmAndroidTag
-              ? { collapse_key: parsed.fcmCollapseKey ?? parsed.fcmAndroidTag }
-              : {}),
           },
-        }
-        : {
-          token,
-          notification: { title, body: bodyText },
-          data: customData,
-          android: {
-            priority: "HIGH",
-            notification: androidNotif,
-            ...(parsed.fcmCollapseKey ? { collapse_key: parsed.fcmCollapseKey } : {}),
+          apns: {
+            headers: { "apns-priority": "10" },
+            payload: {
+              aps: {
+                alert: { title, body: bodyText },
+                sound: "default",
+              },
+            },
           },
-        };
-
-      const messagePayload = { message: messageInner };
+        },
+      };
 
       const r = await fetch(fcmUrl, {
         method: "POST",
@@ -264,22 +233,13 @@ Deno.serve(async (req) => {
       }
       if (!r.ok) {
         results.push({ token: token.slice(0, 12) + "...", error: resJson });
-        if (fcmErrorIndicatesStaleToken(resJson)) {
-          const { error: delErr } = await supabase.from("profile_fcm_tokens").delete().eq("fcm_token", token);
-          if (delErr) {
-            console.error("dispatch-notification-fcm remove stale token", delErr.message, error_id);
-          }
-        } else {
-          console.error("dispatch-notification-fcm fcm send failed", error_id, resJson);
-        }
       } else {
         results.push({ token: token.slice(0, 12) + "...", ok: true });
       }
     }
 
     const anyFail = results.some((x: any) => x && x.error);
-    // 200: webhook tratado; falha de entrega fica em ok / results (502 confundia gateway e gerava retries).
-    return json(200, {
+    return json(anyFail ? 502 : 200, {
       ok: !anyFail,
       sent: tokens.length,
       results,

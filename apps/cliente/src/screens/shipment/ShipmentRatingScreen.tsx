@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -62,7 +63,7 @@ export function ShipmentRatingScreen({ navigation, route }: Props) {
         <View style={styles.headerSpacer} />
       </View>
 
-      <KeyboardAvoidingView style={styles.keyboardAvoid} behavior="padding">
+      <KeyboardAvoidingView style={styles.keyboardAvoid} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}

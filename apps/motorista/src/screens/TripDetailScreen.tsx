@@ -9,17 +9,18 @@ import {
   Pressable,
   Animated,
   Platform,
-  Alert,
   Linking,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
+import { useAppAlert } from '../contexts/AppAlertContext';
 import { invokeRefundJourneyStartNotAccepted } from '../lib/refundJourneyStartNotAccepted';
 import { closeConversationsForScheduledTrip } from '../lib/closeTripConversations';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
@@ -458,6 +459,8 @@ function SupportModal({ visible, onClose }: { visible: boolean; onClose: () => v
 
 export function TripDetailScreen({ route, navigation }: Props) {
   const { tripId } = route.params;
+  const { showAlert } = useAppAlert();
+  const bottomInset = useBottomSafeInset({ extra: 8 });
 
   const [loadingTrip, setLoadingTrip] = useState(true);
   const [trip, setTrip] = useState<Trip | null>(null);
@@ -636,7 +639,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
     const canStart =
       acceptedBooking || acceptedShipment || hasAcceptedDependent;
     if (!canStart) {
-      Alert.alert(
+      showAlert(
         'Aceite antes de iniciar',
         'É necessário ter pelo menos um passageiro, dependente ou encomenda aceito nesta viagem.',
       );
@@ -648,7 +651,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
         data: { user },
       } = await supabase.auth.getUser();
       if (!user?.id) {
-        Alert.alert('Erro', 'Sessão inválida. Faça login novamente.');
+        showAlert('Erro', 'Sessão inválida. Faça login novamente.');
         return;
       }
       const { data: otherInProgress } = await supabase
@@ -661,35 +664,31 @@ export function TripDetailScreen({ route, navigation }: Props) {
         .limit(1)
         .maybeSingle();
       if (otherInProgress?.id) {
-        Alert.alert(
+        showAlert(
           'Viagem em andamento',
           'Já existe uma viagem iniciada. Finalize-a antes de iniciar outra.',
         );
         return;
       }
 
-      // Bloqueia o "Iniciar viagem" enquanto houver encomenda com base que ainda
-      // não foi entregue à base E o handoff do preparador não expirou (faltam mais
-      // de 1h para a partida — a base ainda pode receber a encomenda).
-      // Após 1h sem chegar à base, o cron marca `preparer_handoff_expired_at` e
-      // a rota é redirecionada para a casa do cliente — aí o motorista pode iniciar.
-      const { data: pendingBaseShipments } = await supabase
-        .from('shipments')
-        .select('id, recipient_name')
-        .eq('scheduled_trip_id', trip.id)
-        .eq('driver_id', user.id)
-        .not('base_id', 'is', null)
-        .is('preparer_handoff_expired_at', null)
-        .is('delivered_to_base_at', null)
-        .in('status', ['confirmed', 'in_progress'])
-        .limit(3);
-      if (pendingBaseShipments && pendingBaseShipments.length > 0) {
-        const count = pendingBaseShipments.length;
-        Alert.alert(
-          'Aguarde a encomenda chegar à base',
-          count === 1
-            ? 'Há 1 encomenda que ainda não foi entregue à base. Aguarde o preparador levar — ou, se passar de 1h antes da partida sem entrega, a rota muda automaticamente para você buscar com o cliente.'
-            : `Há ${count} encomendas que ainda não foram entregues à base. Aguarde o preparador levar — ou, se passar de 1h antes da partida sem entrega, a rota muda automaticamente para você buscar com o cliente.`,
+      // Defense-in-depth: confere status atual no banco (pode ter sido finalizada/cancelada
+      // por admin ou outra sessão entre o load desta tela e o tap).
+      const { data: currentTrip } = await supabase
+        .from('scheduled_trips')
+        .select('status')
+        .eq('id', trip.id)
+        .maybeSingle<{ status: string }>();
+      if (currentTrip?.status === 'completed') {
+        showAlert(
+          'Viagem já finalizada',
+          'Esta viagem já foi finalizada. Crie uma nova viagem para receber novas reservas.',
+        );
+        return;
+      }
+      if (currentTrip?.status === 'cancelled') {
+        showAlert(
+          'Viagem cancelada',
+          'Esta viagem foi cancelada e não pode ser reativada.',
         );
         return;
       }
@@ -706,20 +705,22 @@ export function TripDetailScreen({ route, navigation }: Props) {
         )
         .eq('id', trip.id);
       if (error) {
-        // Trigger backend `block_start_trip_when_shipment_with_base_pending`
-        // lança RAISE EXCEPTION com message='shipment_with_base_not_delivered_yet'
-        // quando há encomenda com base ainda não entregue e dentro da janela de 1h.
         const msg = String((error as { message?: string }).message ?? '');
-        const hint = String((error as { hint?: string }).hint ?? '');
-        if (msg.includes('shipment_with_base_not_delivered_yet')) {
-          Alert.alert(
-            'Aguarde a encomenda chegar à base',
-            hint ||
-              'Há encomenda com base que ainda não foi entregue. Aguarde o preparador levar — ou, se passar de 1h antes da partida sem entrega, a rota muda automaticamente para você buscar com o cliente.',
+        if (msg.includes('scheduled_trip_completed_is_final')) {
+          showAlert(
+            'Viagem já finalizada',
+            'Esta viagem já foi finalizada. Crie uma nova viagem para receber novas reservas.',
           );
           return;
         }
-        Alert.alert('Erro', msg || 'Não foi possível iniciar a viagem. Tente novamente.');
+        if (msg.includes('scheduled_trip_cancelled_is_final')) {
+          showAlert(
+            'Viagem cancelada',
+            'Esta viagem foi cancelada e não pode ser reativada.',
+          );
+          return;
+        }
+        showAlert('Erro', msg || 'Não foi possível iniciar a viagem. Tente novamente.');
         return;
       }
       void invokeRefundJourneyStartNotAccepted(trip.id);
@@ -805,7 +806,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
         body: { scheduled_trip_id: trip.id },
       });
       if (error) {
-        Alert.alert(
+        showAlert(
           'Erro',
           error.message ?? 'Não foi possível cancelar a viagem. Tente novamente.',
         );
@@ -818,7 +819,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
         error?: string;
       };
       if (payload.error) {
-        Alert.alert('Erro', payload.error);
+        showAlert('Erro', payload.error);
         return;
       }
       await closeConversationsForScheduledTrip(trip.id);
@@ -828,7 +829,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
       const penalty = Number(payload.penalty_cents ?? 0);
       if (refunded > 0 || penalty > 0) {
         const penaltyBrl = `R$ ${(penalty / 100).toFixed(2).replace('.', ',')}`;
-        Alert.alert(
+        showAlert(
           'Viagem cancelada',
           `${refunded} ${refunded === 1 ? 'passageiro reembolsado' : 'passageiros reembolsados'} integralmente.${
             penalty > 0 ? `\n\nMulta registrada: ${penaltyBrl} — será descontada dos próximos ganhos.` : ''
@@ -836,7 +837,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
         );
       }
     } catch (e) {
-      Alert.alert(
+      showAlert(
         'Erro',
         e instanceof Error ? e.message : 'Erro desconhecido ao cancelar a viagem.',
       );
@@ -891,6 +892,16 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const totalPax = bookingsInTrip.reduce((s, b) => s + (b.passenger_count ?? 0), 0);
   const totalBags = bookingsInTrip.reduce((s, b) => s + (b.bags_count ?? 0), 0);
   const totalEncomendas = shipments.length;
+  const totalDependentes = dependentShipments.length;
+  // Resumo de tipo (Viagem / Encomenda / Dependente / Misto) + partes do subtítulo.
+  const tripSubtitleParts: string[] = [];
+  if (totalPax > 0) tripSubtitleParts.push(`${totalPax} passageiro${totalPax !== 1 ? 's' : ''}`);
+  if (totalEncomendas > 0) tripSubtitleParts.push(`${totalEncomendas} encomenda${totalEncomendas !== 1 ? 's' : ''}`);
+  if (totalDependentes > 0) tripSubtitleParts.push(`${totalDependentes} dependente${totalDependentes !== 1 ? 's' : ''}`);
+  if (tripSubtitleParts.length === 0 && totalBags > 0) tripSubtitleParts.push(`${totalBags} pacote${totalBags !== 1 ? 's' : ''}`);
+  const tripKindCount = [totalPax > 0, totalEncomendas > 0, totalDependentes > 0].filter(Boolean).length;
+  const tripKindLabel =
+    tripKindCount > 1 ? 'Misto' : totalEncomendas > 0 ? 'Encomenda' : totalDependentes > 0 ? 'Dependente' : 'Viagem';
   const totalRevenueCents =
     confirmedTripBookings.reduce(
       (s, b) => s + amountForDriverTotal(b.amount_cents, b.worker_earning_cents ?? null),
@@ -1129,15 +1140,18 @@ export function TripDetailScreen({ route, navigation }: Props) {
           {/* Status + code + date */}
           <StatusBadge status={trip.status} journeyStarted={journeyStarted} />
 
-          <Text style={styles.tripCode}>ID da Viagem: {tripCode(trip.id)}</Text>
+          <View style={styles.tripCodeRow}>
+            <Text style={styles.tripCode}>ID da Viagem: {tripCode(trip.id)}</Text>
+            <View style={styles.kindChip}>
+              <Text style={styles.kindChipText}>{tripKindLabel}</Text>
+            </View>
+          </View>
           <Text style={styles.dateLabel}>{formatDateTime(trip.departure_at)}</Text>
 
-          {/* Subtitle */}
-          <Text style={styles.subtitle}>
-            {totalPax > 0 ? `${totalPax} passageiro${totalPax !== 1 ? 's' : ''}` : ''}
-            {totalPax > 0 && totalEncomendas > 0 ? ' • ' : ''}
-            {totalEncomendas > 0 ? `${totalEncomendas} encomenda${totalEncomendas !== 1 ? 's' : ''}` : ''}
-          </Text>
+          {/* Subtitle: passageiros / encomendas / dependentes */}
+          {tripSubtitleParts.length > 0 && (
+            <Text style={styles.subtitle}>{tripSubtitleParts.join(' • ')}</Text>
+          )}
 
           {(totalBags > 0 || bagsCapacity > 0) && (
             <Text style={styles.bagCapacity}>
@@ -1477,13 +1491,13 @@ export function TripDetailScreen({ route, navigation }: Props) {
 
       {/* ── Fixed bottom actions ─────────────────────────────────────────────── */}
       {!isCompleted && trip.status !== 'cancelled' && (
-        <View style={styles.bottomActions}>
+        <View style={[styles.bottomActions, { paddingBottom: bottomInset }]}>
           {showStartButton && (
             <TouchableOpacity
               style={[styles.btnStart, !canStartTrip && styles.btnStartMuted]}
               onPress={() => {
                 if (!canStartTrip) {
-                  Alert.alert(
+                  showAlert(
                     'Aceite antes de iniciar',
                     'É necessário ter pelo menos um passageiro, dependente ou encomenda aceito nesta viagem.',
                   );
@@ -1621,7 +1635,10 @@ const styles = StyleSheet.create({
   statusBadgeText: { fontSize: 13, fontWeight: '600' },
 
   // Trip code + date
-  tripCode: { fontSize: 22, fontWeight: '800', color: '#111827', marginBottom: 2 },
+  tripCode: { fontSize: 22, fontWeight: '800', color: '#111827', marginBottom: 2, flexShrink: 1 },
+  tripCodeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  kindChip: { backgroundColor: '#F3F4F6', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  kindChipText: { fontSize: 12, fontWeight: '700', color: '#374151' },
   tripIdFull: { fontSize: 11, color: '#9CA3AF', marginBottom: 4, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
   dateLabel: { fontSize: 14, color: '#6B7280', marginBottom: 6 },
   subtitle: { fontSize: 14, color: '#374151', marginBottom: 2 },
@@ -1828,7 +1845,6 @@ const styles = StyleSheet.create({
   // Bottom actions
   bottomActions: {
     paddingHorizontal: 20,
-    paddingBottom: Platform.OS === 'ios' ? 32 : 24,
     paddingTop: 12,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,

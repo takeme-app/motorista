@@ -5,11 +5,12 @@ import {
   TouchableOpacity,
   StyleSheet,
   Pressable,
-  KeyboardAvoidingView,
   Platform,
   ScrollView,
   Animated,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { useBottomSafeInset } from '@take-me/shared';
 import { Text } from '../Text';
 import { useBottomSheetDrag } from '../../hooks/useBottomSheetDrag';
 
@@ -38,15 +39,16 @@ export function ProfileModalShell({
   const prevVisible = useRef(false);
   if (visible && !prevVisible.current) { resetDrag(); }
   prevVisible.current = visible;
+  const bottomInset = useBottomSafeInset({ extra: Platform.OS === 'ios' ? 8 : 16 });
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior="padding"
+        behavior="height"
       >
         <Pressable style={styles.overlay} onPress={onClose} />
-        <Animated.View style={[styles.sheet, { transform: [{ translateY: dragY }] }]}>
+        <Animated.View style={[styles.sheet, { paddingBottom: bottomInset, transform: [{ translateY: dragY }] }]}>
           <View style={styles.handleArea} {...panHandlers}>
             <View style={styles.sheetHandle} />
           </View>
@@ -89,7 +91,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    paddingBottom: Platform.OS === 'ios' ? 34 : 24,
     paddingHorizontal: 22,
     paddingTop: 0,
     maxHeight: '88%',
