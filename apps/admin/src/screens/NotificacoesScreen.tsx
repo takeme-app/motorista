@@ -7,13 +7,59 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { webStyles, searchIconSvg } from '../styles/webStyles';
 import {
   fetchAllNotifications,
-  createNotificationForUser,
+  createNotificationForUsers,
   createNotificationBroadcast,
   deleteNotification,
+  fetchPassageiros,
+  fetchMotoristas,
 } from '../data/queries';
 import type { NotificationAdminRow } from '../data/queries';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
+
+// Rótulos em português para exibição. As chaves (slugs em inglês) são os valores
+// reais gravados no backend e NÃO devem mudar — só o texto mostrado ao usuário.
+const CATEGORY_LABELS: Record<string, string> = {
+  travel_updates: 'Atualizações de viagem',
+  trip_started: 'Viagem iniciada',
+  trip_completed: 'Viagem concluída',
+  trip_closed: 'Viagem encerrada',
+  trip_upcoming_1h: 'Viagem em 1 hora',
+  payment_received: 'Pagamento recebido',
+  payment: 'Pagamento',
+  activity_status_changed: 'Mudança de status',
+  shipments_deliveries: 'Encomendas e entregas',
+  shipment: 'Encomenda',
+  shipment_cancelled_by_passenger: 'Encomenda cancelada pelo passageiro',
+  account: 'Conta',
+  account_approved: 'Conta aprovada',
+  excursions: 'Excursões',
+  excursion: 'Excursão',
+  excursion_started: 'Excursão iniciada',
+  excursion_completed: 'Excursão concluída',
+  dependents: 'Dependentes',
+  dependent: 'Dependente',
+  chat_message: 'Mensagem de chat',
+  booking: 'Reserva',
+  booking_cancelled_by_passenger: 'Reserva cancelada pelo passageiro',
+  broadcast: 'Comunicado',
+};
+
+// Traduz o slug da categoria para exibição. Mantém 'todos'/'sem categoria' e faz
+// fallback para o próprio slug quando não houver tradução cadastrada.
+const categoryLabel = (cat: string): string => {
+  if (cat === 'todos') return 'Todas';
+  if (cat === 'sem categoria') return 'Sem categoria';
+  return CATEGORY_LABELS[cat] ?? cat;
+};
+
+// Opções do dropdown de categoria no envio: valor = slug inglês (backend),
+// rótulo = português. Ordenado pelo rótulo.
+const CATEGORY_OPTIONS: { value: string; label: string }[] = Object.entries(CATEGORY_LABELS)
+  .map(([value, label]) => ({ value, label }))
+  .sort((a, b) => a.label.localeCompare(b.label, 'pt-BR'));
+
+type UserOption = { id: string; nome: string };
 
 export default function NotificacoesScreen() {
   const [notifications, setNotifications] = useState<NotificationAdminRow[]>([]);
@@ -26,7 +72,10 @@ export default function NotificacoesScreen() {
   const [sendOpen, setSendOpen] = useState(false);
   const [sendType, setSendType] = useState<'individual' | 'broadcast'>('broadcast');
   const [sendTargetApp, setSendTargetApp] = useState<'cliente' | 'motorista'>('cliente');
-  const [sendUserId, setSendUserId] = useState('');
+  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
+  const [userOptions, setUserOptions] = useState<UserOption[]>([]);
+  const [userOptionsLoading, setUserOptionsLoading] = useState(false);
+  const [userSearch, setUserSearch] = useState('');
   const [sendTitle, setSendTitle] = useState('');
   const [sendMessage, setSendMessage] = useState('');
   const [sendCategory, setSendCategory] = useState('');
@@ -42,6 +91,31 @@ export default function NotificacoesScreen() {
       setNotifications(data);
       setLoading(false);
     });
+  }, []);
+
+  // Carrega a lista de usuários para o seletor (modo individual), filtrada pelo
+  // app destinatário. Recarrega e limpa a seleção sempre que o app muda.
+  useEffect(() => {
+    if (!sendOpen || sendType !== 'individual') return;
+    let cancelled = false;
+    setUserOptionsLoading(true);
+    setUserOptions([]);
+    setSelectedUserIds([]);
+    setUserSearch('');
+    const loader = sendTargetApp === 'motorista'
+      ? fetchMotoristas().then((rows) => rows.map((r) => ({ id: r.id, nome: r.nome })))
+      : fetchPassageiros().then((rows) => rows.map((r) => ({ id: r.id, nome: r.nome })));
+    loader.then((opts) => {
+      if (cancelled) return;
+      opts.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+      setUserOptions(opts);
+      setUserOptionsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [sendOpen, sendType, sendTargetApp]);
+
+  const toggleUser = useCallback((id: string) => {
+    setSelectedUserIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   }, []);
 
   const categories = useMemo(() => {
@@ -77,21 +151,22 @@ export default function NotificacoesScreen() {
       if (error) { showToast('Erro: ' + error); }
       else { showToast(`Notificação enviada para ${count} ${sendTargetApp}s`); }
     } else {
-      if (!sendUserId.trim()) { setSending(false); return; }
-      const { error } = await createNotificationForUser(sendUserId.trim(), sendTitle.trim(), sendMessage.trim(), sendCategory.trim() || undefined, sendTargetApp);
+      if (selectedUserIds.length === 0) { setSending(false); return; }
+      const { count, error } = await createNotificationForUsers(selectedUserIds, sendTitle.trim(), sendMessage.trim(), sendCategory.trim() || undefined, sendTargetApp);
       if (error) { showToast('Erro: ' + error); }
-      else { showToast('Notificação enviada com sucesso'); }
+      else { showToast(`Notificação enviada para ${count} usuário${count === 1 ? '' : 's'}`); }
     }
     setSending(false);
     setSendOpen(false);
     setSendTitle('');
     setSendMessage('');
     setSendCategory('');
-    setSendUserId('');
+    setSelectedUserIds([]);
+    setUserSearch('');
     setSendTargetApp('cliente');
     // Reload
     fetchAllNotifications().then(setNotifications);
-  }, [sendType, sendTargetApp, sendUserId, sendTitle, sendMessage, sendCategory, showToast]);
+  }, [sendType, sendTargetApp, selectedUserIds, sendTitle, sendMessage, sendCategory, showToast]);
 
   const handleDelete = useCallback(async (id: string) => {
     if (!confirm('Remover esta notificação?')) return;
@@ -134,6 +209,17 @@ export default function NotificacoesScreen() {
     style: { position: 'fixed' as const, bottom: 24, right: 24, background: '#0d0d0d', color: '#fff', padding: '12px 24px', borderRadius: 12, fontSize: 14, fontWeight: 500, zIndex: 2000, ...font },
   }, toastMsg) : null;
 
+  // ── Seletor de usuários (modo individual) ───────────────────────────
+  const selectedSet = new Set(selectedUserIds);
+  const nameById = new Map(userOptions.map((o) => [o.id, o.nome] as const));
+  const userSearchLc = userSearch.trim().toLowerCase();
+  const filteredUserOptions = userSearchLc
+    ? userOptions.filter((o) => o.nome.toLowerCase().includes(userSearchLc))
+    : userOptions;
+  const visibleUserOptions = filteredUserOptions.slice(0, 50);
+  const sendDisabled = sending || !sendTitle.trim() || !sendMessage.trim()
+    || (sendType === 'individual' && selectedUserIds.length === 0);
+
   // ── Send modal ──────────────────────────────────────────────────────
   const sendModal = sendOpen ? React.createElement('div', {
     role: 'dialog', 'aria-modal': true,
@@ -155,10 +241,51 @@ export default function NotificacoesScreen() {
         React.createElement('div', { style: { display: 'flex', gap: 8 } },
           chipFiltro('Cliente', sendTargetApp === 'cliente', () => setSendTargetApp('cliente')),
           chipFiltro('Motorista', sendTargetApp === 'motorista', () => setSendTargetApp('motorista')))),
-      // User ID (if individual)
-      sendType === 'individual' ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
-        React.createElement('label', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'User ID'),
-        React.createElement('input', { type: 'text', value: sendUserId, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setSendUserId(e.target.value), placeholder: 'UUID do usuário', style: inputStyle })) : null,
+      // Seletor de destinatários (modo individual) — busca + multi-seleção
+      sendType === 'individual' ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6 } },
+        React.createElement('label', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } },
+          `Destinatários${selectedUserIds.length > 0 ? ` (${selectedUserIds.length} selecionado${selectedUserIds.length === 1 ? '' : 's'})` : ''}`),
+        // Chips dos selecionados
+        selectedUserIds.length > 0 ? React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 6 } },
+          ...selectedUserIds.map((id) => React.createElement('span', {
+            key: id,
+            style: { display: 'inline-flex', alignItems: 'center', gap: 6, background: '#0d0d0d', color: '#fff', borderRadius: 999, padding: '4px 10px', fontSize: 12, ...font },
+          },
+            nameById.get(id) || 'Sem nome',
+            React.createElement('button', {
+              type: 'button', onClick: () => toggleUser(id),
+              style: { border: 'none', background: 'transparent', color: '#fff', cursor: 'pointer', padding: 0, fontSize: 16, lineHeight: 1, display: 'flex' },
+            }, '×')))) : null,
+        // Campo de busca
+        React.createElement('input', {
+          type: 'text', value: userSearch,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setUserSearch(e.target.value),
+          placeholder: sendTargetApp === 'motorista' ? 'Buscar motorista por nome...' : 'Buscar cliente por nome...',
+          style: inputStyle,
+        }),
+        // Lista de opções
+        React.createElement('div', {
+          style: { maxHeight: 180, overflowY: 'auto' as const, border: '1px solid #e2e2e2', borderRadius: 8 },
+        },
+          userOptionsLoading
+            ? React.createElement('div', { style: { padding: 16, fontSize: 13, color: '#767676', ...font } }, 'Carregando usuários...')
+            : visibleUserOptions.length === 0
+              ? React.createElement('div', { style: { padding: 16, fontSize: 13, color: '#767676', ...font } }, userSearchLc ? 'Nenhum usuário encontrado.' : 'Nenhum usuário disponível.')
+              : visibleUserOptions.map((o) => React.createElement('button', {
+                  key: o.id, type: 'button', onClick: () => toggleUser(o.id),
+                  style: { display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left' as const, padding: '8px 12px', border: 'none', borderBottom: '1px solid #f1f1f1', background: selectedSet.has(o.id) ? '#f6f6f6' : '#fff', cursor: 'pointer', ...font },
+                },
+                  React.createElement('span', {
+                    style: { width: 16, height: 16, borderRadius: 4, border: selectedSet.has(o.id) ? 'none' : '1.5px solid #c4c4c4', background: selectedSet.has(o.id) ? '#0d0d0d' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+                  }, selectedSet.has(o.id)
+                    ? React.createElement('svg', { width: 10, height: 10, viewBox: '0 0 24 24', fill: 'none' },
+                        React.createElement('path', { d: 'M5 13l4 4L19 7', stroke: '#fff', strokeWidth: 3, strokeLinecap: 'round', strokeLinejoin: 'round' }))
+                    : null),
+                  React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, o.nome || 'Sem nome')))),
+        // Aviso de truncamento
+        filteredUserOptions.length > visibleUserOptions.length
+          ? React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, `Mostrando ${visibleUserOptions.length} de ${filteredUserOptions.length}. Refine a busca para ver mais.`)
+          : null) : null,
       // Title
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
         React.createElement('label', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'Título'),
@@ -171,17 +298,23 @@ export default function NotificacoesScreen() {
           placeholder: 'Corpo da notificação...', rows: 3,
           style: { ...inputStyle, height: 'auto', padding: '12px 16px', resize: 'vertical' as const },
         })),
-      // Category
+      // Category (dropdown — rótulo PT, valor slug inglês p/ backend)
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
         React.createElement('label', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, 'Categoria (opcional)'),
-        React.createElement('input', { type: 'text', value: sendCategory, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setSendCategory(e.target.value), placeholder: 'ex: promotions', style: inputStyle })),
+        React.createElement('select', {
+          value: sendCategory,
+          onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setSendCategory(e.target.value),
+          style: { ...inputStyle, cursor: 'pointer' },
+        },
+          React.createElement('option', { value: '' }, 'Sem categoria'),
+          ...CATEGORY_OPTIONS.map((opt) => React.createElement('option', { key: opt.value, value: opt.value }, opt.label)))),
       // Buttons
       React.createElement('div', { style: { display: 'flex', gap: 8 } },
         React.createElement('button', { type: 'button', onClick: () => setSendOpen(false), style: { flex: 1, height: 44, borderRadius: 8, border: '1px solid #e2e2e2', background: '#fff', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font } }, 'Cancelar'),
         React.createElement('button', {
           type: 'button', onClick: handleSend,
-          disabled: sending || !sendTitle.trim() || !sendMessage.trim(),
-          style: { flex: 1, height: 44, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: sending ? 'wait' : 'pointer', opacity: (sending || !sendTitle.trim() || !sendMessage.trim()) ? 0.5 : 1, ...font },
+          disabled: sendDisabled,
+          style: { flex: 1, height: 44, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: sending ? 'wait' : 'pointer', opacity: sendDisabled ? 0.5 : 1, ...font },
         }, sending ? 'Enviando...' : 'Enviar'))))
   : null;
 
@@ -211,7 +344,7 @@ export default function NotificacoesScreen() {
       React.createElement('div', { style: { ...cellBase, flex: cols[1].flex, minWidth: cols[1].minWidth, fontWeight: 600 } }, n.title),
       React.createElement('div', { style: { ...cellBase, flex: cols[2].flex, minWidth: cols[2].minWidth, color: '#555' } }, n.message || '—'),
       React.createElement('div', { style: { ...cellBase, flex: cols[3].flex, minWidth: cols[3].minWidth } },
-        React.createElement('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 999, background: '#f1f1f1', color: '#555', ...font } }, n.category || '—')),
+        React.createElement('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 999, background: '#f1f1f1', color: '#555', ...font } }, n.category ? categoryLabel(n.category) : '—')),
       React.createElement('div', { style: { ...cellBase, flex: cols[4].flex, minWidth: cols[4].minWidth, fontSize: 12, color: '#767676' } }, n.createdAt),
       React.createElement('div', { style: { ...cellBase, flex: cols[5].flex, minWidth: cols[5].minWidth } },
         React.createElement('span', { style: { width: 8, height: 8, borderRadius: '50%', background: n.readAt ? '#22c55e' : '#fbbf24', display: 'inline-block' } })),
@@ -240,7 +373,7 @@ export default function NotificacoesScreen() {
       }, 'Enviar notificação')),
     // Category filters
     React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const } },
-      ...categories.map((cat) => chipFiltro(cat === 'todos' ? 'Todas' : cat, filterCategory === cat, () => setFilterCategory(cat)))),
+      ...categories.map((cat) => chipFiltro(categoryLabel(cat), filterCategory === cat, () => setFilterCategory(cat)))),
     // Table
     filtered.length === 0
       ? React.createElement('div', { style: { padding: 40, textAlign: 'center' as const, color: '#767676', ...font } }, 'Nenhuma notificação encontrada.')
