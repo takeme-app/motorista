@@ -19,6 +19,7 @@ import {
   fetchBases,
   createBase,
   updateBasePreparerPricing,
+  updateBase,
   deletePricingRoute,
   updatePricingRoute,
   fetchPreparadores,
@@ -29,6 +30,13 @@ import {
 import type { PricingRouteRow, SurchargeCatalogRow, MotoristaListItem, PreparadorListItem } from '../data/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { RatingListItem, BaseListItem } from '../data/queries';
+import PlacesAddressInput from '../components/PlacesAddressInput';
+import { getGoogleMapsApiKey } from '../lib/expoExtra';
+import {
+  basePlaceFromRow,
+  toBasePlaceResolved,
+  type BasePlaceResolved,
+} from '../lib/parsePlaceCityState';
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
@@ -373,45 +381,99 @@ export default function PagamentosGestaoScreen() {
   const fecharRemoveAdic = useCallback(() => setRemoveAdicOpen(false), []);
 
   // ── Bases modal states ─────────────────────────────────────────────
+  const mapsKeyConfigured = Boolean(getGoogleMapsApiKey());
   const [criarBaseOpen, setCriarBaseOpen] = useState(false);
   const [criarBaseNome, setCriarBaseNome] = useState('');
   const [criarBaseEndereco, setCriarBaseEndereco] = useState('');
-  const [criarBaseCidade, setCriarBaseCidade] = useState('');
-  const [criarBaseEstado, setCriarBaseEstado] = useState('');
-  const [criarBaseLat, setCriarBaseLat] = useState('');
-  const [criarBaseLng, setCriarBaseLng] = useState('');
+  const [criarBasePlace, setCriarBasePlace] = useState<BasePlaceResolved | null>(null);
+  const [criarBaseGeoError, setCriarBaseGeoError] = useState<string | null>(null);
   const abrirCriarBase = useCallback(() => {
-    setCriarBaseNome(''); setCriarBaseEndereco(''); setCriarBaseCidade('');
-    setCriarBaseEstado(''); setCriarBaseLat(''); setCriarBaseLng('');
+    setCriarBaseNome('');
+    setCriarBaseEndereco('');
+    setCriarBasePlace(null);
+    setCriarBaseGeoError(null);
     setCriarBaseOpen(true);
   }, []);
   const fecharCriarBase = useCallback(() => setCriarBaseOpen(false), []);
   const salvarCriarBase = useCallback(async () => {
+    setCriarBaseGeoError(null);
+    const nome = criarBaseNome.trim();
+    const endereco = criarBaseEndereco.trim();
+    if (!nome || !endereco) {
+      setCriarBaseGeoError('Preencha nome e endereço.');
+      return;
+    }
+    if (mapsKeyConfigured && !criarBasePlace) {
+      setCriarBaseGeoError('Selecione o endereço nas sugestões do Google.');
+      return;
+    }
+    if (!criarBasePlace) {
+      setCriarBaseGeoError('Endereço inválido. Selecione uma sugestão do Google.');
+      return;
+    }
     const result = await createBase({
-      name: criarBaseNome, address: criarBaseEndereco, city: criarBaseCidade,
-      state: criarBaseEstado, lat: criarBaseLat ? parseFloat(criarBaseLat) : undefined,
-      lng: criarBaseLng ? parseFloat(criarBaseLng) : undefined,
+      name: nome,
+      address: criarBasePlace.formattedAddress,
+      city: criarBasePlace.city,
+      state: criarBasePlace.state,
+      lat: criarBasePlace.lat,
+      lng: criarBasePlace.lng,
     });
-    if (result) setBasesData(prev => [result, ...prev]);
+    if (!result) {
+      setCriarBaseGeoError('Não foi possível salvar a base.');
+      return;
+    }
+    setBasesData(prev => [result, ...prev]);
     setCriarBaseOpen(false);
-  }, [criarBaseNome, criarBaseEndereco, criarBaseCidade, criarBaseEstado, criarBaseLat, criarBaseLng]);
+  }, [criarBaseNome, criarBaseEndereco, criarBasePlace, mapsKeyConfigured]);
 
   const [editBaseOpen, setEditBaseOpen] = useState(false);
   const [editBaseRow, setEditBaseRow] = useState<BaseListItem | null>(null);
   const [editBaseNome, setEditBaseNome] = useState('');
   const [editBaseEndereco, setEditBaseEndereco] = useState('');
-  const [editBaseCidade, setEditBaseCidade] = useState('');
-  const [editBaseEstado, setEditBaseEstado] = useState('');
-  const [editBaseLat, setEditBaseLat] = useState('');
-  const [editBaseLng, setEditBaseLng] = useState('');
+  const [editBasePlace, setEditBasePlace] = useState<BasePlaceResolved | null>(null);
+  const [editBaseGeoError, setEditBaseGeoError] = useState<string | null>(null);
   const abrirEditBase = useCallback((row: BaseListItem) => {
-    setEditBaseRow(row); setEditBaseNome(row.name); setEditBaseEndereco(row.address);
-    setEditBaseCidade(row.city); setEditBaseEstado(row.state);
-    setEditBaseLat(row.lat != null ? String(row.lat) : '');
-    setEditBaseLng(row.lng != null ? String(row.lng) : '');
+    setEditBaseRow(row);
+    setEditBaseNome(row.name);
+    setEditBaseEndereco(row.address);
+    setEditBasePlace(basePlaceFromRow(row));
+    setEditBaseGeoError(null);
     setEditBaseOpen(true);
   }, []);
   const fecharEditBase = useCallback(() => setEditBaseOpen(false), []);
+  const salvarEditBase = useCallback(async () => {
+    if (!editBaseRow) return;
+    setEditBaseGeoError(null);
+    const nome = editBaseNome.trim();
+    const endereco = editBaseEndereco.trim();
+    if (!nome || !endereco) {
+      setEditBaseGeoError('Preencha nome e endereço.');
+      return;
+    }
+    if (mapsKeyConfigured && !editBasePlace) {
+      setEditBaseGeoError('Selecione o endereço nas sugestões do Google.');
+      return;
+    }
+    if (!editBasePlace) {
+      setEditBaseGeoError('Endereço inválido. Selecione uma sugestão do Google.');
+      return;
+    }
+    const result = await updateBase(editBaseRow.id, {
+      name: nome,
+      address: editBasePlace.formattedAddress,
+      city: editBasePlace.city,
+      state: editBasePlace.state,
+      lat: editBasePlace.lat,
+      lng: editBasePlace.lng,
+    });
+    if (!result) {
+      setEditBaseGeoError('Não foi possível salvar as alterações.');
+      return;
+    }
+    setBasesData(prev => prev.map(b => b.id === result.id ? result : b));
+    setEditBaseOpen(false);
+  }, [editBaseRow, editBaseNome, editBaseEndereco, editBasePlace, mapsKeyConfigured]);
 
   const [removeBaseOpen, setRemoveBaseOpen] = useState(false);
   const abrirRemoveBase = useCallback(() => setRemoveBaseOpen(true), []);
@@ -1901,45 +1963,64 @@ export default function PagamentosGestaoScreen() {
   // ── Bases modals ─────────────────────────────────────────────────────
   const UFS = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
 
+  const basePlaceInputStyle: React.CSSProperties = {
+    width: '100%',
+    height: 44,
+    borderRadius: 8,
+    border: 'none',
+    background: '#f1f1f1',
+    padding: '0 16px',
+    fontSize: 16,
+    color: '#0d0d0d',
+    outline: 'none',
+    boxSizing: 'border-box',
+    ...font,
+  };
+
   const baseFormFields = (
-    nome: string, setNome: (v: string) => void,
-    endereco: string, setEndereco: (v: string) => void,
-    cidade: string, setCidade: (v: string) => void,
-    estado: string, setEstado: (v: string) => void,
-    lat?: string, setLat?: (v: string) => void,
-    lng?: string, setLng?: (v: string) => void,
+    nome: string,
+    setNome: (v: string) => void,
+    endereco: string,
+    setEndereco: (v: string) => void,
+    place: BasePlaceResolved | null,
+    setPlace: (v: BasePlaceResolved | null) => void,
+    geoError: string | null,
   ) =>
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 0, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
-      // Nome
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
         React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Nome'),
-        React.createElement('input', { type: 'text', value: nome, placeholder: 'Ex: Base São Paulo Centro', onChange: (e: React.ChangeEvent<HTMLInputElement>) => setNome(e.target.value), style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: nome ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font } })),
-      // Endereço
+        React.createElement('input', {
+          type: 'text',
+          value: nome,
+          placeholder: 'Ex: Base São Paulo Centro',
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setNome(e.target.value),
+          style: { ...basePlaceInputStyle, color: nome ? '#0d0d0d' : '#767676' },
+        })),
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
         React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Endereço'),
-        React.createElement('input', { type: 'text', value: endereco, placeholder: 'Ex: Rua Augusta, 100', onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEndereco(e.target.value), style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: endereco ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font } })),
-      // Cidade + Estado
-      React.createElement('div', { style: { display: 'flex', gap: 12, width: '100%' } },
-        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, flex: 1, minWidth: 0 } },
-          React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Cidade'),
-          React.createElement('input', { type: 'text', value: cidade, placeholder: 'Ex: São Paulo', onChange: (e: React.ChangeEvent<HTMLInputElement>) => setCidade(e.target.value), style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: cidade ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font } })),
-        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, flex: 1, minWidth: 0 } },
-          React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Estado'),
-          React.createElement('div', { style: { position: 'relative' as const, width: '100%' } },
-            React.createElement('select', { value: estado, onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setEstado(e.target.value), style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: estado ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, appearance: 'none' as const, WebkitAppearance: 'none' as const, cursor: 'pointer', ...font } },
-              React.createElement('option', { value: '' }, 'Selecione'),
-              ...UFS.map(uf => React.createElement('option', { key: uf, value: uf }, uf))),
-            React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { position: 'absolute' as const, right: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } },
-              React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))))),
-      // Lat + Lng (only for create)
-      setLat && setLng ? React.createElement('div', { style: { display: 'flex', gap: 12, width: '100%' } },
-        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, flex: 1, minWidth: 0 } },
-          React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Latitude'),
-          React.createElement('input', { type: 'text', value: lat, placeholder: 'Ex: -23.5505', onChange: (e: React.ChangeEvent<HTMLInputElement>) => setLat(e.target.value), style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: lat ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font } })),
-        React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, flex: 1, minWidth: 0 } },
-          React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Longitude'),
-          React.createElement('input', { type: 'text', value: lng, placeholder: 'Ex: -46.6333', onChange: (e: React.ChangeEvent<HTMLInputElement>) => setLng(e.target.value), style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: lng ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font } })))
-      : null);
+        mapsKeyConfigured
+          ? React.createElement('p', { style: { fontSize: 12, color: '#767676', margin: '0 0 4px', lineHeight: 1.45, ...font } },
+            'Escolha o endereço na lista de sugestões do Google.')
+          : null,
+        React.createElement(PlacesAddressInput, {
+          value: endereco,
+          onChange: (v: string) => {
+            setEndereco(v);
+            if (place && v !== place.formattedAddress) setPlace(null);
+          },
+          onPlaceResolved: (p) => {
+            const resolved = toBasePlaceResolved(p);
+            setEndereco(resolved.formattedAddress);
+            setPlace(resolved);
+          },
+          inputStyle: { ...basePlaceInputStyle, color: endereco ? '#0d0d0d' : '#767676' },
+          placeholder: mapsKeyConfigured ? 'Buscar endereço…' : 'Ex: Rua Augusta, 100',
+          requireSelectionFromPlaces: mapsKeyConfigured,
+          committedFormattedAddress: place?.formattedAddress ?? '',
+        })),
+      geoError
+        ? React.createElement('div', { role: 'alert', style: { fontSize: 13, color: '#b53838', marginTop: 8, ...font } }, geoError)
+        : null);
 
   const criarBaseModal = criarBaseOpen
     ? React.createElement('div', { role: 'dialog', 'aria-modal': true, style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 2100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, boxSizing: 'border-box' as const }, onClick: fecharCriarBase },
@@ -1948,7 +2029,7 @@ export default function PagamentosGestaoScreen() {
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
               React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Criar base'),
               React.createElement('button', { type: 'button', onClick: fecharCriarBase, 'aria-label': 'Fechar', style: { width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0 } }, closeModalSvg))),
-          baseFormFields(criarBaseNome, setCriarBaseNome, criarBaseEndereco, setCriarBaseEndereco, criarBaseCidade, setCriarBaseCidade, criarBaseEstado, setCriarBaseEstado, criarBaseLat, setCriarBaseLat, criarBaseLng, setCriarBaseLng),
+          baseFormFields(criarBaseNome, setCriarBaseNome, criarBaseEndereco, setCriarBaseEndereco, criarBasePlace, setCriarBasePlace, criarBaseGeoError),
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
             React.createElement('button', { type: 'button', onClick: salvarCriarBase, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Salvar base'),
             React.createElement('button', { type: 'button', onClick: fecharCriarBase, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#f1f1f1', color: '#b53838', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Cancelar'))))
@@ -1961,9 +2042,9 @@ export default function PagamentosGestaoScreen() {
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
               React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Editar base'),
               React.createElement('button', { type: 'button', onClick: fecharEditBase, 'aria-label': 'Fechar', style: { width: 48, height: 48, borderRadius: '50%', border: 'none', background: '#f1f1f1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0 } }, closeModalSvg))),
-          baseFormFields(editBaseNome, setEditBaseNome, editBaseEndereco, setEditBaseEndereco, editBaseCidade, setEditBaseCidade, editBaseEstado, setEditBaseEstado, editBaseLat, setEditBaseLat, editBaseLng, setEditBaseLng),
+          baseFormFields(editBaseNome, setEditBaseNome, editBaseEndereco, setEditBaseEndereco, editBasePlace, setEditBasePlace, editBaseGeoError),
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
-            React.createElement('button', { type: 'button', onClick: fecharEditBase, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Salvar alterações'),
+            React.createElement('button', { type: 'button', onClick: salvarEditBase, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Salvar alterações'),
             React.createElement('button', { type: 'button', onClick: fecharEditBase, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#f1f1f1', color: '#b53838', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Cancelar'))))
     : null;
 

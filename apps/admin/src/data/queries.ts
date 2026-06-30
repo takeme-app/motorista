@@ -3452,6 +3452,38 @@ export type CreateBaseInput = {
   lng?: number;
 };
 
+export type UpdateBaseInput = CreateBaseInput;
+
+function mapBaseRow(data: {
+  id: string;
+  name: string;
+  address: string;
+  city: string;
+  state: string | null;
+  lat: number | null;
+  lng: number | null;
+  is_active: boolean;
+  created_at: string;
+  preparer_pricing_mode?: string | null;
+  preparer_km_price_cents?: number | null;
+  preparer_fixed_cents?: number | null;
+}): BaseListItem {
+  return {
+    id: data.id,
+    name: data.name,
+    address: data.address,
+    city: data.city,
+    state: data.state ?? '',
+    lat: data.lat,
+    lng: data.lng,
+    isActive: data.is_active,
+    createdAt: fmtDate(data.created_at),
+    preparerPricingMode: (data.preparer_pricing_mode as 'per_km' | 'fixed' | null) ?? null,
+    preparerKmPriceCents: data.preparer_km_price_cents ?? null,
+    preparerFixedCents: data.preparer_fixed_cents ?? null,
+  };
+}
+
 export async function createBase(input: CreateBaseInput): Promise<BaseListItem | null> {
   if (!isSupabaseConfigured) return null;
   const { data, error } = await sb
@@ -3468,20 +3500,27 @@ export async function createBase(input: CreateBaseInput): Promise<BaseListItem |
     .single();
 
   if (error || !data) return null;
-  return {
-    id: data.id,
-    name: data.name,
-    address: data.address,
-    city: data.city,
-    state: data.state ?? '',
-    lat: data.lat,
-    lng: data.lng,
-    isActive: data.is_active,
-    createdAt: fmtDate(data.created_at),
-    preparerPricingMode: (data.preparer_pricing_mode as 'per_km' | 'fixed' | null) ?? null,
-    preparerKmPriceCents: data.preparer_km_price_cents ?? null,
-    preparerFixedCents: data.preparer_fixed_cents ?? null,
-  };
+  return mapBaseRow(data);
+}
+
+export async function updateBase(id: string, input: UpdateBaseInput): Promise<BaseListItem | null> {
+  if (!isSupabaseConfigured) return null;
+  const { data, error } = await sb
+    .from('bases')
+    .update({
+      name: input.name,
+      address: input.address,
+      city: input.city,
+      state: input.state,
+      lat: input.lat ?? null,
+      lng: input.lng ?? null,
+    })
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error || !data) return null;
+  return mapBaseRow(data);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -3752,6 +3791,25 @@ export async function createNotificationForUser(
     target_app_slug: targetAppSlug,
   });
   return { error: error?.message ?? null };
+}
+
+export async function createNotificationForUsers(
+  userIds: string[],
+  title: string,
+  message: string,
+  category?: string,
+  targetAppSlug: NotificationTargetApp = 'cliente',
+): Promise<{ count: number; error: string | null }> {
+  if (userIds.length === 0) return { count: 0, error: null };
+  const rows = userIds.map((id) => ({
+    user_id: id,
+    title,
+    message,
+    category: category || null,
+    target_app_slug: targetAppSlug,
+  }));
+  const { error } = await (supabase as any).from('notifications').insert(rows);
+  return { count: rows.length, error: error?.message ?? null };
 }
 
 export async function createNotificationBroadcast(

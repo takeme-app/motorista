@@ -22,6 +22,22 @@ import {
 
 const font: React.CSSProperties = { fontFamily: 'Inter, sans-serif' };
 
+// Formata CPF (11 dígitos) como 000.000.000-00. Valores vazios/'—' ou com
+// quantidade de dígitos diferente passam sem alteração.
+const formatCpf = (raw: string): string => {
+  const d = (raw || '').replace(/\D/g, '');
+  if (d.length !== 11) return raw;
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+};
+
+// Formata telefone BR (10 ou 11 dígitos) como (00) 00000-0000 / (00) 0000-0000.
+const formatPhone = (raw: string): string => {
+  const d = (raw || '').replace(/\D/g, '');
+  if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return raw;
+};
+
 // ── Arrow left SVG ──────────────────────────────────────────────────────
 const arrowLeftSvg = React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
   React.createElement('path', { d: 'M19 12H5M12 19l-7-7 7-7', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
@@ -230,6 +246,7 @@ export default function AtendimentoDetalheScreen() {
 
   const [nome, setNome] = useState(ticket.nome || '—');
   const [email, setEmail] = useState(ticket.email || '—');
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [profileCpf, setProfileCpf] = useState('—');
   const [profilePhone, setProfilePhone] = useState('—');
   const [profileCity, setProfileCity] = useState('—');
@@ -489,14 +506,18 @@ export default function AtendimentoDetalheScreen() {
       }
       const cp = await fetchProfileBasics(conv.client_id);
       if (!cancelled) setNome(cp.full_name || conv.participant_name || '—');
-      // Fetch full profile for dados cadastrais
-      const { data: fullProfile } = await (supabase as any).from('profiles').select('cpf, phone, city, state, email').eq('id', conv.client_id).maybeSingle();
+      // Fetch full profile for dados cadastrais (profiles não tem coluna `email`)
+      const { data: fullProfile } = await (supabase as any).from('profiles').select('cpf, phone, city, state, avatar_url').eq('id', conv.client_id).maybeSingle();
       if (fullProfile && !cancelled) {
         setProfileCpf((fullProfile as any).cpf || '—');
         setProfilePhone((fullProfile as any).phone || '—');
         setProfileCity((fullProfile as any).city || '—');
         setProfileState((fullProfile as any).state || '—');
-        if ((fullProfile as any).email) setEmail((fullProfile as any).email);
+        const rawAvatar = (fullProfile as any).avatar_url;
+        if (rawAvatar) {
+          const resolved = await resolveStorageDisplayUrl(supabase, rawAvatar);
+          if (!cancelled) setAvatarUrl(resolved || null);
+        }
       }
       if (conv.admin_id) {
         const ap = await fetchProfileBasics(conv.admin_id);
@@ -710,13 +731,16 @@ export default function AtendimentoDetalheScreen() {
   const encomendaDecidido = encomendaShipmentStatus === 'confirmed' || encomendaShipmentStatus === 'cancelled';
   const hideEncomendaAprovarReprovar = isEncomenda && encomendaDecidido;
 
-  const excursaoDecidido = excursionStatusRaw === 'cancelled' || excursionStatusRaw === 'rejected';
-  const hideExcursaoReprovar = isExcursao && excursaoDecidido;
+  const excursaoReprovada = excursionStatusRaw === 'cancelled' || excursionStatusRaw === 'rejected';
+  const excursaoAprovada = ['approved', 'scheduled', 'in_progress', 'completed'].includes(excursionStatusRaw);
+  const hideExcursaoReprovar = isExcursao && (excursaoReprovada || excursaoAprovada);
   const orcamentoEditavel = ['pending', 'contacted', 'quoted', 'in_analysis'].includes(excursionStatusRaw);
 
   const excursaoDecididoBanner = hideExcursaoReprovar
     ? (() => {
-        const meta = { bg: '#eeafaa', color: '#551611', border: '#b53838', label: 'Excursão reprovada' };
+        const meta = excursaoAprovada
+          ? { bg: '#b0e8d1', color: '#174f38', border: '#22c55e', label: 'Excursão aprovada' }
+          : { bg: '#eeafaa', color: '#551611', border: '#b53838', label: 'Excursão reprovada' };
         return React.createElement('div', {
           style: { marginTop: 8, padding: '14px 18px', borderRadius: 12, background: meta.bg, border: `1px solid ${meta.border}`, display: 'flex', alignItems: 'center', gap: 10, ...font },
         },
@@ -782,6 +806,7 @@ export default function AtendimentoDetalheScreen() {
     style: {
       flex: '1 1 50%', minWidth: 320, display: 'flex', flexDirection: 'column' as const,
       borderRight: '1px solid #e2e2e2', background: '#fff', justifyContent: 'space-between',
+      minHeight: 0, overflowY: 'auto' as const,
     },
   },
     // Top content
@@ -840,12 +865,17 @@ export default function AtendimentoDetalheScreen() {
       React.createElement('div', {
         style: { display: 'flex', alignItems: 'center', gap: 16, paddingBottom: 24, borderBottom: '1px solid #e2e2e2' },
       },
-        React.createElement('div', {
-          style: {
-            width: 56, height: 56, borderRadius: 1000, background: '#E8725C', flexShrink: 0,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          },
-        }, React.createElement('span', { style: { color: '#fff', fontSize: 22, fontWeight: 600, ...font } }, nome.charAt(0))),
+        avatarUrl
+          ? React.createElement('img', {
+              src: avatarUrl, alt: nome,
+              style: { width: 56, height: 56, borderRadius: 1000, flexShrink: 0, objectFit: 'cover' as const },
+            })
+          : React.createElement('div', {
+              style: {
+                width: 56, height: 56, borderRadius: 1000, background: '#E8725C', flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              },
+            }, React.createElement('span', { style: { color: '#fff', fontSize: 22, fontWeight: 600, ...font } }, nome.charAt(0))),
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
           React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', ...font } }, nome),
           React.createElement('span', { style: { fontSize: 14, color: '#767676', ...font } }, email))),
@@ -1037,20 +1067,21 @@ export default function AtendimentoDetalheScreen() {
   const rightPanel = React.createElement('div', {
     style: {
       flex: '1 1 45%', minWidth: 300, display: 'flex', flexDirection: 'column' as const,
-      background: '#f6f6f6',
+      background: '#f6f6f6', minHeight: 0, overflow: 'hidden',
     },
   },
     // Header
     React.createElement('div', {
       style: {
-        padding: '24px 16px', borderBottom: '1px solid #e2e2e2',
+        padding: '24px 16px', borderBottom: '1px solid #e2e2e2', flexShrink: 0,
       },
     },
       React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Histórico de atendimentos')),
-    // Content
+    // Content (apenas a lista do histórico rola)
     React.createElement('div', {
       style: {
         padding: 16, display: 'flex', flexDirection: 'column' as const, gap: 0,
+        flex: 1, minHeight: 0, overflowY: 'auto' as const,
       },
     },
       React.createElement('div', {
@@ -1327,8 +1358,8 @@ export default function AtendimentoDetalheScreen() {
       // Fields
       readField('Nome completo', nome),
       React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
-        readField('CPF', profileCpf),
-        readField('Telefone', profilePhone)),
+        readField('CPF', formatCpf(profileCpf)),
+        readField('Telefone', formatPhone(profilePhone))),
       React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' as const } },
         readField('Cidade', profileCity),
         readField('Estado', profileState)),
@@ -2352,7 +2383,7 @@ export default function AtendimentoDetalheScreen() {
     React.createElement('div', {
       style: {
         display: 'flex', alignItems: 'stretch',
-        width: '100vw', minHeight: 'calc(100vh - 97px)',
+        width: '100vw', height: 'calc(100vh - 97px)', overflow: 'hidden',
         marginLeft: 'calc(-50vw + 50%)', marginTop: -24, marginBottom: -64,
         background: '#fff',
       },
