@@ -21,6 +21,7 @@ import type {
   PagamentoCounts,
   PricingRouteRow,
   SurchargeCatalogRow,
+  SurchargeType,
   PaymentMethodRow,
   AdminUserListItem,
   BookingDetailForAdmin,
@@ -3031,6 +3032,71 @@ export async function fetchSurchargeCatalog(): Promise<SurchargeCatalogRow[]> {
 
   if (error || !data) return [];
   return data as SurchargeCatalogRow[];
+}
+
+export interface SurchargeInput {
+  name: string;
+  description?: string | null;
+  default_value_cents: number;
+  surcharge_type: SurchargeType;
+  surcharge_mode: 'automatic' | 'manual';
+}
+
+export async function createSurcharge(input: SurchargeInput): Promise<SurchargeCatalogRow | null> {
+  if (!isSupabaseConfigured) return null;
+  const { data, error } = await sb
+    .from('surcharge_catalog')
+    .insert({ ...input, description: input.description ?? null, is_active: true } as never)
+    .select('*')
+    .single();
+  if (error || !data) return null;
+  return data as SurchargeCatalogRow;
+}
+
+export async function updateSurcharge(id: string, input: SurchargeInput): Promise<SurchargeCatalogRow | null> {
+  if (!isSupabaseConfigured) return null;
+  const { data, error } = await sb
+    .from('surcharge_catalog')
+    .update({ ...input, description: input.description ?? null, updated_at: new Date().toISOString() } as never)
+    .eq('id', id)
+    .select('*')
+    .single();
+  if (error || !data) return null;
+  return data as SurchargeCatalogRow;
+}
+
+// Soft-delete: surcharge_catalog é referenciado por pricing_route_surcharges
+// (ON DELETE CASCADE); marcar is_active=false remove da UI sem apagar vínculos.
+export async function deleteSurcharge(id: string): Promise<boolean> {
+  if (!isSupabaseConfigured) return false;
+  const { error } = await sb
+    .from('surcharge_catalog')
+    .update({ is_active: false, updated_at: new Date().toISOString() } as never)
+    .eq('id', id);
+  return !error;
+}
+
+// ── Vínculo adicional <-> trecho (pricing_route_surcharges) ──────────
+
+export async function fetchPricingRouteSurchargeLinks(): Promise<Array<{ pricing_route_id: string; surcharge_id: string }>> {
+  if (!isSupabaseConfigured) return [];
+  const { data, error } = await sb
+    .from('pricing_route_surcharges')
+    .select('pricing_route_id, surcharge_id');
+  if (error || !data) return [];
+  return data as Array<{ pricing_route_id: string; surcharge_id: string }>;
+}
+
+// Sincroniza os trechos vinculados a um adicional: remove os antigos e insere os
+// selecionados (value_cents null = usa o valor padrão do adicional).
+export async function setSurchargeRouteLinks(surchargeId: string, routeIds: string[]): Promise<boolean> {
+  if (!isSupabaseConfigured) return false;
+  const del = await sb.from('pricing_route_surcharges').delete().eq('surcharge_id', surchargeId);
+  if (del.error) return false;
+  if (routeIds.length === 0) return true;
+  const rows = routeIds.map((pricing_route_id) => ({ pricing_route_id, surcharge_id: surchargeId, value_cents: null }));
+  const ins = await sb.from('pricing_route_surcharges').insert(rows as never);
+  return !ins.error;
 }
 
 // ── Payment Methods (read-only) ─────────────────────────────────────

@@ -26,8 +26,13 @@ import {
   fetchWorkerSubtypesForGestao,
   motoristasToGestaoRows,
   slugifyMotoristaNome,
+  createSurcharge,
+  updateSurcharge,
+  deleteSurcharge,
+  fetchPricingRouteSurchargeLinks,
+  setSurchargeRouteLinks,
 } from '../data/queries';
-import type { PricingRouteRow, SurchargeCatalogRow, MotoristaListItem, PreparadorListItem } from '../data/types';
+import type { PricingRouteRow, SurchargeCatalogRow, SurchargeType, MotoristaListItem, PreparadorListItem } from '../data/types';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { RatingListItem, BaseListItem } from '../data/queries';
 import PlacesAddressInput from '../components/PlacesAddressInput';
@@ -191,21 +196,41 @@ const preparadorGestaoCols = [
 // Special card for Adicionais: "Adicionais automáticos vs. manuais" and "Total de adicionais ativos"
 // These are rendered inline in the tab content, not via the generic metrics renderer.
 
+// Tipos válidos de surcharge_catalog.surcharge_type (bate com o CHECK do banco).
+const SURCHARGE_TYPES: Array<{ key: SurchargeType; label: string }> = [
+  { key: 'viagem', label: 'Viagem' },
+  { key: 'encomenda', label: 'Encomenda' },
+  { key: 'preparador_encomendas', label: 'Preparador de encomendas' },
+  { key: 'preparador_excursoes', label: 'Preparador de excursões' },
+];
+const surchargeTypeLabel = (k: string): string => SURCHARGE_TYPES.find((t) => t.key === k)?.label ?? k;
+
+// Converte entrada em reais (aceita "R$ 25,00", "25,00", "25.00") para centavos.
+function parseReaisToCents(input: string): number {
+  const cleaned = (input || '').replace(/[^0-9,.-]/g, '').replace(',', '.');
+  const n = Number(cleaned);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.round(n * 100);
+}
+
 type AdicionalRow = {
   id?: string;
   codigo: string;
   nome: string;
   tipo: string;
-  unidade: string;
+  tipoKey?: SurchargeType;
   valor: string;
+  valorCents?: number;
   inclusao: string;
+  mode?: 'automatic' | 'manual';
+  rotaIds?: string[];
 };
 
 const adicionalCols = [
   { label: 'Código trecho', flex: '0 0 110px', minWidth: 110 },
   { label: 'Nome', flex: '1 1 20%', minWidth: 160 },
   { label: 'Tipo', flex: '0 0 100px', minWidth: 100 },
-  { label: 'Unidade', flex: '0 0 80px', minWidth: 80 },
+  { label: 'Trechos', flex: '0 0 90px', minWidth: 90 },
   { label: 'Valor', flex: '0 0 100px', minWidth: 100 },
   { label: 'Inclusão', flex: '0 0 110px', minWidth: 110 },
   { label: 'Editar/Remover', flex: '0 0 110px', minWidth: 110 },
@@ -318,15 +343,45 @@ export default function PagamentosGestaoScreen() {
   const [editAdicRow, setEditAdicRow] = useState<AdicionalRow | null>(null);
   const [editAdicNome, setEditAdicNome] = useState('');
   const [editAdicTipo, setEditAdicTipo] = useState('');
-  const [editAdicUnidade, setEditAdicUnidade] = useState('');
   const [editAdicValor, setEditAdicValor] = useState('');
   const [editAdicInclusao, setEditAdicInclusao] = useState('');
+  const [editAdicRotas, setEditAdicRotas] = useState<string[]>([]);
+  const [editAdicErro, setEditAdicErro] = useState<string | null>(null);
+  const [editAdicSaving, setEditAdicSaving] = useState(false);
+  const toggleEditRota = useCallback((id: string) => {
+    setEditAdicRotas(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }, []);
   const abrirEditAdic = useCallback((row: AdicionalRow) => {
-    setEditAdicRow(row); setEditAdicNome(row.nome); setEditAdicTipo(row.tipo);
-    setEditAdicUnidade(row.unidade); setEditAdicValor(row.valor); setEditAdicInclusao(row.inclusao);
+    setEditAdicRow(row); setEditAdicNome(row.nome);
+    setEditAdicTipo(row.tipoKey ?? '');
+    setEditAdicValor(row.valor); setEditAdicInclusao(row.inclusao);
+    setEditAdicRotas(row.rotaIds ?? []);
+    setEditAdicErro(null); setEditAdicSaving(false);
     setEditAdicOpen(true);
   }, []);
   const fecharEditAdic = useCallback(() => setEditAdicOpen(false), []);
+  const salvarEditAdic = useCallback(async () => {
+    if (!editAdicRow?.id) return;
+    setEditAdicErro(null);
+    const nome = editAdicNome.trim();
+    if (!nome) { setEditAdicErro('Informe o nome do adicional.'); return; }
+    if (!editAdicTipo) { setEditAdicErro('Selecione o tipo.'); return; }
+    setEditAdicSaving(true);
+    const updated = await updateSurcharge(editAdicRow.id, {
+      name: nome,
+      default_value_cents: parseReaisToCents(editAdicValor),
+      surcharge_type: editAdicTipo as SurchargeType,
+      surcharge_mode: editAdicInclusao === 'Automática' ? 'automatic' : 'manual',
+    });
+    if (!updated) { setEditAdicSaving(false); setEditAdicErro('Não foi possível salvar as alterações.'); return; }
+    const linked = await setSurchargeRouteLinks(editAdicRow.id, editAdicRotas);
+    const links = await fetchPricingRouteSurchargeLinks();
+    setEditAdicSaving(false);
+    setSurcharges(prev => prev.map(s => (s.id === updated.id ? updated : s)));
+    setSurchargeLinks(links);
+    if (!linked) { setEditAdicErro('Adicional salvo, mas não foi possível atualizar os trechos. Tente novamente.'); return; }
+    setEditAdicOpen(false);
+  }, [editAdicRow, editAdicNome, editAdicTipo, editAdicValor, editAdicInclusao, editAdicRotas]);
 
   // ── Filtro avaliações modal state ───────────────────────────────────
   const [filtroAvalOpen, setFiltroAvalOpen] = useState(false);
@@ -364,21 +419,70 @@ export default function PagamentosGestaoScreen() {
   const [criarAdicOpen, setCriarAdicOpen] = useState(false);
   const [criarAdicNome, setCriarAdicNome] = useState('');
   const [criarAdicTipo, setCriarAdicTipo] = useState('');
-  const [criarAdicUnidade, setCriarAdicUnidade] = useState('');
   const [criarAdicValor, setCriarAdicValor] = useState('');
-  const [criarAdicVincular, setCriarAdicVincular] = useState('');
   const [criarAdicInclusao, setCriarAdicInclusao] = useState('Manual');
+  const [criarAdicRotas, setCriarAdicRotas] = useState<string[]>([]);
+  const [criarAdicCreatedId, setCriarAdicCreatedId] = useState<string | null>(null);
+  const [criarAdicErro, setCriarAdicErro] = useState<string | null>(null);
+  const [criarAdicSaving, setCriarAdicSaving] = useState(false);
+  const toggleCriarRota = useCallback((id: string) => {
+    setCriarAdicRotas(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }, []);
   const abrirCriarAdic = useCallback(() => {
-    setCriarAdicNome(''); setCriarAdicTipo(''); setCriarAdicUnidade('');
-    setCriarAdicValor(''); setCriarAdicVincular(''); setCriarAdicInclusao('Manual');
+    setCriarAdicNome(''); setCriarAdicTipo('');
+    setCriarAdicValor(''); setCriarAdicInclusao('Manual'); setCriarAdicRotas([]);
+    setCriarAdicCreatedId(null); setCriarAdicErro(null); setCriarAdicSaving(false);
     setCriarAdicOpen(true);
   }, []);
   const fecharCriarAdic = useCallback(() => setCriarAdicOpen(false), []);
+  const salvarCriarAdic = useCallback(async () => {
+    setCriarAdicErro(null);
+    const nome = criarAdicNome.trim();
+    if (!nome) { setCriarAdicErro('Informe o nome do adicional.'); return; }
+    if (!criarAdicTipo) { setCriarAdicErro('Selecione o tipo.'); return; }
+    setCriarAdicSaving(true);
+    const payload = {
+      name: nome,
+      default_value_cents: parseReaisToCents(criarAdicValor),
+      surcharge_type: criarAdicTipo as SurchargeType,
+      surcharge_mode: (criarAdicInclusao === 'Automática' ? 'automatic' : 'manual') as 'automatic' | 'manual',
+    };
+    // Se um salvamento anterior criou a linha mas falhou nos vínculos, reaproveita
+    // o id (atualiza) em vez de criar duplicata ao tentar de novo.
+    const saved = criarAdicCreatedId
+      ? await updateSurcharge(criarAdicCreatedId, payload)
+      : await createSurcharge(payload);
+    if (!saved) { setCriarAdicSaving(false); setCriarAdicErro('Não foi possível salvar o adicional.'); return; }
+    setCriarAdicCreatedId(saved.id);
+    const linked = await setSurchargeRouteLinks(saved.id, criarAdicRotas);
+    const links = await fetchPricingRouteSurchargeLinks();
+    setCriarAdicSaving(false);
+    setSurcharges(prev => {
+      const rest = prev.filter(s => s.id !== saved.id);
+      return [saved, ...rest].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+    });
+    setSurchargeLinks(links);
+    if (!linked) { setCriarAdicErro('Adicional salvo, mas não foi possível vincular os trechos. Tente novamente.'); return; }
+    setCriarAdicOpen(false);
+  }, [criarAdicNome, criarAdicTipo, criarAdicValor, criarAdicInclusao, criarAdicRotas, criarAdicCreatedId]);
 
   // ── Remover adicional modal state ──────────────────────────────────
   const [removeAdicOpen, setRemoveAdicOpen] = useState(false);
-  const abrirRemoveAdic = useCallback(() => setRemoveAdicOpen(true), []);
+  const [removeAdicRow, setRemoveAdicRow] = useState<AdicionalRow | null>(null);
+  const [removeAdicSaving, setRemoveAdicSaving] = useState(false);
+  const abrirRemoveAdic = useCallback((row: AdicionalRow) => {
+    setRemoveAdicRow(row); setRemoveAdicSaving(false); setRemoveAdicOpen(true);
+  }, []);
   const fecharRemoveAdic = useCallback(() => setRemoveAdicOpen(false), []);
+  const confirmarRemoveAdic = useCallback(async () => {
+    if (!removeAdicRow?.id) { setRemoveAdicOpen(false); return; }
+    setRemoveAdicSaving(true);
+    const ok = await deleteSurcharge(removeAdicRow.id);
+    setRemoveAdicSaving(false);
+    if (!ok) return;
+    setSurcharges(prev => prev.filter(s => s.id !== removeAdicRow.id));
+    setRemoveAdicOpen(false);
+  }, [removeAdicRow]);
 
   // ── Bases modal states ─────────────────────────────────────────────
   const mapsKeyConfigured = Boolean(getGoogleMapsApiKey());
@@ -501,6 +605,7 @@ export default function PagamentosGestaoScreen() {
   const [pricingEncRoutes, setPricingEncRoutes] = useState<PricingRouteRow[]>([]);
   const [pricingExcRoutes, setPricingExcRoutes] = useState<PricingRouteRow[]>([]);
   const [surcharges, setSurcharges] = useState<SurchargeCatalogRow[]>([]);
+  const [surchargeLinks, setSurchargeLinks] = useState<Array<{ pricing_route_id: string; surcharge_id: string }>>([]);
   const [basesData, setBasesData] = useState<BaseListItem[]>([]);
   const [ratings, setRatings] = useState<RatingListItem[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
@@ -540,7 +645,8 @@ export default function PagamentosGestaoScreen() {
       fetchSurchargeCatalog(),
       fetchWorkerRatings(),
       fetchBases(),
-    ]).then(([mots, preps, wsub, dRoutes, eRoutes, xRoutes, surcs, rats, bases]) => {
+      fetchPricingRouteSurchargeLinks(),
+    ]).then(([mots, preps, wsub, dRoutes, eRoutes, xRoutes, surcs, rats, bases, links]) => {
       if (!cancelled) {
         setMotoristasData(mots);
         setPreparadoresList(preps);
@@ -551,6 +657,7 @@ export default function PagamentosGestaoScreen() {
         setSurcharges(surcs);
         setRatings(rats);
         setBasesData(bases);
+        setSurchargeLinks(links);
         setDataLoading(false);
       }
     });
@@ -605,16 +712,44 @@ export default function PagamentosGestaoScreen() {
     ];
   }, [pricingDriverRoutes, pricingExcRoutes, pricingEncRoutes]);
 
+  const linksBySurcharge = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const l of surchargeLinks) {
+      const arr = m.get(l.surcharge_id) ?? [];
+      arr.push(l.pricing_route_id);
+      m.set(l.surcharge_id, arr);
+    }
+    return m;
+  }, [surchargeLinks]);
+
   const realAdicRows: AdicionalRow[] = useMemo(() =>
     surcharges.map(s => ({
       id: s.id,
       codigo: `#${s.id.slice(0, 5)}`,
       nome: s.name,
-      tipo: s.description || '—',
-      unidade: '—',
+      tipo: surchargeTypeLabel(s.surcharge_type),
+      tipoKey: s.surcharge_type,
       valor: fmtCents(s.default_value_cents),
+      valorCents: s.default_value_cents,
       inclusao: s.surcharge_mode === 'automatic' ? 'Automática' : 'Manual',
-    })), [surcharges]);
+      mode: s.surcharge_mode,
+      rotaIds: linksBySurcharge.get(s.id) ?? [],
+    })), [surcharges, linksBySurcharge]);
+
+  // Lista combinada de trechos (todos os role_types) para o seletor "Vincular trecho".
+  const allPricingRoutes = useMemo(
+    () => [...pricingDriverRoutes, ...pricingEncRoutes, ...pricingExcRoutes],
+    [pricingDriverRoutes, pricingEncRoutes, pricingExcRoutes],
+  );
+  const routeLabel = useCallback((r: PricingRouteRow): string => {
+    const short = (a: string | null | undefined) => (a ? a.split(',')[0]?.trim() : '') || '';
+    if (r.title && r.title.trim()) return r.title.trim();
+    const o = short(r.origin_address);
+    const d = short(r.destination_address);
+    return o ? `${o} → ${d}` : d || `#${r.id.slice(0, 5)}`;
+  }, []);
+  const routeTypeLabel = useCallback((rt: PricingRouteRow['role_type']): string =>
+    rt === 'driver' ? 'Viagem' : rt === 'preparer_excursions' ? 'Prep. excursões' : 'Prep. encomendas', []);
 
   const activeEncRows = realEncRows;
   const activeTrechoRows = realTrechoRows;
@@ -1323,12 +1458,12 @@ export default function PagamentosGestaoScreen() {
       React.createElement('div', { style: { ...cellBase, flex: adicionalCols[0].flex, minWidth: adicionalCols[0].minWidth, fontWeight: 500 } }, row.codigo),
       React.createElement('div', { style: { ...cellBase, flex: adicionalCols[1].flex, minWidth: adicionalCols[1].minWidth } }, row.nome),
       React.createElement('div', { style: { ...cellBase, flex: adicionalCols[2].flex, minWidth: adicionalCols[2].minWidth } }, row.tipo),
-      React.createElement('div', { style: { ...cellBase, flex: adicionalCols[3].flex, minWidth: adicionalCols[3].minWidth } }, row.unidade),
+      React.createElement('div', { style: { ...cellBase, flex: adicionalCols[3].flex, minWidth: adicionalCols[3].minWidth } }, String((row.rotaIds ?? []).length)),
       React.createElement('div', { style: { ...cellBase, flex: adicionalCols[4].flex, minWidth: adicionalCols[4].minWidth, fontWeight: 600 } }, row.valor),
       React.createElement('div', { style: { ...cellBase, flex: adicionalCols[5].flex, minWidth: adicionalCols[5].minWidth } }, row.inclusao),
       React.createElement('div', { style: { flex: adicionalCols[6].flex, minWidth: adicionalCols[6].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 } },
         React.createElement('button', { type: 'button', onClick: () => abrirEditAdic(row), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Editar' }, pencilSvg),
-        React.createElement('button', { type: 'button', onClick: () => abrirRemoveAdic(), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Remover' }, trashSvg))));
+        React.createElement('button', { type: 'button', onClick: () => abrirRemoveAdic(row), style: { ...webStyles.viagensActionBtn }, 'aria-label': 'Remover' }, trashSvg))));
 
   const adicSection = React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column' as const, gap: 0, width: '100%' },
@@ -1551,6 +1686,32 @@ export default function PagamentosGestaoScreen() {
     color: active ? '#fff' : '#0d0d0d', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font,
   });
 
+  // Seletor "Vincular trechos" (multi-seleção com checkbox) reutilizado nos modais
+  // de criar/editar adicional. Lista os trechos ativos de todos os módulos.
+  const trechoSelector = (selected: string[], toggle: (id: string) => void): React.ReactElement => {
+    const sel = new Set(selected);
+    return React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%', gap: 6 } },
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } },
+        `Vincular trechos${selected.length > 0 ? ` (${selected.length})` : ''}`),
+      React.createElement('div', {
+        style: { maxHeight: 180, overflowY: 'auto' as const, border: '1px solid #e2e2e2', borderRadius: 8 },
+      },
+        allPricingRoutes.length === 0
+          ? React.createElement('div', { style: { padding: 16, fontSize: 13, color: '#767676', ...font } }, 'Nenhum trecho cadastrado.')
+          : allPricingRoutes.map((r) => React.createElement('button', {
+              key: r.id, type: 'button', onClick: () => toggle(r.id),
+              style: { display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left' as const, padding: '8px 12px', border: 'none', borderBottom: '1px solid #f1f1f1', background: sel.has(r.id) ? '#f6f6f6' : '#fff', cursor: 'pointer', ...font },
+            },
+              React.createElement('span', {
+                style: { width: 16, height: 16, borderRadius: 4, flexShrink: 0, border: sel.has(r.id) ? 'none' : '1.5px solid #c4c4c4', background: sel.has(r.id) ? '#0d0d0d' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+              }, sel.has(r.id)
+                ? React.createElement('svg', { width: 10, height: 10, viewBox: '0 0 24 24', fill: 'none' },
+                    React.createElement('path', { d: 'M5 13l4 4L19 7', stroke: '#fff', strokeWidth: 3, strokeLinecap: 'round', strokeLinejoin: 'round' }))
+                : null),
+              React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', flex: 1, ...font } }, routeLabel(r)),
+              React.createElement('span', { style: { fontSize: 11, color: '#767676', flexShrink: 0, ...font } }, routeTypeLabel(r.role_type))))));
+  };
+
   const editAdicModal = editAdicOpen
     ? React.createElement('div', {
         role: 'dialog', 'aria-modal': true,
@@ -1589,26 +1750,12 @@ export default function PagamentosGestaoScreen() {
                   onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setEditAdicTipo(e.target.value),
                   style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: '#0d0d0d', outline: 'none', boxSizing: 'border-box' as const, appearance: 'none' as const, WebkitAppearance: 'none' as const, cursor: 'pointer', ...font },
                 },
-                  React.createElement('option', { value: 'Viagem' }, 'Viagem'),
-                  React.createElement('option', { value: 'Encomenda' }, 'Encomenda'),
-                  React.createElement('option', { value: 'Excursão' }, 'Excursão')),
+                  React.createElement('option', { value: '', disabled: true }, 'Selecione o tipo'),
+                  ...SURCHARGE_TYPES.map((t) => React.createElement('option', { key: t.key, value: t.key }, t.label))),
                 React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { position: 'absolute' as const, right: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } },
                   React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })))),
-            // Unidade
-            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
-              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Unidade'),
-              React.createElement('div', { style: { position: 'relative' as const, width: '100%' } },
-                React.createElement('select', {
-                  value: editAdicUnidade,
-                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setEditAdicUnidade(e.target.value),
-                  style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: editAdicUnidade ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, appearance: 'none' as const, WebkitAppearance: 'none' as const, cursor: 'pointer', ...font },
-                },
-                  React.createElement('option', { value: '' }, 'Selecione a unidade'),
-                  React.createElement('option', { value: 'KM' }, 'KM'),
-                  React.createElement('option', { value: 'Ida' }, 'Ida'),
-                  React.createElement('option', { value: 'Hora' }, 'Hora')),
-                React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { position: 'absolute' as const, right: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } },
-                  React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })))),
+            // Vincular trechos (multi-seleção)
+            trechoSelector(editAdicRotas, toggleEditRota),
             // Valor
             React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
               React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Valor'),
@@ -1625,7 +1772,8 @@ export default function PagamentosGestaoScreen() {
                 React.createElement('button', { type: 'button', onClick: () => setEditAdicInclusao('Manual'), style: chipStyle(editAdicInclusao === 'Manual') }, 'Manual')))),
           // CTA
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
-            React.createElement('button', { type: 'button', onClick: fecharEditAdic, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Salvar alterações'),
+            editAdicErro ? React.createElement('span', { style: { fontSize: 13, color: '#b53838', ...font } }, editAdicErro) : null,
+            React.createElement('button', { type: 'button', onClick: salvarEditAdic, disabled: editAdicSaving, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: editAdicSaving ? 'wait' : 'pointer', opacity: editAdicSaving ? 0.6 : 1, ...font } }, editAdicSaving ? 'Salvando...' : 'Salvar alterações'),
             React.createElement('button', { type: 'button', onClick: fecharEditAdic, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#f1f1f1', color: '#b53838', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Cancelar'))))
     : null;
 
@@ -1649,7 +1797,7 @@ export default function PagamentosGestaoScreen() {
               }, React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
                 React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))))),
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
-            React.createElement('button', { type: 'button', onClick: fecharRemoveAdic, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#f1f1f1', color: '#b53838', fontSize: 16, fontWeight: 600, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Remover'),
+            React.createElement('button', { type: 'button', onClick: confirmarRemoveAdic, disabled: removeAdicSaving, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#f1f1f1', color: '#b53838', fontSize: 16, fontWeight: 600, lineHeight: 1.5, cursor: removeAdicSaving ? 'wait' : 'pointer', opacity: removeAdicSaving ? 0.6 : 1, ...font } }, removeAdicSaving ? 'Removendo...' : 'Remover'),
             React.createElement('button', { type: 'button', onClick: fecharRemoveAdic, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: 'none', color: '#0d0d0d', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Voltar'))))
     : null;
 
@@ -1693,26 +1841,11 @@ export default function PagamentosGestaoScreen() {
                   style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: criarAdicTipo ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, appearance: 'none' as const, WebkitAppearance: 'none' as const, cursor: 'pointer', ...font },
                 },
                   React.createElement('option', { value: '', disabled: true }, 'Selecione o tipo'),
-                  React.createElement('option', { value: 'Viagem' }, 'Viagem'),
-                  React.createElement('option', { value: 'Encomenda' }, 'Encomenda'),
-                  React.createElement('option', { value: 'Excursão' }, 'Excursão')),
+                  ...SURCHARGE_TYPES.map((t) => React.createElement('option', { key: t.key, value: t.key }, t.label))),
                 React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { position: 'absolute' as const, right: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } },
                   React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })))),
-            // Unidade
-            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
-              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Unidade'),
-              React.createElement('div', { style: { position: 'relative' as const, width: '100%' } },
-                React.createElement('select', {
-                  value: criarAdicUnidade,
-                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setCriarAdicUnidade(e.target.value),
-                  style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: criarAdicUnidade ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, appearance: 'none' as const, WebkitAppearance: 'none' as const, cursor: 'pointer', ...font },
-                },
-                  React.createElement('option', { value: '', disabled: true }, 'Selecione a unidade'),
-                  React.createElement('option', { value: 'KM' }, 'KM'),
-                  React.createElement('option', { value: 'Ida' }, 'Ida'),
-                  React.createElement('option', { value: 'Hora' }, 'Hora')),
-                React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', style: { position: 'absolute' as const, right: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' as const } },
-                  React.createElement('path', { d: 'M6 9l6 6 6-6', stroke: '#767676', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })))),
+            // Vincular trechos (multi-seleção)
+            trechoSelector(criarAdicRotas, toggleCriarRota),
             // Valor
             React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
               React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Valor'),
@@ -1720,14 +1853,6 @@ export default function PagamentosGestaoScreen() {
                 type: 'text', value: criarAdicValor, placeholder: 'Ex: R$ 25,00',
                 onChange: (e: React.ChangeEvent<HTMLInputElement>) => setCriarAdicValor(e.target.value),
                 style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: criarAdicValor ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
-              })),
-            // Vincular trecho
-            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, width: '100%' } },
-              React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', minHeight: 40, display: 'flex', alignItems: 'center', ...font } }, 'Vincular trecho'),
-              React.createElement('input', {
-                type: 'text', value: criarAdicVincular, placeholder: 'Ex: (21) 98888-7777',
-                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setCriarAdicVincular(e.target.value),
-                style: { width: '100%', height: 44, borderRadius: 8, border: 'none', background: '#f1f1f1', padding: '0 16px', fontSize: 16, color: criarAdicVincular ? '#0d0d0d' : '#767676', outline: 'none', boxSizing: 'border-box' as const, ...font },
               })),
             // Inclusão chips
             React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%', marginTop: 8 } },
@@ -1737,7 +1862,8 @@ export default function PagamentosGestaoScreen() {
                 React.createElement('button', { type: 'button', onClick: () => setCriarAdicInclusao('Manual'), style: chipStyle(criarAdicInclusao === 'Manual') }, 'Manual')))),
           // CTA
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, padding: '0 16px', width: '100%', boxSizing: 'border-box' as const } },
-            React.createElement('button', { type: 'button', onClick: fecharCriarAdic, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Salvar adicional'),
+            criarAdicErro ? React.createElement('span', { style: { fontSize: 13, color: '#b53838', ...font } }, criarAdicErro) : null,
+            React.createElement('button', { type: 'button', onClick: salvarCriarAdic, disabled: criarAdicSaving, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: criarAdicSaving ? 'wait' : 'pointer', opacity: criarAdicSaving ? 0.6 : 1, ...font } }, criarAdicSaving ? 'Salvando...' : 'Salvar adicional'),
             React.createElement('button', { type: 'button', onClick: fecharCriarAdic, style: { width: '100%', height: 48, borderRadius: 8, border: 'none', background: '#f1f1f1', color: '#b53838', fontSize: 16, fontWeight: 500, lineHeight: 1.5, cursor: 'pointer', ...font } }, 'Cancelar'))))
     : null;
 
