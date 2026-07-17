@@ -73,5 +73,39 @@ target 'TakeMeCliente' do
       :mac_catalyst_enabled => false,
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
+
+    # Workaround para Xcode 26 / Clang novo: o `fmt` (FMT_STRING) usa funções
+    # consteval que o compilador novo rejeita como "not a constant expression".
+    # O fmt/base.h define FMT_USE_CONSTEVAL por detecção de compilador e ignora -D,
+    # então aplicamos um patch direto no header forçando o valor 0.
+    fmt_base = File.join(installer.sandbox.root, 'fmt', 'include', 'fmt', 'base.h')
+    if File.exist?(fmt_base)
+      contents = File.read(fmt_base)
+      marker = '#if FMT_USE_CONSTEVAL'
+      patch = "#undef FMT_USE_CONSTEVAL\n#define FMT_USE_CONSTEVAL 0\n"
+      unless contents.include?(patch)
+        contents = contents.sub(marker, patch + marker)
+        File.write(fmt_base, contents)
+        Pod::UI.puts '[TakeMe] Patched fmt/base.h to disable FMT_USE_CONSTEVAL (Xcode 26 workaround)'
+      end
+    end
+
+    # Workaround para Xcode 26 (stripe-react-native #2357): STPPaymentStatus é
+    # forward-declarado como NSUInteger no header de interop, mas o enum Swift é
+    # Int (NSInteger). O Clang novo trata o mismatch como erro fatal.
+    # O node_modules pode estar local (apps/cliente) ou hoisted (raiz do monorepo).
+    rel = File.join('node_modules', '@stripe', 'stripe-react-native', 'ios', 'StripeSwiftInterop.h')
+    [
+      File.expand_path(File.join(installer.sandbox.root, '..', '..', rel)),       # apps/cliente
+      File.expand_path(File.join(installer.sandbox.root, '..', '..', '..', '..', rel)), # raiz monorepo
+    ].uniq.each do |stripe_interop|
+      next unless File.exist?(stripe_interop)
+      s = File.read(stripe_interop)
+      if s.include?('NS_ENUM(NSUInteger, STPPaymentStatus)')
+        s = s.gsub('NS_ENUM(NSUInteger, STPPaymentStatus)', 'NS_ENUM(NSInteger, STPPaymentStatus)')
+        File.write(stripe_interop, s)
+        Pod::UI.puts "[TakeMe] Patched #{stripe_interop} STPPaymentStatus to NSInteger (Xcode 26 workaround)"
+      end
+    end
   end
 end

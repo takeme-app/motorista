@@ -21,7 +21,11 @@ import { supabase } from '../lib/supabase';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { ensureWorkerRouteHasCoordinates } from '../lib/ensureWorkerRouteCoordinates';
-import { coordsForScheduledTripFromRoute } from '../lib/routeScheduleTimes';
+import {
+  coordsForScheduledTripFromRoute,
+  computeNextDepartureArrivalFromWeekday,
+  normalizeRouteTimeForSchedule,
+} from '../lib/routeScheduleTimes';
 
 if (Platform.OS === 'android') {
   UIManager.setLayoutAnimationEnabledExperimental?.(true);
@@ -94,6 +98,10 @@ export function TripScheduleScreen({ navigation, route }: Props) {
           is_active, status,
           origin_address, destination_address
         `;
+      // Carrega também as viagens desativadas (is_active=false): elas precisam
+      // permanecer visíveis para que o switch "Status da viagem" continue
+      // aparecendo e possa RELIGAR o dia. Sem isto, um dia totalmente desligado
+      // some da lista e o toggle desaparece, impedindo reativar (bug do cronograma).
       let res = await supabase
         .from('scheduled_trips')
         .select(
@@ -101,7 +109,6 @@ export function TripScheduleScreen({ navigation, route }: Props) {
           worker_routes ( origin_address, destination_address )`,
         )
         .eq('driver_id', user.id)
-        .eq('is_active', true)
         .in('status', ['active', 'scheduled'])
         .order('departure_at', { ascending: true });
 
@@ -110,7 +117,6 @@ export function TripScheduleScreen({ navigation, route }: Props) {
           .from('scheduled_trips')
           .select(baseSelect)
           .eq('driver_id', user.id)
-          .eq('is_active', true)
           .in('status', ['active', 'scheduled'])
           .order('departure_at', { ascending: true });
       }
@@ -173,9 +179,11 @@ export function TripScheduleScreen({ navigation, route }: Props) {
       const states: Record<number, DayState> = {};
       for (let d = 0; d < 7; d++) {
         const target = targetDowFromCardIndex(d);
-        const first = rows.find((t) => t.effective_day_of_week === target);
-        if (first) {
-          states[d] = { vehicleType: 'principal', statusActive: first.is_active };
+        const dayRows = rows.filter((t) => t.effective_day_of_week === target);
+        if (dayRows.length > 0) {
+          // Dia fica "ligado" se houver ao menos uma viagem ativa; "desligado" se
+          // todas estiverem desativadas (mas ainda visíveis para religar).
+          states[d] = { vehicleType: 'principal', statusActive: dayRows.some((t) => t.is_active) };
         }
       }
       setDayStates(states);
@@ -281,6 +289,18 @@ export function TripScheduleScreen({ navigation, route }: Props) {
               patch.origin_lng = geo.origin_lng;
               patch.destination_lat = geo.destination_lat;
               patch.destination_lng = geo.destination_lng;
+            }
+            // Reagenda a próxima ocorrência ao religar (evita ficar com data no passado).
+            const dep = normalizeRouteTimeForSchedule(trip?.departure_time ?? null);
+            const arr = normalizeRouteTimeForSchedule(trip?.arrival_time ?? null);
+            if (trip && dep && arr) {
+              const { departureAt, arrivalAt } = computeNextDepartureArrivalFromWeekday(
+                trip.effective_day_of_week,
+                dep,
+                arr,
+              );
+              patch.departure_at = departureAt.toISOString();
+              patch.arrival_at = arrivalAt.toISOString();
             }
             return supabase.from('scheduled_trips').update(patch as never).eq('id', id);
           }),

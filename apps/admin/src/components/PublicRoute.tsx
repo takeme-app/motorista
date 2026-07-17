@@ -10,7 +10,9 @@ export default function PublicRoute() {
     return React.createElement('div', { style: webStyles.loading },
       React.createElement('span', { style: webStyles.loadingText }, 'Carregando...'));
   }
-  if (session && location.pathname !== '/forgot-password') {
+  // /reset-password precisa renderizar mesmo com sessão (a de recuperação criada
+  // pelo token do e-mail), senão o usuário seria redirecionado antes de trocar a senha.
+  if (session && location.pathname !== '/forgot-password' && location.pathname !== '/reset-password') {
     return React.createElement(Navigate, { to: '/', replace: true });
   }
   return React.createElement(Outlet);

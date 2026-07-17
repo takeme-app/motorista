@@ -108,6 +108,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(true);
   const [dayToggles, setDayToggles] = useState<DayToggle>({});
   const [priceAdjust, setPriceAdjust] = useState<PriceAdjust>({ weekend: '15', nocturnal: '15', holiday: '15' });
+  const [routeBasePriceCents, setRouteBasePriceCents] = useState(0);
   const [savingAdjust, setSavingAdjust] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [addingDayIdx, setAddingDayIdx] = useState(0);
@@ -147,7 +148,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
         .order('day_of_week', { ascending: true }),
       (supabase as any)
         .from('worker_routes')
-        .select('weekend_surcharge_pct, nocturnal_surcharge_pct, holiday_surcharge_pct')
+        .select('price_per_person_cents, weekend_surcharge_pct, nocturnal_surcharge_pct, holiday_surcharge_pct')
         .eq('id', routeId)
         .maybeSingle(),
     ]);
@@ -174,6 +175,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
 
     const surcharges = routeRes.data as
       | {
+          price_per_person_cents?: number | null;
           weekend_surcharge_pct?: number | null;
           nocturnal_surcharge_pct?: number | null;
           holiday_surcharge_pct?: number | null;
@@ -186,6 +188,10 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
         holiday: String(Number(surcharges.holiday_surcharge_pct ?? 0)),
       });
     }
+    // Valor base da viagem para a legenda dos adicionais: preço da rota; se ausente,
+    // usa o preço da 1ª viagem carregada.
+    const routePrice = Number(surcharges?.price_per_person_cents ?? 0);
+    setRouteBasePriceCents(routePrice > 0 ? routePrice : (rows[0]?.price_per_person_cents ?? 0));
     if (!silent) setLoading(false);
   }, [routeId]);
 
@@ -230,22 +236,36 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
     const dayNum = dayIdx === 6 ? 0 : dayIdx + 1;
     try {
       if (value) {
+        // Busca as viagens do dia direto no banco (SEM filtrar is_active), pois as
+        // viagens desligadas pelo toggle ficam com is_active=false e por isso não
+        // entram no estado em memória (load usa .eq('is_active', true)). Sem isto,
+        // o toggle nunca conseguia RELIGAR uma viagem previamente desativada.
+        const { data: dbDayRows, error: fetchErr } = await supabase
+          .from('scheduled_trips')
+          .select('id, departure_time, arrival_time')
+          .eq('route_id', routeId)
+          .eq('day_of_week', dayNum)
+          .in('status', ['active', 'scheduled']);
+        if (fetchErr) throw fetchErr;
+        const seenTimes = new Set<string>();
         const rowsToEnable: { id: string; dep: string; arr: string }[] = [];
-        for (const t of dayTrips(dayIdx)) {
+        for (const t of (dbDayRows ?? []) as unknown as { id: string; departure_time: string | null; arrival_time: string | null }[]) {
           const dep = normalizeRouteTimeForSchedule(t.departure_time);
           const arr = normalizeRouteTimeForSchedule(t.arrival_time);
-          if (dep && arr) rowsToEnable.push({ id: t.id, dep, arr });
+          if (!dep || !arr) continue;
+          const key = `${dep}|${arr}`;
+          if (seenTimes.has(key)) continue; // dedup por horário
+          seenTimes.add(key);
+          rowsToEnable.push({ id: t.id, dep, arr });
         }
         if (rowsToEnable.length === 0) {
-          const dayList = dayTrips(dayIdx);
-          if (dayList.length === 0) {
-            showAlert('Atenção', 'Não há viagens neste dia. Use + Adicionar viagem.');
-          } else {
-            showAlert(
-              'Atenção',
-              'Horários de partida ou chegada inválidos. Use HH:MM (ex.: 09:00 e 10:30).',
-            );
-          }
+          const hadRows = (dbDayRows ?? []).length > 0;
+          showAlert(
+            'Atenção',
+            hadRows
+              ? 'Horários de partida ou chegada inválidos. Use HH:MM (ex.: 09:00 e 10:30).'
+              : 'Não há viagens neste dia. Use + Adicionar viagem.',
+          );
           await load({ silent: true });
           return;
         }
@@ -476,20 +496,50 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
         newArrive,
       );
 
-      // Evita duplicar trip ativa com mesma rota/dia/horário (não há unique no banco).
+      // Verifica duplicidade por rota/dia/horário (não há unique no banco).
+      // Considera is_active para tratar corretamente viagens desligadas pelo toggle:
+      //  - existe ATIVA (is_active=true)  → bloqueia (duplicidade real).
+      //  - existe só DESATIVADA (is_active=false) → RELIGA a existente (evita duplicar
+      //    e resolve o "já existe" ao recadastrar após desligar a chave).
       const { data: existing } = await supabase
         .from('scheduled_trips')
-        .select('id')
+        .select('id, is_active')
         .eq('driver_id', user.id)
         .eq('route_id', routeId)
         .eq('day_of_week', dayNum)
         .eq('departure_time', newDepart)
         .eq('arrival_time', newArrive)
-        .in('status', ['active', 'scheduled'])
-        .limit(1);
-      if (existing && existing.length > 0) {
+        .in('status', ['active', 'scheduled']);
+      const existingRows = (existing ?? []) as unknown as { id: string; is_active: boolean }[];
+      if (existingRows.some((x) => x.is_active)) {
         closeModal();
         setTimeout(() => showAlert('Atenção', 'Já existe uma viagem com esse horário neste dia.'), 0);
+        return;
+      }
+      const disabledRow = existingRows.find((x) => !x.is_active);
+      if (disabledRow) {
+        const { error: reErr } = await supabase
+          .from('scheduled_trips')
+          .update({
+            is_active: true,
+            status: 'active',
+            capacity: cap,
+            seats_available: cap,
+            departure_at: departureAt.toISOString(),
+            arrival_at: arrivalAt.toISOString(),
+            origin_lat: geo.origin_lat,
+            origin_lng: geo.origin_lng,
+            destination_lat: geo.destination_lat,
+            destination_lng: geo.destination_lng,
+            updated_at: new Date().toISOString(),
+          } as never)
+          .eq('id', disabledRow.id);
+        if (reErr) throw reErr;
+        closeModal();
+        await new Promise<void>((r) => {
+          InteractionManager.runAfterInteractions(() => r());
+        });
+        await load({ silent: true });
         return;
       }
 
@@ -665,25 +715,33 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
             { label: 'Adicional fim de semana (%)', key: 'weekend', base: 150 },
             { label: 'Adicional noturno (%)', key: 'nocturnal', base: 125 },
             { label: 'Adicional feriado (%)', key: 'holiday', base: 125 },
-          ].map((item) => (
-            <View key={item.key} style={styles.adjustGroup}>
-              <Text style={styles.adjustLabel}>{item.label}</Text>
-              <TextInput
-                style={styles.adjustInput}
-                value={priceAdjust[item.key as keyof PriceAdjust]}
-                onChangeText={(v) => setPriceAdjust((p) => ({ ...p, [item.key]: v.replace(/[^0-9.]/g, '') }))}
-                keyboardType="numeric"
-                placeholder="0"
-                placeholderTextColor="#9CA3AF"
-              />
-              <Text style={styles.adjustHint}>
-                Valor da viagem + adicional{'  '}
-                <Text style={styles.adjustHintValue}>
-                  R$ {item.base},00
+          ].map((item) => {
+            // Legenda dinâmica: valor da viagem + adicional conforme a % escolhida.
+            // Usa o preço real da rota; se indisponível, cai no valor de exemplo.
+            const pct = parseFloat(priceAdjust[item.key as keyof PriceAdjust]) || 0;
+            const baseCents = routeBasePriceCents > 0 ? routeBasePriceCents : item.base * 100;
+            const totalStr = (Math.round(baseCents * (1 + pct / 100)) / 100)
+              .toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            return (
+              <View key={item.key} style={styles.adjustGroup}>
+                <Text style={styles.adjustLabel}>{item.label}</Text>
+                <TextInput
+                  style={styles.adjustInput}
+                  value={priceAdjust[item.key as keyof PriceAdjust]}
+                  onChangeText={(v) => setPriceAdjust((p) => ({ ...p, [item.key]: v.replace(/[^0-9.]/g, '') }))}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor="#9CA3AF"
+                />
+                <Text style={styles.adjustHint}>
+                  Valor da viagem + adicional{'  '}
+                  <Text style={styles.adjustHintValue}>
+                    R$ {totalStr}
+                  </Text>
                 </Text>
-              </Text>
-            </View>
-          ))}
+              </View>
+            );
+          })}
 
           <TouchableOpacity
             style={[styles.saveAdjBtn, savingAdjust && { opacity: 0.6 }]}

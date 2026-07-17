@@ -49,6 +49,10 @@ export function SwipeableRouteRow({ children, deleteAction, isOpen, onOpen, onCl
   const panResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy) * 1.2,
+      // iOS: dentro de um ScrollView, o default (true) faz o ScrollView reivindicar
+      // o gesto e disparar onPanResponderTerminate → a linha fechava sozinha e a
+      // lixeira "não segurava" na tela. Negar a tomada de posse mantém a linha aberta.
+      onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: () => {
         translateX.stopAnimation((v: number) => {
           startX.current = v;
@@ -65,8 +69,11 @@ export function SwipeableRouteRow({ children, deleteAction, isOpen, onOpen, onCl
         if (current < threshold || vx < -0.45) snapTo(-DELETE_WIDTH);
         else snapTo(0);
       },
-      onPanResponderTerminate: () => {
-        snapTo(0);
+      onPanResponderTerminate: (_, g) => {
+        // Só chega aqui numa interrupção forçada do SO. Respeita a intenção do
+        // gesto (se já passou do limite, mantém aberto) em vez de fechar sempre.
+        const current = Math.min(0, Math.max(-DELETE_WIDTH, startX.current + (g?.dx ?? 0)));
+        snapTo(current < -DELETE_WIDTH / 2 ? -DELETE_WIDTH : 0);
       },
     }),
   ).current;

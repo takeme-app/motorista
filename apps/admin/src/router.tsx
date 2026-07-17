@@ -5,6 +5,7 @@ import PublicRoute from './components/PublicRoute';
 import Layout from './components/Layout';
 import WebLoginScreen from './screens/WebLoginScreen';
 import WebForgotPasswordScreen from './screens/WebForgotPasswordScreen';
+import WebResetPasswordScreen from './screens/WebResetPasswordScreen';
 import WebSignupScreen from './screens/WebSignupScreen';
 import HomeScreen from './screens/HomeScreen';
 import ViagensScreen from './screens/ViagensScreen';
@@ -47,6 +48,7 @@ export const router = createBrowserRouter([
       { path: '/login', element: React.createElement(WebLoginScreen) },
       { path: '/signup', element: React.createElement(WebSignupScreen) },
       { path: '/forgot-password', element: React.createElement(WebForgotPasswordScreen) },
+      { path: '/reset-password', element: React.createElement(WebResetPasswordScreen) },
     ],
   },
   {

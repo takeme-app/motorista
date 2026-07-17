@@ -4,10 +4,12 @@
  */
 import { useState } from 'react';
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { webStyles, eyeSvg, getLogoSrc, logoArrowSvg } from '../styles/webStyles';
 
 export default function WebLoginScreen() {
+  const navigate = useNavigate();
   const [phoneOrEmail, setPhoneOrEmail] = useState('');
   const [password, setPassword] = useState('');
   const [hidePassword, setHidePassword] = useState(true);
@@ -102,5 +104,11 @@ export default function WebLoginScreen() {
                   style: { ...webStyles.primaryBtn, opacity: loading ? 0.7 : 1 },
                   disabled: loading,
                   onClick: handleLogin,
-                }, loading ? 'Entrando...' : 'Continuar'))))))))));
+                }, loading ? 'Entrando...' : 'Continuar')),
+              React.createElement('div', { style: { display: 'flex', justifyContent: 'center', marginTop: 16 } },
+                React.createElement('button', {
+                  type: 'button',
+                  onClick: () => navigate('/forgot-password'),
+                  style: { background: 'none', border: 'none', color: '#767676', fontSize: 14, fontWeight: 500, cursor: 'pointer', textDecoration: 'underline', fontFamily: 'Inter, sans-serif' },
+                }, 'Esqueceu sua senha?'))))))))));
 }

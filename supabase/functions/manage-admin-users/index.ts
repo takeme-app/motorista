@@ -3,6 +3,9 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
+  // Sem Allow-Methods o browser bloqueia PUT/DELETE após o preflight (OPTIONS),
+  // quebrando editar/remover admin. GET/POST/PUT/DELETE são todos usados aqui.
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };

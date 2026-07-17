@@ -73,5 +73,21 @@ target 'TakeMeMotorista' do
       :mac_catalyst_enabled => false,
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
+
+    # Workaround para Xcode 26 / Clang novo: o `fmt` (FMT_STRING) usa funções
+    # consteval que o compilador novo rejeita como "not a constant expression".
+    # O fmt/base.h define FMT_USE_CONSTEVAL por detecção de compilador e ignora -D,
+    # então aplicamos um patch direto no header forçando o valor 0.
+    fmt_base = File.join(installer.sandbox.root, 'fmt', 'include', 'fmt', 'base.h')
+    if File.exist?(fmt_base)
+      contents = File.read(fmt_base)
+      marker = '#if FMT_USE_CONSTEVAL'
+      patch = "#undef FMT_USE_CONSTEVAL\n#define FMT_USE_CONSTEVAL 0\n"
+      unless contents.include?(patch)
+        contents = contents.sub(marker, patch + marker)
+        File.write(fmt_base, contents)
+        Pod::UI.puts '[TakeMe] Patched fmt/base.h to disable FMT_USE_CONSTEVAL (Xcode 26 workaround)'
+      end
+    end
   end
 end

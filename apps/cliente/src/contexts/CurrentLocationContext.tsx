@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { resolveCurrentPlace } from '../lib/location';
+import { supabase } from '../lib/supabase';
 
 export type CurrentPlace = {
   latitude: number;
@@ -40,18 +41,42 @@ export function CurrentLocationProvider({ children }: CurrentLocationProviderPro
     return null;
   }, []);
 
+  // Só resolve a localização (o que dispara o pedido de permissão do sistema)
+  // quando há sessão autenticada. Evita solicitar localização na tela inicial/
+  // login, antes de qualquer contexto de uso — motivo comum de rejeição na
+  // análise da Apple (App Store Review Guideline 5.1.1).
   useEffect(() => {
     let alive = true;
-    resolveCurrentPlace().then((r) => {
+
+    const resolve = () => {
+      resolveCurrentPlace().then((r) => {
+        if (!alive) return;
+        if (r.kind === 'place') {
+          setCurrentPlace({ latitude: r.latitude, longitude: r.longitude, address: r.address });
+        } else {
+          setCurrentPlace(null);
+        }
+      });
+    };
+
+    // Sessão já existente ao abrir o app (usuário logado): resolve na largada.
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (alive && session?.user) resolve();
+    });
+
+    // Ao logar, resolve; ao sair, limpa (e não pede permissão de novo).
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (!alive) return;
-      if (r.kind === 'place') {
-        setCurrentPlace({ latitude: r.latitude, longitude: r.longitude, address: r.address });
-      } else {
+      if (event === 'SIGNED_IN' && session?.user) {
+        resolve();
+      } else if (event === 'SIGNED_OUT') {
         setCurrentPlace(null);
       }
     });
+
     return () => {
       alive = false;
+      sub.subscription.unsubscribe();
     };
   }, []);
 
