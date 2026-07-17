@@ -88,9 +88,7 @@
       ],
       [
         "@stripe/stripe-react-native",
-        {
-          "merchantIdentifier": "merchant.com.takeme.cliente"
-        }
+        {}
       ],
       "@react-native-community/datetimepicker",
       "expo-apple-authentication"

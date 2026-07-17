@@ -253,6 +253,10 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
+  - ExpoPrint (15.0.8):
+    - ExpoModulesCore
+  - ExpoSharing (14.0.8):
+    - ExpoModulesCore
   - ExpoSplashScreen (31.0.13):
     - ExpoModulesCore
   - EXStructuredHeaders (5.0.0)
@@ -2423,6 +2427,8 @@ DEPENDENCIES:
   - ExpoLinking (from `../../../node_modules/expo-linking/ios`)
   - ExpoLocation (from `../../../node_modules/expo-location/ios`)
   - ExpoModulesCore (from `../../../node_modules/expo-modules-core`)
+  - ExpoPrint (from `../../../node_modules/expo-print/ios`)
+  - ExpoSharing (from `../../../node_modules/expo-sharing/ios`)
   - ExpoSplashScreen (from `../../../node_modules/expo-splash-screen/ios`)
   - EXStructuredHeaders (from `../../../node_modules/expo-structured-headers/ios`)
   - EXUpdates (from `../../../node_modules/expo-updates/ios`)
@@ -2582,6 +2588,10 @@ EXTERNAL SOURCES:
     :path: "../../../node_modules/expo-location/ios"
   ExpoModulesCore:
     :path: "../../../node_modules/expo-modules-core"
+  ExpoPrint:
+    :path: "../../../node_modules/expo-print/ios"
+  ExpoSharing:
+    :path: "../../../node_modules/expo-sharing/ios"
   ExpoSplashScreen:
     :path: "../../../node_modules/expo-splash-screen/ios"
   EXStructuredHeaders:
@@ -2772,6 +2782,8 @@ SPEC CHECKSUMS:
   ExpoLinking: 2ef632ad5013e3f1568fae9408d56ab9af5efc55
   ExpoLocation: d5b61cb4970fa982e39ca94246a206a0c3b812ca
   ExpoModulesCore: 9e6a5514828e7dd5ded9e99d33557be2d284e660
+  ExpoPrint: 813bfa965eda2ecc4b1cdc61612c820e239c382a
+  ExpoSharing: 0d983394ed4a80334bab5a0d5384f75710feb7e8
   ExpoSplashScreen: bc3cffefca2716e5f22350ca109badd7e50ec14d
   EXStructuredHeaders: c951e77f2d936f88637421e9588c976da5827368
   EXUpdates: 0de6a4c54030b7070da16126cc481912004ec705
@@ -2878,6 +2890,6 @@ SPEC CHECKSUMS:
   Turf: c9eb11a65d96af58cac523460fd40fec5061b081
   Yoga: 5934998fbeaef7845dbf698f698518695ab4cd1a
 
-PODFILE CHECKSUM: f8b493191323211db233b9407d8eaebd96a37bed
+PODFILE CHECKSUM: 66a3d9651f9d4d9a1660f9cf4785ce202db0d373
 
 COCOAPODS: 1.16.2

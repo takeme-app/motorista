@@ -416,16 +416,17 @@
 				CODE_SIGN_ENTITLEMENTS = TakeMeCliente/TakeMeCliente.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = HVUQ62L85J;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = PNQCWBAHBH;
 				ENABLE_BITCODE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
 					"$(inherited)",
 					"FB_SONARKIT_ENABLED=1",
 				);
 				INFOPLIST_FILE = TakeMeCliente/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Take Me - Cliente";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.navigation";
-				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -460,11 +461,12 @@
 				CODE_SIGN_ENTITLEMENTS = TakeMeCliente/TakeMeCliente.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = HVUQ62L85J;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = PNQCWBAHBH;
 				INFOPLIST_FILE = TakeMeCliente/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Take Me - Cliente";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.navigation";
-				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
