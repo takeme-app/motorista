@@ -8,7 +8,39 @@ import { useState, useEffect } from 'react';
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { webStyles } from '../styles/webStyles';
+import { getLogoSrc } from '../styles/webStyles';
+
+const s = {
+  outer: {
+    minHeight: '100vh', width: '100%', boxSizing: 'border-box' as const,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: '#f6f6f6', padding: 24, fontFamily: 'Inter, sans-serif',
+  } as React.CSSProperties,
+  card: {
+    background: '#fff', borderRadius: 16, padding: 32, width: '100%', maxWidth: 400,
+    boxSizing: 'border-box' as const, display: 'flex', flexDirection: 'column' as const, gap: 16,
+    boxShadow: '0 10px 40px rgba(0,0,0,0.08)',
+  } as React.CSSProperties,
+  logoWrap: { display: 'flex', justifyContent: 'center', marginBottom: 4 } as React.CSSProperties,
+  logo: { height: 40, objectFit: 'contain' as const } as React.CSSProperties,
+  title: { fontSize: 22, fontWeight: 700, color: '#0d0d0d', textAlign: 'center' as const, margin: 0 } as React.CSSProperties,
+  subtitle: { fontSize: 14, color: '#767676', textAlign: 'center' as const, margin: 0, lineHeight: 1.5 } as React.CSSProperties,
+  field: { display: 'flex', flexDirection: 'column' as const, gap: 6 } as React.CSSProperties,
+  label: { fontSize: 13, fontWeight: 500, color: '#0d0d0d' } as React.CSSProperties,
+  input: {
+    height: 48, borderRadius: 8, border: '1px solid #e2e2e2', background: '#f6f6f6',
+    padding: '0 16px', fontSize: 15, color: '#0d0d0d', outline: 'none', width: '100%',
+    boxSizing: 'border-box' as const, fontFamily: 'Inter, sans-serif',
+  } as React.CSSProperties,
+  inputError: { border: '1px solid #e57373', background: '#fef2f2' } as React.CSSProperties,
+  errorText: { fontSize: 13, color: '#b53838', margin: 0 } as React.CSSProperties,
+  primaryBtn: {
+    height: 48, borderRadius: 8, border: 'none', background: '#0d0d0d', color: '#fff',
+    fontSize: 16, fontWeight: 600, cursor: 'pointer', width: '100%', marginTop: 4,
+    fontFamily: 'Inter, sans-serif',
+  } as React.CSSProperties,
+  successText: { fontSize: 15, color: '#174f38', textAlign: 'center' as const, margin: 0, lineHeight: 1.5 } as React.CSSProperties,
+};
 
 export default function WebResetPasswordScreen() {
   const navigate = useNavigate();
@@ -51,28 +83,38 @@ export default function WebResetPasswordScreen() {
     }
   };
 
-  return React.createElement('div', { style: webStyles.outer },
-    React.createElement('div', { style: webStyles.card },
-      React.createElement('h2', { style: webStyles.title }, 'Definir nova senha'),
+  const logoSrc = getLogoSrc();
+
+  return React.createElement('div', { style: s.outer },
+    // Garante que html/body/#root ocupem a tela toda (evita faixa de fundo diferente).
+    React.createElement('style', { dangerouslySetInnerHTML: { __html: 'html,body,#root{margin:0;padding:0;width:100%;min-height:100vh;background:#f6f6f6;}' } }),
+    React.createElement('div', { style: s.card },
+      logoSrc ? React.createElement('div', { style: s.logoWrap }, React.createElement('img', { src: logoSrc, alt: 'Take Me', style: s.logo })) : null,
+      React.createElement('h2', { style: s.title }, 'Definir nova senha'),
       done
-        ? React.createElement('p', { style: webStyles.sentText }, 'Senha alterada com sucesso. Redirecionando para o login...')
+        ? React.createElement('p', { style: s.successText }, 'Senha alterada com sucesso. Redirecionando para o login...')
         : !ready
-          ? React.createElement('p', { style: webStyles.subtitle }, 'Validando o link de redefinição...')
-          : [
-              React.createElement('p', { key: 'sub', style: webStyles.subtitle }, 'Digite sua nova senha.'),
-              React.createElement('input', {
-                key: 'p1', type: 'password', placeholder: 'Nova senha', value: pw,
-                onChange: (e: React.ChangeEvent<HTMLInputElement>) => { setPw(e.target.value); setError(''); },
-                disabled: loading, style: { ...webStyles.input, ...(error ? webStyles.inputError : {}) },
-              }),
-              React.createElement('input', {
-                key: 'p2', type: 'password', placeholder: 'Confirmar nova senha', value: pw2,
-                onChange: (e: React.ChangeEvent<HTMLInputElement>) => { setPw2(e.target.value); setError(''); },
-                disabled: loading, style: { ...webStyles.input, ...(error ? webStyles.inputError : {}) },
-              }),
-              error ? React.createElement('p', { key: 'err', style: webStyles.errorText }, error) : null,
+          ? React.createElement('p', { style: s.subtitle }, 'Validando o link de redefinição...')
+          : React.createElement(React.Fragment, null,
+              React.createElement('p', { style: s.subtitle }, 'Digite sua nova senha abaixo.'),
+              React.createElement('div', { style: s.field },
+                React.createElement('label', { style: s.label }, 'Nova senha'),
+                React.createElement('input', {
+                  type: 'password', placeholder: 'Mínimo 6 caracteres', value: pw,
+                  onChange: (e: React.ChangeEvent<HTMLInputElement>) => { setPw(e.target.value); setError(''); },
+                  disabled: loading, style: { ...s.input, ...(error ? s.inputError : {}) },
+                })),
+              React.createElement('div', { style: s.field },
+                React.createElement('label', { style: s.label }, 'Confirmar nova senha'),
+                React.createElement('input', {
+                  type: 'password', placeholder: 'Repita a nova senha', value: pw2,
+                  onChange: (e: React.ChangeEvent<HTMLInputElement>) => { setPw2(e.target.value); setError(''); },
+                  disabled: loading, style: { ...s.input, ...(error ? s.inputError : {}) },
+                  onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !loading) void handleSubmit(); },
+                })),
+              error ? React.createElement('p', { style: s.errorText }, error) : null,
               React.createElement('button', {
-                key: 'btn', type: 'button', style: webStyles.primaryBtn, disabled: loading, onClick: handleSubmit,
-              }, loading ? 'Salvando...' : 'Redefinir senha'),
-            ]));
+                type: 'button', style: { ...s.primaryBtn, opacity: loading ? 0.7 : 1 },
+                disabled: loading, onClick: handleSubmit,
+              }, loading ? 'Salvando...' : 'Redefinir senha'))));
 }
