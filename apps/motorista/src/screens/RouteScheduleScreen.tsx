@@ -108,6 +108,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(true);
   const [dayToggles, setDayToggles] = useState<DayToggle>({});
   const [priceAdjust, setPriceAdjust] = useState<PriceAdjust>({ weekend: '15', nocturnal: '15', holiday: '15' });
+  const [routeBasePriceCents, setRouteBasePriceCents] = useState(0);
   const [savingAdjust, setSavingAdjust] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [addingDayIdx, setAddingDayIdx] = useState(0);
@@ -147,7 +148,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
         .order('day_of_week', { ascending: true }),
       (supabase as any)
         .from('worker_routes')
-        .select('weekend_surcharge_pct, nocturnal_surcharge_pct, holiday_surcharge_pct')
+        .select('price_per_person_cents, weekend_surcharge_pct, nocturnal_surcharge_pct, holiday_surcharge_pct')
         .eq('id', routeId)
         .maybeSingle(),
     ]);
@@ -174,6 +175,7 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
 
     const surcharges = routeRes.data as
       | {
+          price_per_person_cents?: number | null;
           weekend_surcharge_pct?: number | null;
           nocturnal_surcharge_pct?: number | null;
           holiday_surcharge_pct?: number | null;
@@ -186,6 +188,10 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
         holiday: String(Number(surcharges.holiday_surcharge_pct ?? 0)),
       });
     }
+    // Valor base da viagem para a legenda dos adicionais: preço da rota; se ausente,
+    // usa o preço da 1ª viagem carregada.
+    const routePrice = Number(surcharges?.price_per_person_cents ?? 0);
+    setRouteBasePriceCents(routePrice > 0 ? routePrice : (rows[0]?.price_per_person_cents ?? 0));
     if (!silent) setLoading(false);
   }, [routeId]);
 
@@ -709,25 +715,33 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
             { label: 'Adicional fim de semana (%)', key: 'weekend', base: 150 },
             { label: 'Adicional noturno (%)', key: 'nocturnal', base: 125 },
             { label: 'Adicional feriado (%)', key: 'holiday', base: 125 },
-          ].map((item) => (
-            <View key={item.key} style={styles.adjustGroup}>
-              <Text style={styles.adjustLabel}>{item.label}</Text>
-              <TextInput
-                style={styles.adjustInput}
-                value={priceAdjust[item.key as keyof PriceAdjust]}
-                onChangeText={(v) => setPriceAdjust((p) => ({ ...p, [item.key]: v.replace(/[^0-9.]/g, '') }))}
-                keyboardType="numeric"
-                placeholder="0"
-                placeholderTextColor="#9CA3AF"
-              />
-              <Text style={styles.adjustHint}>
-                Valor da viagem + adicional{'  '}
-                <Text style={styles.adjustHintValue}>
-                  R$ {item.base},00
+          ].map((item) => {
+            // Legenda dinâmica: valor da viagem + adicional conforme a % escolhida.
+            // Usa o preço real da rota; se indisponível, cai no valor de exemplo.
+            const pct = parseFloat(priceAdjust[item.key as keyof PriceAdjust]) || 0;
+            const baseCents = routeBasePriceCents > 0 ? routeBasePriceCents : item.base * 100;
+            const totalStr = (Math.round(baseCents * (1 + pct / 100)) / 100)
+              .toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            return (
+              <View key={item.key} style={styles.adjustGroup}>
+                <Text style={styles.adjustLabel}>{item.label}</Text>
+                <TextInput
+                  style={styles.adjustInput}
+                  value={priceAdjust[item.key as keyof PriceAdjust]}
+                  onChangeText={(v) => setPriceAdjust((p) => ({ ...p, [item.key]: v.replace(/[^0-9.]/g, '') }))}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor="#9CA3AF"
+                />
+                <Text style={styles.adjustHint}>
+                  Valor da viagem + adicional{'  '}
+                  <Text style={styles.adjustHintValue}>
+                    R$ {totalStr}
+                  </Text>
                 </Text>
-              </Text>
-            </View>
-          ))}
+              </View>
+            );
+          })}
 
           <TouchableOpacity
             style={[styles.saveAdjBtn, savingAdjust && { opacity: 0.6 }]}
