@@ -22,7 +22,16 @@ export default function WebForgotPasswordScreen() {
     if (!isSupabaseConfigured) { setForgotError('Supabase não configurado.'); return; }
     setForgotLoading(true);
     try {
-      const redirectTo = typeof window !== 'undefined' ? window.location.origin + '/' : undefined;
+      // Aponta para a URL PÚBLICA de produção do admin (env EXPO_PUBLIC_ADMIN_URL),
+      // não para window.location.origin — que pode ser o deploy de preview da Vercel
+      // protegido por SSO (fazendo o link do e-mail cair na tela de login da Vercel).
+      const adminBase = (
+        (typeof process !== 'undefined' && process.env.EXPO_PUBLIC_ADMIN_URL
+          ? String(process.env.EXPO_PUBLIC_ADMIN_URL).trim().replace(/\/$/, '')
+          : '') ||
+        (typeof window !== 'undefined' ? window.location.origin : '')
+      );
+      const redirectTo = adminBase ? `${adminBase}/reset-password` : undefined;
       const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
       if (error) throw error;
       setForgotSent(true);
