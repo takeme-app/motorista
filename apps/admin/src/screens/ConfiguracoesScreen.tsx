@@ -5,7 +5,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { webStyles } from '../styles/webStyles';
 import { useAuth } from '../contexts/AuthContext';
-import { fetchAdminUsers, createAdminUser, deleteAdminUser, invokeEdgeFunction } from '../data/queries';
+import { fetchAdminUsers, createAdminUser, updateAdminUser, deleteAdminUser, invokeEdgeFunction } from '../data/queries';
 import type { AdminUserListItem } from '../data/types';
 import { usePlatformSettings } from '../hooks/usePlatformSettings';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
@@ -80,6 +80,12 @@ export default function ConfiguracoesScreen() {
   const [nuBackofficeTipo, setNuBackofficeTipo] = useState<'admin' | 'suporte' | 'financeiro'>('admin');
   const [nuPermissoes, setNuPermissoes] = useState<Record<string, boolean>>({ 'Início': true, 'Viagens': true });
   const [adminUsers, setAdminUsers] = useState<AdminUserListItem[]>([]);
+  // Visualizar / Editar usuário
+  const [viewUser, setViewUser] = useState<AdminUserListItem | null>(null);
+  const [editUser, setEditUser] = useState<AdminUserListItem | null>(null);
+  const [edTipo, setEdTipo] = useState<'admin' | 'suporte' | 'financeiro'>('admin');
+  const [edPermissoes, setEdPermissoes] = useState<Record<string, boolean>>({});
+  const [edSaving, setEdSaving] = useState(false);
   const [adminLoading, setAdminLoading] = useState(true);
   const [meuSubtype, setMeuSubtype] = useState<string | null>(null);
 
@@ -288,8 +294,8 @@ export default function ConfiguracoesScreen() {
       React.createElement('div', { style: { ...cellBase, flex: userCols[4].flex, minWidth: userCols[4].minWidth } },
         React.createElement('span', { style: { display: 'inline-block', padding: '4px 12px', borderRadius: 999, fontSize: 13, fontWeight: 700, background: stBg, color: stColor, ...font } }, row.status)),
       React.createElement('div', { style: { flex: userCols[5].flex, minWidth: userCols[5].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 } },
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar' }, eyeSvg),
-        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar' }, pencilSvg),
+        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Visualizar', onClick: () => setViewUser(adminUsers[idx] ?? null) }, eyeSvg),
+        React.createElement('button', { type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Editar', onClick: () => abrirEditUser(adminUsers[idx]) }, pencilSvg),
         React.createElement('button', {
           type: 'button', style: webStyles.viagensActionBtn, 'aria-label': 'Remover',
           onClick: async () => {
@@ -866,6 +872,15 @@ export default function ConfiguracoesScreen() {
   // ── Novo Usuário Modal ──────────────────────────────────────────────────
   const permModulos = ['Início', 'Viagens', 'Passageiros', 'Motoristas', 'Destinos', 'Encomendas', 'Preparadores', 'Promoções', 'Pagamentos', 'Atendimento'];
   const togglePerm = (mod: string) => setNuPermissoes((prev) => ({ ...prev, [mod]: !prev[mod] }));
+  const toggleEdPerm = (mod: string) => setEdPermissoes((prev) => ({ ...prev, [mod]: !prev[mod] }));
+  const abrirEditUser = (u: AdminUserListItem | undefined) => {
+    if (!u) return;
+    setEditUser(u);
+    const sub = (u.subtype === 'admin' || u.subtype === 'suporte' || u.subtype === 'financeiro') ? u.subtype : 'admin';
+    setEdTipo(sub);
+    setEdPermissoes({ ...(u.permissions || {}) });
+    setEdSaving(false);
+  };
 
   const checkboxSvg = (checked: boolean) => React.createElement('div', {
     style: {
@@ -989,11 +1004,84 @@ export default function ConfiguracoesScreen() {
           style: { flex: 1, height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', fontSize: 16, fontWeight: 600, color: '#fff', cursor: 'pointer', ...font },
         }, 'Salvar')))) : null;
 
+  // ── Visualizar usuário (somente leitura) ──────────────────────────────
+  const viewUserModal = viewUser ? React.createElement('div', {
+    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
+    onClick: () => setViewUser(null),
+  },
+    React.createElement('div', {
+      style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)', maxHeight: '90vh', overflowY: 'auto' as const },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Detalhes do usuário'),
+        React.createElement('button', { type: 'button', onClick: () => setViewUser(null), style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
+          React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' }, React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      ...(([['Nome', viewUser.nome], ['E-mail', viewUser.email || '—'], ['Permissão', viewUser.nivel], ['Data de criação', viewUser.dataCriacao], ['Status', viewUser.status]] as const).map(([label, val]) =>
+        React.createElement('div', { key: label, style: { display: 'flex', flexDirection: 'column' as const, gap: 4 } },
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: '#767676', ...font } }, label),
+          React.createElement('span', { style: { fontSize: 15, color: '#0d0d0d', ...font } }, String(val))))),
+      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', ...font } }, 'Permissões por módulo'),
+      React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 24px' } },
+        ...permModulos.map((mod) => React.createElement('div', { key: mod, style: { display: 'flex', alignItems: 'center', gap: 10 } },
+          checkboxSvg(!!(viewUser.permissions || {})[mod]),
+          React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, mod)))))) : null;
+
+  // ── Editar usuário (tipo de acesso + permissões) ──────────────────────
+  const editUserModal = editUser ? React.createElement('div', {
+    style: { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
+    onClick: () => setEditUser(null),
+  },
+    React.createElement('div', {
+      style: { background: '#fff', borderRadius: 16, width: '100%', maxWidth: 560, padding: '28px 32px', display: 'flex', flexDirection: 'column' as const, gap: 20, boxShadow: '0 20px 60px rgba(0,0,0,.15)', maxHeight: '90vh', overflowY: 'auto' as const },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Editar usuário'),
+        React.createElement('button', { type: 'button', onClick: () => setEditUser(null), style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
+          React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' }, React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' })))),
+      React.createElement('p', { style: { fontSize: 14, color: '#767676', margin: 0, ...font } }, editUser.nome),
+      React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Tipo de acesso'),
+      React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 8 } },
+        ...(['admin', 'suporte', 'financeiro'] as const).map((t) =>
+          React.createElement('button', {
+            key: t, type: 'button', onClick: () => setEdTipo(t),
+            style: { height: 40, padding: '0 18px', borderRadius: 999, border: edTipo === t ? 'none' : '1px solid #e2e2e2', background: edTipo === t ? '#0d0d0d' : '#fff', color: edTipo === t ? '#fff' : '#0d0d0d', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font },
+          }, t === 'admin' ? 'Administrador' : t === 'suporte' ? 'Suporte' : 'Financeiro'))),
+      React.createElement('p', { style: { fontSize: 14, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Permissões por módulo'),
+      React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 24px' } },
+        ...permModulos.map((mod) => React.createElement('button', {
+          key: mod, type: 'button', onClick: () => toggleEdPerm(mod),
+          style: { display: 'flex', alignItems: 'center', gap: 10, background: 'none', border: 'none', cursor: 'pointer', padding: 0 },
+        },
+          checkboxSvg(!!edPermissoes[mod]),
+          React.createElement('span', { style: { fontSize: 14, color: '#0d0d0d', ...font } }, mod)))),
+      React.createElement('div', { style: { display: 'flex', gap: 16, marginTop: 8 } },
+        React.createElement('button', { type: 'button', onClick: () => setEditUser(null), style: { flex: 1, height: 48, borderRadius: 999, border: '1px solid #e2e2e2', background: '#fff', fontSize: 16, fontWeight: 600, color: '#0d0d0d', cursor: 'pointer', ...font } }, 'Cancelar'),
+        React.createElement('button', {
+          type: 'button', disabled: edSaving,
+          onClick: async () => {
+            if (!editUser) return;
+            setEdSaving(true);
+            const res = await updateAdminUser(editUser.id, { permissions: edPermissoes, backoffice_subtype: edTipo }) as { error?: string | null };
+            setEdSaving(false);
+            if (res?.error) { alert('Erro ao salvar: ' + res.error); return; }
+            const items = await fetchAdminUsers();
+            setAdminUsers(items);
+            setEditUser(null);
+          },
+          style: { flex: 1, height: 48, borderRadius: 999, border: 'none', background: '#0d0d0d', fontSize: 16, fontWeight: 600, color: '#fff', cursor: edSaving ? 'wait' : 'pointer', opacity: edSaving ? 0.6 : 1, ...font },
+        }, edSaving ? 'Salvando...' : 'Salvar')))) : null;
+
   return React.createElement(React.Fragment, null,
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 40, width: '100%', maxWidth: 1044, alignSelf: 'stretch' } },
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%' } },
         React.createElement('h1', { style: { ...webStyles.homeTitle, margin: 0, width: '100%' } }, 'Configurações'),
         tabsRow),
       aba === 'perfil' ? perfilContent : aba === 'usuarios' ? usuariosContent : aba === 'plataforma' ? plataformaContent : pagamentosContent),
-    novoUsuarioModal);
+    novoUsuarioModal,
+    viewUserModal,
+    editUserModal);
 }
