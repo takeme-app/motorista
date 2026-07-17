@@ -51,7 +51,7 @@ export default function AvaliacoesScreen() {
 
   const handleDelete = useCallback(async (r: EnhancedRating) => {
     if (!confirm(`Remover esta avaliação de ${r.ratedByName}?`)) return;
-    await deleteRating(r.table as 'booking_ratings' | 'shipment_ratings', r.ratingId);
+    await deleteRating(r.table as 'booking_ratings' | 'shipment_ratings' | 'trip_ratings', r.ratingId);
     setRatings((prev) => prev.filter((x) => x.id !== r.id));
     showToast('Avaliação removida');
   }, [showToast]);

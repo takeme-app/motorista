@@ -3916,27 +3916,53 @@ export async function deleteNotification(notifId: string): Promise<void> {
 
 // ── Enhanced Ratings (admin moderation) ──────────────────────────────
 
-export async function deleteRating(table: 'booking_ratings' | 'shipment_ratings', ratingId: string): Promise<void> {
+export async function deleteRating(table: 'booking_ratings' | 'shipment_ratings' | 'trip_ratings', ratingId: string): Promise<void> {
   await (supabase as any).from(table).delete().eq('id', ratingId);
 }
 
 export async function fetchAllRatingsEnhanced(): Promise<(RatingListItem & { table: string; ratingId: string })[]> {
-  const [bRes, sRes] = await Promise.all([
-    supabase.from('booking_ratings').select('id, booking_id, rating, comment, created_at, user_id').order('created_at', { ascending: false }).limit(100),
-    supabase.from('shipment_ratings').select('id, shipment_id, rating, comment, created_at, user_id').order('created_at', { ascending: false }).limit(100),
+  // IMPORTANTE: booking_ratings/shipment_ratings NÃO têm coluna user_id — selecioná-la
+  // fazia a query falhar e a tela ficava zerada. E trip_ratings (maioria das avaliações
+  // de viagem) não era consultada. Aqui lemos as 3 tabelas e resolvemos os nomes.
+  const [bRes, sRes, tRes] = await Promise.all([
+    supabase.from('booking_ratings').select('id, booking_id, rating, comment, created_at').order('created_at', { ascending: false }).limit(200),
+    supabase.from('shipment_ratings').select('id, shipment_id, rating, comment, created_at').order('created_at', { ascending: false }).limit(200),
+    (supabase as any).from('trip_ratings').select('id, trip_id, driver_id, rating, comment, created_at').order('created_at', { ascending: false }).limit(200),
   ]);
 
-  const all = [
-    ...((bRes.data || []) as any[]).map((r: any) => ({ ...r, entityType: 'Viagem', table: 'booking_ratings' })),
-    ...((sRes.data || []) as any[]).map((r: any) => ({ ...r, entityType: 'Encomenda', table: 'shipment_ratings' })),
-  ];
+  const bookingRows = (bRes.data || []) as any[];
+  const shipmentRows = (sRes.data || []) as any[];
+  const tripRows = (tRes.data || []) as any[];
 
-  const userIds = [...new Set(all.map((r) => r.user_id).filter(Boolean))];
+  // Resolve o "avaliador": booking → passageiro (bookings.user_id); shipment → cliente
+  // (shipments.user_id); trip → motorista avaliado (trip_ratings.driver_id).
+  const bookingIds = [...new Set(bookingRows.map((r) => r.booking_id).filter(Boolean))];
+  const shipmentIds = [...new Set(shipmentRows.map((r) => r.shipment_id).filter(Boolean))];
+  const [bookingsRes, shipmentsRes] = await Promise.all([
+    bookingIds.length > 0 ? supabase.from('bookings').select('id, user_id').in('id', bookingIds) : Promise.resolve({ data: [] as any[] }),
+    shipmentIds.length > 0 ? supabase.from('shipments').select('id, user_id').in('id', shipmentIds) : Promise.resolve({ data: [] as any[] }),
+  ]);
+  const bookingUser = new Map<string, string>();
+  (((bookingsRes as any).data || []) as any[]).forEach((b: any) => { if (b.user_id) bookingUser.set(b.id, b.user_id); });
+  const shipmentUser = new Map<string, string>();
+  (((shipmentsRes as any).data || []) as any[]).forEach((s: any) => { if (s.user_id) shipmentUser.set(s.id, s.user_id); });
+
+  const profileIds = [...new Set([
+    ...bookingUser.values(),
+    ...shipmentUser.values(),
+    ...tripRows.map((r) => r.driver_id),
+  ].filter(Boolean))] as string[];
   const nameMap: Record<string, string> = {};
-  if (userIds.length > 0) {
-    const { data: profiles } = await supabase.from('profiles').select('id, full_name').in('id', userIds);
+  if (profileIds.length > 0) {
+    const { data: profiles } = await supabase.from('profiles').select('id, full_name').in('id', profileIds);
     (profiles || []).forEach((p: any) => { nameMap[p.id] = p.full_name || 'Anônimo'; });
   }
+
+  const all = [
+    ...bookingRows.map((r: any) => ({ ...r, entityType: 'Viagem', table: 'booking_ratings', raterName: nameMap[bookingUser.get(r.booking_id) || ''] || 'Anônimo' })),
+    ...tripRows.map((r: any) => ({ ...r, entityType: 'Viagem', table: 'trip_ratings', raterName: nameMap[r.driver_id] || 'Motorista' })),
+    ...shipmentRows.map((r: any) => ({ ...r, entityType: 'Encomenda', table: 'shipment_ratings', raterName: nameMap[shipmentUser.get(r.shipment_id) || ''] || 'Anônimo' })),
+  ];
 
   return all
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
@@ -3945,7 +3971,7 @@ export async function fetchAllRatingsEnhanced(): Promise<(RatingListItem & { tab
       ratingId: r.id,
       table: r.table,
       workerName: '—',
-      ratedByName: nameMap[r.user_id] || 'Anônimo',
+      ratedByName: r.raterName,
       entityType: r.entityType,
       rating: r.rating,
       comment: r.comment || '',
@@ -3979,13 +4005,14 @@ export async function fetchAnalyticsData(): Promise<AnalyticsData> {
     };
   }
 
-  const [bookingsRes, profilesRes, workersRes, shipmentsRes, bRatingsRes, sRatingsRes] = await Promise.all([
+  const [bookingsRes, profilesRes, workersRes, shipmentsRes, bRatingsRes, sRatingsRes, tRatingsRes] = await Promise.all([
     sb.from('bookings').select('id, status, amount_cents, created_at'),
     supabase.from('profiles').select('id, created_at'),
     sb.from('worker_profiles').select('id, status, created_at'),
     sb.from('shipments').select('id, status, created_at'),
     sb.from('booking_ratings').select('id, rating, created_at'),
     sb.from('shipment_ratings').select('id, rating, created_at'),
+    (supabase as any).from('trip_ratings').select('id, rating, created_at'),
   ]);
 
   const bookings: any[] = bookingsRes.data || [];
@@ -3994,6 +4021,7 @@ export async function fetchAnalyticsData(): Promise<AnalyticsData> {
   const shipments: any[] = shipmentsRes.data || [];
   const bRatings: any[] = bRatingsRes.data || [];
   const sRatings: any[] = sRatingsRes.data || [];
+  const tRatings: any[] = tRatingsRes.data || [];
 
   // Revenue
   const totalRevenueCents = bookings.reduce((s: number, b: any) => s + (b.amount_cents || 0), 0);
@@ -4058,7 +4086,7 @@ export async function fetchAnalyticsData(): Promise<AnalyticsData> {
     .map(([month, count]) => ({ month, count }));
 
   // Ratings
-  const allRatings = [...bRatings, ...sRatings];
+  const allRatings = [...bRatings, ...sRatings, ...tRatings];
   const totalRatings = allRatings.length;
   const avgRating = totalRatings > 0 ? allRatings.reduce((s: number, r: any) => s + r.rating, 0) / totalRatings : 0;
 
