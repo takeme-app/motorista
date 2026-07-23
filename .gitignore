@@ -80,3 +80,6 @@ docs/xcode-build-*.log
 apps/motorista/release/
 .mcp.json
 .sala-anexos/
+
+# Cache de build do Gradle (não versionar)
+**/.gradle_home/
