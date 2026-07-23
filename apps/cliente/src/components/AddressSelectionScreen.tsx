@@ -5,6 +5,7 @@ import {
   StyleSheet,
   ScrollView,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
   ActivityIndicator,
   Dimensions,
@@ -110,6 +111,20 @@ export function AddressSelectionScreen({
   const [editingOrigin, setEditingOrigin] = useState(false);
   const [editOriginText, setEditOriginText] = useState('');
   const appliedInitialDestinationRef = useRef(false);
+
+  // Teclado aberto: sobe o card sobre o mapa para dar espaço à lista de sugestões
+  // (antes o teclado cobria os resultados do autocomplete).
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvt, () => setKeyboardOpen(true));
+    const hideSub = Keyboard.addListener(hideEvt, () => setKeyboardOpen(false));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   // Destino pré-preenchido (ex.: toque num recente na home) — uma vez por montagem do ecrã.
   useEffect(() => {
@@ -288,7 +303,7 @@ export function AddressSelectionScreen({
       </View>
 
       {/* Content card overlapping map */}
-      <View style={styles.cardContainer}>
+      <View style={[styles.cardContainer, keyboardOpen && { marginTop: insets.top + 8 }]}>
         <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <ScrollView
             style={styles.flex}

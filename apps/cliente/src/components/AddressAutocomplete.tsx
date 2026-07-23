@@ -6,6 +6,7 @@ import {
   StyleSheet,
   ActivityIndicator,
   ScrollView,
+  Keyboard,
   type StyleProp,
   type TextStyle,
   type ViewStyle,
@@ -103,6 +104,9 @@ export function AddressAutocomplete({
 
   const handleSelect = useCallback(
     async (item: AddressSearchResult) => {
+      // Ao escolher uma sugestão, esconde o teclado para liberar a tela
+      // (o teclado cobria a lista/mapa nas telas de busca de endereço).
+      Keyboard.dismiss();
       onChangeText(item.address);
       setSuggestions([]);
       setShowList(false);
