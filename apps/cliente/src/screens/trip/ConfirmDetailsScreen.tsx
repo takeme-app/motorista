@@ -40,6 +40,14 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
   const [extraPassengers, setExtraPassengers] = useState(0);
   const [passengerData, setPassengerData] = useState<Record<number, { name: string; cpf: string }>>({});
   const [confirmBusy, setConfirmBusy] = useState(false);
+  /**
+   * CPF do titular (passageiro principal). Diferente dos passageiros extras, o
+   * CPF do titular nunca era coletado — ficava vazio no `passenger_data` da
+   * reserva e nunca chegava ao `profiles`, deixando o painel admin sem o dado.
+   * Pré-carregamos do perfil e persistimos quando o titular informa/edita.
+   */
+  const [titularCpf, setTitularCpf] = useState('');
+  const titularCpfInitialDigits = useRef<string>('');
 
   /** Total de passageiros na reserva (titular + extras). */
   const totalPassengers = bookingTotalPassengers(extraPassengers);
@@ -75,6 +83,26 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
     });
   }, [maxBags]);
 
+  // Pré-carrega o CPF do titular a partir do perfil (para prefill + evitar
+  // gravação redundante quando o valor não muda).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || cancelled) return;
+      const { data } = await supabase
+        .from('profiles')
+        .select('cpf')
+        .eq('id', user.id)
+        .maybeSingle();
+      if (cancelled) return;
+      const digits = onlyDigits(String(data?.cpf ?? ''));
+      titularCpfInitialDigits.current = digits;
+      if (digits) setTitularCpf(formatCpf(digits));
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const updatePassenger = (index: number, field: 'name' | 'cpf', value: string) => {
     setPassengerData((prev) => ({
       ...prev,
@@ -90,6 +118,22 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
       if (!user) {
         showAlert('Sessão', 'Faça login para continuar.');
         return;
+      }
+      // Persiste o CPF do titular no perfil quando informado/alterado e válido.
+      // Assim o `passenger_data` da reserva (montado no Checkout a partir do
+      // perfil) e o painel admin passam a refletir o CPF do passageiro
+      // principal. Não bloqueia a reserva se a gravação falhar.
+      const titularDigits = onlyDigits(titularCpf);
+      if (
+        titularDigits &&
+        validateCpf(titularDigits) &&
+        titularDigits !== titularCpfInitialDigits.current
+      ) {
+        const { error: cpfErr } = await supabase
+          .from('profiles')
+          .update({ cpf: titularDigits, updated_at: new Date().toISOString() })
+          .eq('id', user.id);
+        if (!cpfErr) titularCpfInitialDigits.current = titularDigits;
       }
       let depIso = route.params?.scheduledTripDepartureAt ?? null;
       const tripId = route.params?.scheduled_trip_id;
@@ -260,6 +304,22 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
             : `Combine a quantidade de malas com o motorista no embarque (o limite final é o espaço do bagageiro).`}
         </Text>
 
+        <View style={styles.passengerBlock}>
+          <Text style={styles.passengerTitle}>Seus dados (passageiro principal)</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Seu CPF (000.000.000-00)"
+            placeholderTextColor={COLORS.neutral700}
+            value={titularCpf}
+            onChangeText={(v) => setTitularCpf(formatCpf(v))}
+            keyboardType="number-pad"
+            maxLength={14}
+          />
+          <Text style={styles.hint}>
+            Opcional. Fica salvo no seu perfil e identifica você como passageiro principal da viagem.
+          </Text>
+        </View>
+
         {Array.from({ length: extraPassengers }, (_, i) => (
           <View key={i} style={styles.passengerBlock}>
             <Text style={styles.passengerTitle}>Dados do passageiro adicional {i + 1}</Text>
@@ -286,6 +346,11 @@ export function ConfirmDetailsScreen({ navigation, route }: Props) {
           style={[styles.confirmButton, confirmBusy && styles.confirmButtonDisabled]}
           disabled={confirmBusy}
           onPress={() => {
+            const titularDigits = onlyDigits(titularCpf);
+            if (titularDigits && !validateCpf(titularDigits)) {
+              showAlert('CPF inválido', 'O seu CPF não é válido. Verifique e tente novamente.');
+              return;
+            }
             for (let i = 0; i < extraPassengers; i++) {
               const cpfRaw = passengerData[i]?.cpf ?? '';
               const cpfDigits = onlyDigits(cpfRaw);
