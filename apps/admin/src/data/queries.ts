@@ -289,15 +289,38 @@ function viagemDbIsPending(s: string): boolean {
   return n === 'pending' || n === 'pendente';
 }
 
-function mapViagemStatus(bookingStatusRaw: unknown, tripStatusRaw: unknown): ViagemListItem['status'] {
+/**
+ * Deriva o status da viagem ESPELHANDO a lógica do app do cliente
+ * (apps/cliente StatusBadge.tsx → clientViagemStatusBadge). A ordem importa:
+ *  - cancelado (booking/trip cancelado)
+ *  - concluído (trip completed)
+ *  - trip active + motorista aceitou (confirmed): em_andamento SÓ se a viagem já
+ *    iniciou (scheduled_trips.driver_journey_started_at != null); senão agendado.
+ *  - trip active + booking pending/paid (aguardando aceite): pendente.
+ * Antes, paid virava "concluído" e qualquer active virava "em_andamento" (bug).
+ */
+function mapViagemStatus(
+  bookingStatusRaw: unknown,
+  tripStatusRaw: unknown,
+  journeyStartedAt?: unknown,
+): ViagemListItem['status'] {
   const bookingKey = normViagemStatusKey(bookingStatusRaw);
   const tripStr = String(tripStatusRaw ?? '').trim();
   const tripKey = tripStr === '' ? normViagemStatusKey('active') : normViagemStatusKey(tripStatusRaw);
+  const journeyStarted = Boolean(journeyStartedAt);
 
   if (viagemDbIsCancelled(bookingKey) || viagemDbIsCancelled(tripKey)) return 'cancelado';
-  if (viagemDbIsTripCompleted(tripKey) || viagemDbIsPaidBooking(bookingKey)) return 'concluído';
-  if (viagemDbIsTripActive(tripKey) && (viagemDbIsConfirmed(bookingKey) || viagemDbIsPending(bookingKey))) return 'em_andamento';
-  return 'agendado';
+  if (viagemDbIsTripCompleted(tripKey)) return 'concluído';
+  if (viagemDbIsTripActive(tripKey)) {
+    if (viagemDbIsConfirmed(bookingKey) || bookingKey === 'in_progress') {
+      return journeyStarted ? 'em_andamento' : 'agendado';
+    }
+    if (viagemDbIsPaidBooking(bookingKey) || viagemDbIsPending(bookingKey)) return 'pendente';
+    return 'pendente';
+  }
+  // Sem trip ativa/concluída/cancelada reconhecida: cai no booking.
+  if (viagemDbIsConfirmed(bookingKey)) return 'agendado';
+  return 'pendente';
 }
 
 type ShipmentDbStatus = 'pending_review' | 'confirmed' | 'in_progress' | 'delivered' | 'cancelled';
@@ -363,7 +386,7 @@ export async function fetchViagens(): Promise<ViagemListItem[]> {
       id, user_id, origin_address, destination_address, status, created_at,
       passenger_count, amount_cents, scheduled_trip_id,
       payment_method, platform_fee_extra_debit_cents,
-      scheduled_trips!inner ( id, departure_at, arrival_at, driver_id, status, trunk_occupancy_pct )
+      scheduled_trips!inner ( id, departure_at, arrival_at, driver_id, status, trunk_occupancy_pct, driver_journey_started_at )
     `)
     .order('created_at', { ascending: false })
     .limit(200);
@@ -397,7 +420,7 @@ export async function fetchViagens(): Promise<ViagemListItem[]> {
     ? await supabase
       .from('scheduled_trips')
       .select(
-        'id, departure_at, arrival_at, driver_id, status, seats_available, bags_available, trunk_occupancy_pct, created_at, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng',
+        'id, departure_at, arrival_at, driver_id, status, driver_journey_started_at, seats_available, bags_available, trunk_occupancy_pct, created_at, origin_address, destination_address, origin_lat, origin_lng, destination_lat, destination_lng',
       )
       .in('id', orphanTripIds)
     : { data: null as any[] | null };
@@ -544,7 +567,7 @@ function listItemFromBookingJoin(
     data: fmtDate(dep),
     embarque: fmtTime(dep),
     chegada: fmtTime(trip?.arrival_at ?? b.created_at),
-    status: mapViagemStatus(b.status, trip?.status ?? 'active'),
+    status: mapViagemStatus(b.status, trip?.status ?? 'active', trip?.driver_journey_started_at),
     tripId: trip?.id ?? b.scheduled_trip_id ?? '',
     driverId,
     departureAtIso: dep ? new Date(dep).toISOString() : new Date(b.created_at).toISOString(),
@@ -932,7 +955,7 @@ export async function fetchBookingsForDriver(driverId: string): Promise<ViagemLi
       id, user_id, origin_address, destination_address, status, created_at,
       passenger_count, amount_cents, scheduled_trip_id,
       payment_method, platform_fee_extra_debit_cents,
-      scheduled_trips!inner ( id, departure_at, arrival_at, driver_id, status, trunk_occupancy_pct )
+      scheduled_trips!inner ( id, departure_at, arrival_at, driver_id, status, trunk_occupancy_pct, driver_journey_started_at )
     `)
     .eq('scheduled_trips.driver_id', driverId)
     .order('created_at', { ascending: false })
@@ -1503,6 +1526,7 @@ export interface ViagemCounts {
   agendadas: number;
   emAndamento: number;
   canceladas: number;
+  pendentes: number;
 }
 
 export async function fetchViagemCounts(): Promise<ViagemCounts> {
@@ -1517,6 +1541,7 @@ export function viagemCountsFromItems(items: ViagemListItem[]): ViagemCounts {
     agendadas: items.filter((i) => i.status === 'agendado').length,
     emAndamento: items.filter((i) => i.status === 'em_andamento').length,
     canceladas: items.filter((i) => i.status === 'cancelado').length,
+    pendentes: items.filter((i) => i.status === 'pendente').length,
   };
 }
 
@@ -1538,7 +1563,7 @@ export function todayLocalYmd(): string {
 export type ViagemDatasIncluidas = 'somente_passadas' | 'passadas_e_futuras' | 'somente_futuras';
 
 export type ViagemListFilter = {
-  status: 'todos' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas';
+  status: 'todos' | 'pendentes' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas';
   categoria: 'todos' | 'take_me' | 'motorista';
   /** Filtro por `bookings.payment_method` (omitir ou `'todos'` = sem filtro) */
   paymentMethod?: 'todos' | BookingPaymentMethod;
@@ -1553,7 +1578,8 @@ export type ViagemListFilter = {
 };
 
 const STATUS_BUCKET: Record<ViagemListFilter['status'], ViagemListItem['status'][]> = {
-  todos: ['em_andamento', 'agendado', 'concluído', 'cancelado'],
+  todos: ['pendente', 'em_andamento', 'agendado', 'concluído', 'cancelado'],
+  pendentes: ['pendente'],
   em_andamento: ['em_andamento'],
   agendadas: ['agendado'],
   concluidas: ['concluído'],

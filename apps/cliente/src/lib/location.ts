@@ -228,20 +228,31 @@ export type AddressSearchResult = {
   id: string;
   /** texto exibido/selecionado (preserva o nome do POI) */
   address: string;
+  /** nome principal do POI/rua (linha primária na lista) */
+  name?: string;
+  /** linha secundária: rua, bairro, cidade, UF */
+  secondary?: string;
   city?: string;
   /** presente para resultados Search Box; usar em `retrieveAddressCoords` */
   mapboxId?: string;
+  /** distância em metros a partir da localização atual (quando disponível) */
+  distanceMeters?: number;
   /** presente apenas no fallback Nominatim */
   latitude?: number;
   longitude?: number;
 };
 
-/** Remove duplicados por `address` (case-insensitive), preservando ordem. */
+/**
+ * Remove duplicados preservando ordem. Prioriza o `mapboxId` como chave — dois POIs
+ * distintos (ex.: filiais "Fribal" em bairros diferentes) têm ids diferentes e NÃO
+ * devem colapsar, mesmo que o rótulo curto coincida. Sem mapboxId (Nominatim/custom),
+ * cai para o texto do endereço.
+ */
 function dedupeResults(list: AddressSearchResult[]): AddressSearchResult[] {
   const seen = new Set<string>();
   return list.filter((s) => {
     if (s.address.trim().length === 0) return false;
-    const key = s.address.trim().toLowerCase();
+    const key = s.mapboxId ? `mb:${s.mapboxId}` : `addr:${s.address.trim().toLowerCase()}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -308,8 +319,11 @@ export async function searchAddress(
       : items.map((s) => ({
           id: s.mapboxId,
           address: s.address,
+          name: s.name,
           mapboxId: s.mapboxId,
+          ...(s.secondary ? { secondary: s.secondary } : {}),
           ...(s.city ? { city: s.city } : {}),
+          ...(s.distanceMeters != null ? { distanceMeters: s.distanceMeters } : {}),
         }));
   }
   return dedupeResults([...custom, ...base]);

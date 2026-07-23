@@ -93,7 +93,7 @@ export interface ViagemListItem {
   data: string;
   embarque: string;
   chegada: string;
-  status: 'concluído' | 'cancelado' | 'agendado' | 'em_andamento';
+  status: 'concluído' | 'cancelado' | 'agendado' | 'em_andamento' | 'pendente';
   tripId: string;
   driverId: string;
   /** ISO 8601 — filtro por data / período */

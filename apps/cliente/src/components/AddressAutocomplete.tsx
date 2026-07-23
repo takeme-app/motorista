@@ -6,6 +6,7 @@ import {
   StyleSheet,
   ActivityIndicator,
   ScrollView,
+  Keyboard,
   type StyleProp,
   type TextStyle,
   type ViewStyle,
@@ -16,6 +17,7 @@ import * as Crypto from 'expo-crypto';
 import {
   searchAddress,
   retrieveAddressCoords,
+  formatDistanceKm,
   type AddressSuggestion,
   type AddressSearchResult,
 } from '../lib/location';
@@ -102,6 +104,9 @@ export function AddressAutocomplete({
 
   const handleSelect = useCallback(
     async (item: AddressSearchResult) => {
+      // Ao escolher uma sugestão, esconde o teclado para liberar a tela
+      // (o teclado cobria a lista/mapa nas telas de busca de endereço).
+      Keyboard.dismiss();
       onChangeText(item.address);
       setSuggestions([]);
       setShowList(false);
@@ -181,8 +186,16 @@ export function AddressAutocomplete({
                 onPress={() => { void handleSelect(item); }}
                 activeOpacity={0.7}
               >
-                <MaterialIcons name="place" size={20} color={COLORS.neutral700} />
-                <Text style={styles.suggestionText} numberOfLines={2}>{item.address}</Text>
+                <MaterialIcons name="place" size={20} color={COLORS.neutral700} style={styles.suggestionIcon} />
+                <View style={styles.suggestionTextWrap}>
+                  <Text style={styles.suggestionPrimary} numberOfLines={1}>{item.name ?? item.address}</Text>
+                  {item.secondary ? (
+                    <Text style={styles.suggestionSecondary} numberOfLines={1}>{item.secondary}</Text>
+                  ) : null}
+                </View>
+                {item.distanceMeters != null ? (
+                  <Text style={styles.suggestionDistance}>{formatDistanceKm(item.distanceMeters / 1000)}</Text>
+                ) : null}
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -243,5 +256,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.neutral300,
   },
-  suggestionText: { flex: 1, fontSize: 14, color: COLORS.black },
+  suggestionIcon: { marginTop: 2 },
+  suggestionTextWrap: { flex: 1 },
+  suggestionPrimary: { fontSize: 14, color: COLORS.black, fontWeight: '600' },
+  suggestionSecondary: { fontSize: 12, color: COLORS.neutral700, marginTop: 2 },
+  suggestionDistance: { fontSize: 12, color: COLORS.neutral700, marginLeft: 8 },
 });

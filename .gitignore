@@ -78,3 +78,8 @@ docs/xcode-build-*.log
 
 # Build artifacts (APKs) - não versionar
 apps/motorista/release/
+.mcp.json
+.sala-anexos/
+
+# Cache de build do Gradle (não versionar)
+**/.gradle_home/
