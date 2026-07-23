@@ -106,7 +106,7 @@ export default function ViagensScreen() {
   const [filterDateInicio, setFilterDateInicio] = useState('');
   const [filterDateFim, setFilterDateFim] = useState('');
   const [filterDatasIncluidas, setFilterDatasIncluidas] = useState<'somente_passadas' | 'passadas_e_futuras' | 'somente_futuras'>('passadas_e_futuras');
-  const [filterStatus, setFilterStatus] = useState<'todos' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('todos');
+  const [filterStatus, setFilterStatus] = useState<'todos' | 'pendentes' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'>('todos');
   const [filterCategoria, setFilterCategoria] = useState<'todos' | 'take_me' | 'motorista'>('todos');
   const [filterPaymentMethod, setFilterPaymentMethod] = useState<'todos' | BookingPaymentMethod>('todos');
   // Table filter modal (Figma 1132-26548) — status/categoria partilhados com o modal da barra (estado único)
@@ -163,9 +163,10 @@ export default function ViagensScreen() {
 
   const viagensMetrics = [
     { title: 'Viagens totais', value: String(counts.total), icon: listBulletedSvg },
-    { title: 'Viagens concluídas', value: String(counts.concluidas), icon: checkCircleSvg },
+    { title: 'Viagens pendentes', value: String(counts.pendentes), icon: calendarIconSvg },
     { title: 'Viagens agendadas', value: String(counts.agendadas), icon: calendarTodaySvg },
     { title: 'Viagens em andamento', value: String(counts.emAndamento), icon: nearMeSvg },
+    { title: 'Viagens concluídas', value: String(counts.concluidas), icon: checkCircleSvg },
     { title: 'Viagens canceladas', value: String(counts.canceladas), icon: cancelSvg },
   ];
   const viagensMetricCardEl = (m: typeof viagensMetrics[0]) =>
@@ -176,14 +177,15 @@ export default function ViagensScreen() {
       React.createElement('span', { style: webStyles.viagensMetricCardValue }, m.value));
   const viagensMetricCards = React.createElement(React.Fragment, null,
     React.createElement('div', { style: { ...webStyles.statCardsRow, marginBottom: 0 } }, ...viagensMetrics.slice(0, 3).map(viagensMetricCardEl)),
-    React.createElement('div', { style: webStyles.statCardsRow }, ...viagensMetrics.slice(3, 5).map(viagensMetricCardEl)));
+    React.createElement('div', { style: webStyles.statCardsRow }, ...viagensMetrics.slice(3, 6).map(viagensMetricCardEl)));
 
   // ── Recharts PieChart para distribuição por status ─────────────────
   const { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } = require('recharts');
   const statusPieData = [
-    { name: 'Concluídas', value: counts.concluidas, color: '#0d8344' },
+    { name: 'Pendentes', value: counts.pendentes, color: '#e07b00' },
     { name: 'Agendadas', value: counts.agendadas, color: '#016df9' },
     { name: 'Em andamento', value: counts.emAndamento, color: '#cba04b' },
+    { name: 'Concluídas', value: counts.concluidas, color: '#0d8344' },
     { name: 'Canceladas', value: counts.canceladas, color: '#d64545' },
   ].filter((d) => d.value > 0);
   if (statusPieData.length === 0) statusPieData.push({ name: 'Sem dados', value: 1, color: '#e2e2e2' });
@@ -228,20 +230,24 @@ export default function ViagensScreen() {
       // Legenda conforme Figma com % antes do título
       (() => {
         const total = counts.total || 1;
+        const pctPend = Math.round((counts.pendentes / total) * 100);
         const pctConc = Math.round((counts.concluidas / total) * 100);
         const pctAgen = Math.round((counts.agendadas / total) * 100);
         const pctAnda = Math.round((counts.emAndamento / total) * 100);
         const pctCanc = Math.round((counts.canceladas / total) * 100);
         return React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24 } },
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-            React.createElement('span', { style: legendDot('#0d8344') }),
-            React.createElement('span', { style: { fontSize: 16, fontWeight: 400, color: '#0d8344', fontFamily: 'Inter, sans-serif', lineHeight: 1.5 } }, `${pctConc}% Concluídas`)),
+            React.createElement('span', { style: legendDot('#e07b00') }),
+            React.createElement('span', { style: { fontSize: 16, fontWeight: 400, color: '#e07b00', fontFamily: 'Inter, sans-serif', lineHeight: 1.5 } }, `${pctPend}% Pendentes`)),
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
             React.createElement('span', { style: legendDot('#016df9') }),
             React.createElement('span', { style: { fontSize: 16, fontWeight: 400, color: '#016df9', fontFamily: 'Inter, sans-serif', lineHeight: 1.5 } }, `${pctAgen}% Agendadas`)),
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
             React.createElement('span', { style: legendDot('#cba04b') }),
             React.createElement('span', { style: { fontSize: 16, fontWeight: 400, color: '#cba04b', fontFamily: 'Inter, sans-serif', lineHeight: 1.5 } }, `${pctAnda}% Em andamento`)),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('span', { style: legendDot('#0d8344') }),
+            React.createElement('span', { style: { fontSize: 16, fontWeight: 400, color: '#0d8344', fontFamily: 'Inter, sans-serif', lineHeight: 1.5 } }, `${pctConc}% Concluídas`)),
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
             React.createElement('span', { style: legendDot('#d64545') }),
             React.createElement('span', { style: { fontSize: 16, fontWeight: 400, color: '#d64545', fontFamily: 'Inter, sans-serif', lineHeight: 1.5 } }, `${pctCanc}% Canceladas`)));
@@ -425,10 +431,11 @@ export default function ViagensScreen() {
     ...viagensTableBody);
 
   // Modal Filtro da tabela (Figma 1132-26548)
-  const statusOptions: { id: 'todos' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'; label: string }[] = [
+  const statusOptions: { id: 'todos' | 'pendentes' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'; label: string }[] = [
     { id: 'todos', label: 'Todos' },
-    { id: 'em_andamento', label: 'Em andamento' },
+    { id: 'pendentes', label: 'Pendentes' },
     { id: 'agendadas', label: 'Agendadas' },
+    { id: 'em_andamento', label: 'Em andamento' },
     { id: 'concluidas', label: 'Concluídas' },
     { id: 'canceladas', label: 'Canceladas' },
   ];

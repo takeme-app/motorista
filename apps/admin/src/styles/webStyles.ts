@@ -1,7 +1,7 @@
 import React from 'react';
 
 // ── Types ──────────────────────────────────────────────────────────────
-export type ViagemRow = { passageiro: string; origem: string; destino: string; data: string; embarque: string; chegada: string; status: 'concluído' | 'cancelado' | 'agendado' | 'em_andamento' };
+export type ViagemRow = { passageiro: string; origem: string; destino: string; data: string; embarque: string; chegada: string; status: 'concluído' | 'cancelado' | 'agendado' | 'em_andamento' | 'pendente' };
 export type DetailTimelineIconType = 'clock' | 'origin' | 'destination' | 'inventory';
 export type DetailTimelineItem = { id: string; icon: DetailTimelineIconType; label: string; value: string; showConnectorAfter?: boolean };
 
@@ -111,8 +111,9 @@ export const statusStyles: Record<string, { bg: string; color: string }> = {
   cancelado: { bg: '#eeafaa', color: '#551611' },
   agendado: { bg: '#a8c6ef', color: '#102d57' },
   em_andamento: { bg: '#fee59a', color: '#654c01' },
+  pendente: { bg: '#ffd9b3', color: '#7a3e00' },
 };
-export const statusLabels: Record<string, string> = { 'concluído': 'Concluído', cancelado: 'Cancelado', agendado: 'Agendado', em_andamento: 'Em andamento' };
+export const statusLabels: Record<string, string> = { 'concluído': 'Concluído', cancelado: 'Cancelado', agendado: 'Agendado', em_andamento: 'Em andamento', pendente: 'Pendente' };
 export const statusPill = (label: string, bg: string, color: string) =>
   React.createElement('span', { style: { ...webStyles.viagensStatusPill, background: bg, color } }, label);
 
