@@ -1,8 +1,8 @@
 /**
  * Tela paliativa de Pix (Stripe Pix desabilitado). QR + copia-e-cola FIXOS (chave
- * Take Me); o valor é só exibido. Regra: ao abrir, dispara 40s para EFETIVAR o pedido
- * (sem cobrança real); aos 40s o botão "Realizei o Pagamento" habilita e navega para a
- * tela de sucesso do fluxo. A lógica específica vem do registro (palliativePixStore).
+ * Take Me); o valor é só exibido. Regra: ao abrir, dispara PIX_EFFECTIVATE_SECONDS para
+ * EFETIVAR o pedido (sem cobrança real); ao fim o botão "Realizei o Pagamento" habilita e
+ * navega para a tela de sucesso do fluxo. A lógica específica vem do registro (palliativePixStore).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { View, StyleSheet, TouchableOpacity, Image, Clipboard, ActivityIndicator } from 'react-native';
@@ -85,7 +85,7 @@ export function PixPaliativoScreen() {
     return () => { cancelled = true; };
   }, []);
 
-  // Relógio visual de 5 min + gatilho de 40s para efetivar.
+  // Relógio visual de 5 min + gatilho de PIX_EFFECTIVATE_SECONDS para efetivar.
   useEffect(() => {
     if (!req) return;
     const tickId = setInterval(() => {

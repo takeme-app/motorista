@@ -1,6 +1,6 @@
 {
   "name": "cliente",
-  "version": "1.0.26",
+  "version": "1.0.28",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -17,6 +17,7 @@
     "android:run": "node scripts/run-android-dev.js",
     "android:reverse": "node scripts/adb-reverse.js",
     "android:release": "node scripts/build-release-apk.js",
+    "android:bundle": "node scripts/build-release-bundle.js",
     "ios": "expo run:ios",
     "web": "expo start --web --port 8081",
     "lint": "expo lint"

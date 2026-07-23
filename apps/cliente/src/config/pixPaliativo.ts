@@ -16,4 +16,4 @@ export const PIX_COPIA_E_COLA =
 export const PIX_DISPLAY_TIMER_SECONDS = 300; // 5 min
 
 /** Após este tempo o pedido é efetivado e o botão "Realizei o Pagamento" habilita. */
-export const PIX_EFFECTIVATE_SECONDS = 40;
+export const PIX_EFFECTIVATE_SECONDS = 10;

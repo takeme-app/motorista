@@ -78,3 +78,5 @@ docs/xcode-build-*.log
 
 # Build artifacts (APKs) - não versionar
 apps/motorista/release/
+.mcp.json
+.sala-anexos/

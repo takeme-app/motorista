@@ -148,7 +148,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('bookings')
         .select(
-          'id, origin_address, destination_address, amount_cents, status, created_at, passenger_count, bags_count, scheduled_trip_id, cancellation_reason, scheduled_trips(status, driver_journey_started_at)',
+          'id, origin_address, destination_address, amount_cents, status, created_at, passenger_count, bags_count, scheduled_trip_id, cancellation_reason, scheduled_trips(status, driver_journey_started_at, departure_at)',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -156,7 +156,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('shipments')
         .select(
-          'id, origin_address, destination_address, amount_cents, status, created_at, package_size, admin_approved_at, scheduled_trip_id, driver_id, cancellation_reason, scheduled_trips(status, driver_journey_started_at)',
+          'id, origin_address, destination_address, amount_cents, status, created_at, package_size, admin_approved_at, scheduled_trip_id, driver_id, cancellation_reason, scheduled_trips(status, driver_journey_started_at, departure_at)',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -164,7 +164,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('dependent_shipments')
         .select(
-          'id, origin_address, destination_address, full_name, amount_cents, status, created_at, bags_count, scheduled_trip_id, cancellation_reason, scheduled_trips(status, driver_journey_started_at)',
+          'id, origin_address, destination_address, full_name, amount_cents, status, created_at, bags_count, scheduled_trip_id, cancellation_reason, scheduled_trips(status, driver_journey_started_at, departure_at)',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -191,8 +191,8 @@ export function ActivitiesScreen({ navigation }: Props) {
       scheduled_trip_id?: string | null;
       cancellation_reason?: string | null;
       scheduled_trips?:
-        | { status?: string; driver_journey_started_at?: string | null }
-        | { status?: string; driver_journey_started_at?: string | null }[]
+        | { status?: string; driver_journey_started_at?: string | null; departure_at?: string | null }
+        | { status?: string; driver_journey_started_at?: string | null; departure_at?: string | null }[]
         | null;
     }[];
 
@@ -223,6 +223,10 @@ export function ActivitiesScreen({ navigation }: Props) {
       const tripJourneyStartedAt = Array.isArray(st)
         ? st[0]?.driver_journey_started_at
         : st?.driver_journey_started_at;
+      // Data exibida no card: quando a viagem está vinculada a uma viagem agendada,
+      // usa a data/hora de partida (departure_at) — a data real da viagem — e não a
+      // data da solicitação (created_at), que confundia o cliente.
+      const tripDepartureAt = Array.isArray(st) ? st[0]?.departure_at : st?.departure_at;
       const cr = (b as { cancellation_reason?: string | null }).cancellation_reason;
       const statusBadgeVariant = clientViagemStatusBadge(
         b.status,
@@ -248,7 +252,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         type: 'viagem',
         title: dest,
         originAddress: origin,
-        dateTime: formatBookingDate(b.created_at),
+        dateTime: formatBookingDate(tripDepartureAt ?? b.created_at),
         priceFormatted: formatActivityTotalPaidLine(b.amount_cents),
         categoryLabel: 'Viagem',
         sectionBadge,
@@ -269,14 +273,17 @@ export function ActivitiesScreen({ navigation }: Props) {
       const encLabel = packageSizeSummaryLabel(pkg);
       const stShip = (s as {
         scheduled_trips?:
-          | { status?: string; driver_journey_started_at?: string | null }
-          | { status?: string; driver_journey_started_at?: string | null }[]
+          | { status?: string; driver_journey_started_at?: string | null; departure_at?: string | null }
+          | { status?: string; driver_journey_started_at?: string | null; departure_at?: string | null }[]
           | null;
       }).scheduled_trips;
       const tripStatusShip = Array.isArray(stShip) ? stShip[0]?.status : stShip?.status;
       const tripJourneyStartedShip = Array.isArray(stShip)
         ? stShip[0]?.driver_journey_started_at
         : stShip?.driver_journey_started_at;
+      // Data do card: usa a partida da viagem agendada (departure_at) quando houver,
+      // não a data da solicitação (created_at).
+      const tripDepartureShip = Array.isArray(stShip) ? stShip[0]?.departure_at : stShip?.departure_at;
       const statusBadgeVariant = clientShipmentActivityStatusBadge(
         rawStatus,
         (s as { cancellation_reason?: string | null }).cancellation_reason,
@@ -292,7 +299,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         type: 'envio',
         title: dest,
         originAddress: origin,
-        dateTime: formatBookingDate((s as { created_at: string }).created_at),
+        dateTime: formatBookingDate(tripDepartureShip ?? (s as { created_at: string }).created_at),
         priceFormatted: formatActivityTotalPaidLine((s as { amount_cents?: number }).amount_cents),
         categoryLabel: 'Envio',
         sectionBadge,
@@ -313,14 +320,17 @@ export function ActivitiesScreen({ navigation }: Props) {
       const depBags = Math.max(0, Math.floor(Number((d as { bags_count?: number }).bags_count ?? 0)));
       const stDep = (d as {
         scheduled_trips?:
-          | { status?: string; driver_journey_started_at?: string | null }
-          | { status?: string; driver_journey_started_at?: string | null }[]
+          | { status?: string; driver_journey_started_at?: string | null; departure_at?: string | null }
+          | { status?: string; driver_journey_started_at?: string | null; departure_at?: string | null }[]
           | null;
       }).scheduled_trips;
       const tripStatusDep = Array.isArray(stDep) ? stDep[0]?.status : stDep?.status;
       const tripJourneyStartedDep = Array.isArray(stDep)
         ? stDep[0]?.driver_journey_started_at
         : stDep?.driver_journey_started_at;
+      // Data do card: usa a partida da viagem agendada (departure_at) quando houver,
+      // não a data da solicitação (created_at).
+      const tripDepartureDep = Array.isArray(stDep) ? stDep[0]?.departure_at : stDep?.departure_at;
       const statusBadgeVariant = clientDependentActivityStatusBadge(
         rawStatus,
         (d as { cancellation_reason?: string | null }).cancellation_reason,
@@ -332,7 +342,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         type: 'dependente',
         title,
         originAddress: origin,
-        dateTime: formatBookingDate((d as { created_at: string }).created_at),
+        dateTime: formatBookingDate(tripDepartureDep ?? (d as { created_at: string }).created_at),
         priceFormatted: formatActivityTotalPaidLine((d as { amount_cents?: number }).amount_cents),
         categoryLabel: 'Envio dependente',
         sectionBadge,
