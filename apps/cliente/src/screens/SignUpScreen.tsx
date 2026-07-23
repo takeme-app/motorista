@@ -8,8 +8,10 @@ import {
   Platform,
   ScrollView,
   ActivityIndicator,
+  FlatList,
 } from 'react-native';
 import { Text } from '../components/Text';
+import { AnimatedBottomSheet } from '../components/AnimatedBottomSheet';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useBottomSafeInset } from '@take-me/shared';
@@ -32,8 +34,12 @@ import {
   type EmailAvailability,
 } from '../lib/checkEmailAvailability';
 import { detectPhoneOrEmailChannel, formatPhoneBRMask } from '../utils/phoneOrEmailInput';
+import { formatCpf, onlyDigits, validateCpf } from '../utils/formatCpf';
+import { BRAZIL_STATES, fetchCitiesByState } from '../data/brazilStates';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SignUp'>;
+
+type CityOption = { id: number; nome: string };
 
 const EMAIL_AVAILABILITY_DEBOUNCE_MS = 500;
 const PASSWORD_MIN_LEN = 8;
@@ -53,6 +59,40 @@ export function SignUpScreen({ navigation }: Props) {
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [agreeOffers, setAgreeOffers] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Dados opcionais do cadastro persistidos no perfil após verificação
+  // (aparecem no painel admin de passageiros). Estado/Cidade reutilizam o
+  // mesmo padrão da tela "Editar localidade".
+  const [cpf, setCpf] = useState('');
+  const [stateUf, setStateUf] = useState<string | null>(null);
+  const [stateName, setStateName] = useState('');
+  const [city, setCity] = useState('');
+  const [stateModalVisible, setStateModalVisible] = useState(false);
+  const [cityModalVisible, setCityModalVisible] = useState(false);
+  const [cities, setCities] = useState<CityOption[]>([]);
+  const [citiesLoading, setCitiesLoading] = useState(false);
+
+  const openCityModal = useCallback(async () => {
+    if (!stateUf) return;
+    setCityModalVisible(true);
+    setCitiesLoading(true);
+    setCities([]);
+    const list = await fetchCitiesByState(stateUf);
+    setCities(list);
+    setCitiesLoading(false);
+  }, [stateUf]);
+
+  const handleSelectState = useCallback((uf: string, nome: string) => {
+    setStateUf(uf);
+    setStateName(nome);
+    setCity('');
+    setStateModalVisible(false);
+  }, []);
+
+  const handleSelectCity = useCallback((nome: string) => {
+    setCity(nome);
+    setCityModalVisible(false);
+  }, []);
 
   const [emailStatus, setEmailStatus] = useState<EmailCheckStatus>('idle');
   const [emailStatusMsg, setEmailStatusMsg] = useState<string | null>(null);
@@ -162,6 +202,11 @@ export function SignUpScreen({ navigation }: Props) {
       showAlert('Atenção', 'Aceite os Termos de Uso e a Política de Privacidade.');
       return;
     }
+    const cpfDigits = onlyDigits(cpf);
+    if (cpfDigits && !validateCpf(cpfDigits)) {
+      showAlert('Atenção', 'O CPF informado não é válido. Verifique ou deixe o campo em branco.');
+      return;
+    }
     if (!isSupabaseConfigured) {
       showAlert(
         'Erro',
@@ -217,6 +262,9 @@ export function SignUpScreen({ navigation }: Props) {
         fullName: fullName.trim(),
         phone: channel === 'phone' ? phoneDigits : '',
         channel,
+        cpf: cpfDigits || undefined,
+        city: city.trim() || undefined,
+        state: stateUf || undefined,
       });
     } catch (err: unknown) {
       showAlert('Atenção', getUserErrorMessage(err, 'Não foi possível enviar o código. Tente novamente.'));
@@ -360,6 +408,38 @@ export function SignUpScreen({ navigation }: Props) {
           </TouchableOpacity>
         </View>
 
+        <Text style={styles.optionalGroupLabel}>Informações adicionais (opcional)</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="CPF"
+          placeholderTextColor="#9CA3AF"
+          value={cpf}
+          onChangeText={(t) => setCpf(formatCpf(t))}
+          keyboardType="number-pad"
+          maxLength={14}
+        />
+        <TouchableOpacity
+          style={styles.selectButton}
+          onPress={() => setStateModalVisible(true)}
+          activeOpacity={0.7}
+        >
+          <Text style={stateUf ? styles.selectButtonText : styles.selectButtonPlaceholder}>
+            {stateUf ? `${stateName} - ${stateUf}` : 'Estado (UF)'}
+          </Text>
+          <Text style={styles.selectChevron}>›</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.selectButton, !stateUf && styles.selectButtonDisabled]}
+          onPress={openCityModal}
+          disabled={!stateUf}
+          activeOpacity={0.7}
+        >
+          <Text style={city ? styles.selectButtonText : styles.selectButtonPlaceholder}>
+            {city || 'Cidade'}
+          </Text>
+          <Text style={styles.selectChevron}>›</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity
           style={[styles.continueButton, !formReadyToSubmit && styles.continueButtonDisabled]}
           activeOpacity={0.8}
@@ -415,6 +495,61 @@ export function SignUpScreen({ navigation }: Props) {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      <AnimatedBottomSheet visible={stateModalVisible} onClose={() => setStateModalVisible(false)}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>Estado (UF)</Text>
+          <TouchableOpacity onPress={() => setStateModalVisible(false)} hitSlop={12}>
+            <Text style={styles.modalClose}>Fechar</Text>
+          </TouchableOpacity>
+        </View>
+        <FlatList
+          data={BRAZIL_STATES}
+          keyExtractor={(item) => item.sigla}
+          style={styles.modalList}
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              style={styles.modalItem}
+              onPress={() => handleSelectState(item.sigla, item.nome)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.modalItemText}>{item.nome} - {item.sigla}</Text>
+              {stateUf === item.sigla && <Text style={styles.modalItemCheck}>✓</Text>}
+            </TouchableOpacity>
+          )}
+        />
+      </AnimatedBottomSheet>
+
+      <AnimatedBottomSheet visible={cityModalVisible} onClose={() => setCityModalVisible(false)}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>Cidade</Text>
+          <TouchableOpacity onPress={() => setCityModalVisible(false)} hitSlop={12}>
+            <Text style={styles.modalClose}>Fechar</Text>
+          </TouchableOpacity>
+        </View>
+        {citiesLoading ? (
+          <View style={styles.modalLoading}>
+            <ActivityIndicator size="large" color="#000000" />
+            <Text style={styles.modalLoadingText}>Carregando cidades...</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={cities}
+            keyExtractor={(item) => String(item.id)}
+            style={styles.modalList}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.modalItem}
+                onPress={() => handleSelectCity(item.nome)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.modalItemText}>{item.nome}</Text>
+                {city === item.nome && <Text style={styles.modalItemCheck}>✓</Text>}
+              </TouchableOpacity>
+            )}
+          />
+        )}
+      </AnimatedBottomSheet>
     </KeyboardAvoidingView>
   );
 }
@@ -472,6 +607,88 @@ const styles = StyleSheet.create({
   },
   inputWithHint: {
     marginBottom: 6,
+  },
+  optionalGroupLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6B7280',
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  selectButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    marginBottom: 16,
+  },
+  selectButtonDisabled: {
+    opacity: 0.6,
+  },
+  selectButtonText: {
+    fontSize: 16,
+    color: '#000000',
+  },
+  selectButtonPlaceholder: {
+    fontSize: 16,
+    color: '#9CA3AF',
+  },
+  selectChevron: {
+    fontSize: 20,
+    color: '#9CA3AF',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#000000',
+  },
+  modalClose: {
+    fontSize: 16,
+    color: '#000000',
+  },
+  modalList: {
+    maxHeight: 350,
+  },
+  modalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalItemText: {
+    fontSize: 16,
+    color: '#000000',
+  },
+  modalItemCheck: {
+    fontSize: 16,
+    color: '#000000',
+    fontWeight: '600',
+  },
+  modalLoading: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  modalLoadingText: {
+    marginTop: 12,
+    fontSize: 15,
+    color: '#6B7280',
   },
   inputError: {
     borderColor: '#DC2626',

@@ -46,7 +46,7 @@ function getOtpBoxSize(): number {
 }
 
 export function VerifyEmailScreen({ navigation, route }: Props) {
-  const { email, password, fullName, phone, channel: channelParam } = route.params;
+  const { email, password, fullName, phone, channel: channelParam, cpf, city, state } = route.params;
   const channel: 'email' | 'phone' = channelParam === 'phone' ? 'phone' : 'email';
   const { showAlert } = useAppAlert();
   const [digits, setDigits] = useState<string[]>(() => Array.from({ length: CODE_LENGTH }, () => ''));
@@ -169,6 +169,19 @@ export function VerifyEmailScreen({ navigation, route }: Props) {
           await supabase.auth.signOut();
           showAlert('Acesso não permitido', gate.message);
           return;
+        }
+        // Persiste os dados opcionais do cadastro (CPF/cidade/estado) no perfil.
+        // Não bloqueia o fluxo se falhar — o usuário pode completar depois no
+        // perfil. Só grava campos efetivamente informados.
+        const profilePatch: Record<string, string> = {};
+        if (cpf && cpf.trim()) profilePatch.cpf = cpf.trim();
+        if (city && city.trim()) profilePatch.city = city.trim();
+        if (state && state.trim()) profilePatch.state = state.trim();
+        if (Object.keys(profilePatch).length > 0) {
+          await supabase
+            .from('profiles')
+            .update({ ...profilePatch, updated_at: new Date().toISOString() })
+            .eq('id', postVerifySession.user.id);
         }
       }
 

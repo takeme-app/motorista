@@ -13,6 +13,10 @@ export type RootStackParamList = {
     phone: string;
     /** Cadastro por WhatsApp (OTP) vs e-mail. */
     channel?: 'email' | 'phone';
+    /** Dados opcionais coletados no cadastro, persistidos no perfil após verificação. */
+    cpf?: string;
+    city?: string;
+    state?: string;
   };
   AddPaymentPrompt: undefined;
   AddPaymentMethod: undefined;
