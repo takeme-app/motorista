@@ -1126,6 +1126,12 @@ export async function createBookingForTripAsAdmin(input: {
       bags_count: bags,
       passenger_data: passengerData,
       amount_cents: amountCents,
+      // Reserva simples (sem sobretaxas/descontos): base = subtotal = total.
+      price_route_base_cents: amountCents,
+      pricing_surcharges_cents: 0,
+      promo_discount_cents: 0,
+      pricing_subtotal_cents: amountCents,
+      platform_fee_cents: 0,
       status: 'confirmed',
       payment_method: input.paymentMethod,
       platform_fee_extra_debit_cents: 0,
