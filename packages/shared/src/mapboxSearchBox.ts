@@ -16,10 +16,16 @@ export type MapboxSuggestItem = {
   mapboxId: string;
   /** nome principal (POI/rua) */
   name: string;
-  /** rótulo pronto p/ exibir/selecionar: nome + localidade (sem ", Brasil") */
+  /** rótulo pronto p/ exibir/selecionar: nome + endereço resumido (sem ", Brasil") */
   address: string;
   /** cidade quando disponível */
   city?: string;
+  /** linha secundária: rua, bairro, cidade, UF (sem o nome do POI, país ou CEP) */
+  secondary?: string;
+  /** distância em metros a partir do ponto de `proximity` (quando informado) */
+  distanceMeters?: number;
+  /** tipo do resultado da Search Box (poi, address, street, place...) */
+  featureType?: string;
 };
 
 export type MapboxSuggestOptions = {
@@ -32,12 +38,43 @@ export type MapboxSuggestOptions = {
 };
 
 type SearchBoxContext = {
+  /** endereço já formatado com número, quando o resultado é um POI/endereço */
+  address?: { name?: string; address_number?: string; street_name?: string };
+  street?: { name?: string };
+  neighborhood?: { name?: string };
+  postcode?: { name?: string };
+  locality?: { name?: string };
   place?: { name?: string };
+  district?: { name?: string };
   region?: { name?: string; region_code?: string };
 };
 
 function trimCountrySuffix(s: string): string {
   return s.replace(/,\s*bra[sz]il\s*$/i, '').trim();
+}
+
+/**
+ * Monta a linha secundária estilo Uber (rua, bairro, cidade, UF) a partir do
+ * `context` da Search Box — sem o nome do POI, país ou CEP. Se o context não
+ * trouxer nada útil, cai para o `place_formatted` (sem ", Brasil").
+ */
+function buildSecondary(ctx: SearchBoxContext | undefined, placeFormatted: string): string {
+  if (ctx) {
+    const streetLine =
+      ctx.address?.name?.trim() ||
+      [ctx.street?.name?.trim(), ctx.address?.address_number?.trim()]
+        .filter(Boolean)
+        .join(', ')
+        .trim();
+    const neighborhood = ctx.neighborhood?.name?.trim();
+    const city = ctx.place?.name?.trim() || ctx.locality?.name?.trim();
+    const uf = ctx.region?.region_code?.trim();
+    const parts = [streetLine, neighborhood, city, uf].filter(
+      (p): p is string => Boolean(p && p.length),
+    );
+    if (parts.length) return parts.join(', ');
+  }
+  return trimCountrySuffix(placeFormatted);
 }
 
 const DEFAULT_SESSION = 'takeme-default-session';
@@ -71,20 +108,29 @@ export async function mapboxSearchBoxSuggest(
       suggestions?: Array<{
         name?: string;
         mapbox_id?: string;
+        feature_type?: string;
         place_formatted?: string;
+        full_address?: string;
+        distance?: number;
         context?: SearchBoxContext;
       }>;
     };
     const out: MapboxSuggestItem[] = [];
     for (const s of data.suggestions ?? []) {
       if (!s.mapbox_id || !s.name) continue;
-      const place = trimCountrySuffix(s.place_formatted ?? '');
-      const city = s.context?.place?.name?.trim();
+      const placeFormatted = s.place_formatted ?? '';
+      const secondary = buildSecondary(s.context, placeFormatted);
+      const city = s.context?.place?.name?.trim() || s.context?.locality?.name?.trim();
+      const distanceMeters =
+        typeof s.distance === 'number' && Number.isFinite(s.distance) ? s.distance : undefined;
       out.push({
         mapboxId: s.mapbox_id,
         name: s.name,
-        address: place ? `${s.name}, ${place}` : s.name,
+        address: secondary ? `${s.name}, ${secondary}` : s.name,
         ...(city ? { city } : {}),
+        ...(secondary ? { secondary } : {}),
+        ...(distanceMeters != null ? { distanceMeters } : {}),
+        ...(s.feature_type ? { featureType: s.feature_type } : {}),
       });
     }
     return out;
