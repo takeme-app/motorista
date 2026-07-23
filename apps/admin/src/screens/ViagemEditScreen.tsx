@@ -23,6 +23,7 @@ import {
   updateBookingFields,
   updateScheduledTripFields,
   updateShipmentFields,
+  createBookingForTripAsAdmin,
 } from '../data/queries';
 import type { BookingDetailForAdmin, MotoristaListItem, TripShipmentListItem } from '../data/types';
 import MapView from '../components/MapView';
@@ -202,6 +203,13 @@ export default function ViagemEditScreen() {
   const [addPassageiroOpen, setAddPassageiroOpen] = useState(false);
   const [addPassageiroData, setAddPassageiroData] = useState({ id: '', nome: '', contato: '', mala: '', valor: '' });
   const [malaDropdownOpen, setMalaDropdownOpen] = useState(false);
+  // Nova reserva (fluxo B): passageiro cadastrado selecionado + nº de pessoas/bagagens + pagamento.
+  const [addPaxUserId, setAddPaxUserId] = useState('');
+  const [addPaxCount, setAddPaxCount] = useState('1');
+  const [addPaxBags, setAddPaxBags] = useState('0');
+  const [addPaxPagamento, setAddPaxPagamento] = useState<'cash' | 'pix'>('cash');
+  const [addPaxTripPriceCents, setAddPaxTripPriceCents] = useState<number>(0);
+  const [addPaxSaving, setAddPaxSaving] = useState(false);
 
   // Busca de passageiro no banco
   // Multi-ponto
@@ -944,8 +952,18 @@ export default function ViagemEditScreen() {
       canEditPassengers
         ? React.createElement('button', {
           type: 'button',
-          onClick: () => {
-            showToast('Em breve vamos ativar esta funcionalidade.');
+          onClick: async () => {
+            // Fluxo B: cria NOVA reserva para outro passageiro na mesma viagem.
+            setAddPassageiroData({ id: '', nome: '', contato: '', mala: '', valor: '' });
+            setAddPaxUserId(''); setAddPaxCount('1'); setAddPaxBags('0'); setAddPaxPagamento('cash');
+            setAddPaxTripPriceCents(0); setAddPaxSaving(false);
+            setPassengerSearch(''); setPassengerResults([]);
+            setAddPassageiroOpen(true);
+            const tid = detail?.listItem?.tripId;
+            if (tid) {
+              const { data: t } = await (supabase as any).from('scheduled_trips').select('price_per_person_cents').eq('id', tid).maybeSingle();
+              setAddPaxTripPriceCents(Number(t?.price_per_person_cents ?? 0));
+            }
           },
           style: {
             display: 'flex',
@@ -1744,7 +1762,8 @@ export default function ViagemEditScreen() {
                   React.createElement('button', {
                     key: p.id, type: 'button',
                     onClick: () => {
-                      setAddPassageiroData(prev => ({ ...prev, id: p.cpf || p.id, nome: p.full_name || '' }));
+                      setAddPassageiroData(prev => ({ ...prev, id: p.cpf || '', nome: p.full_name || '' }));
+                      setAddPaxUserId(p.id);
                       setPassengerSearch('');
                       setPassengerResults([]);
                     },
@@ -1758,34 +1777,74 @@ export default function ViagemEditScreen() {
                     React.createElement('span', { style: { fontSize: 12, color: '#767676' } },
                       [p.cpf && `CPF: ${p.cpf}`, p.phone && `Tel: ${p.phone}`].filter(Boolean).join(' • '))))) : null,
               passengerSearching ? React.createElement('span', { style: { fontSize: 12, color: '#767676', marginTop: 4, ...font } }, 'Buscando...') : null),
-            addPassageiroField('ID do passageiro', 'id', 'CPF ou ID do passageiro'),
-            addPassageiroField('Nome completo', 'nome', 'Nome do passageiro'),
-            addPassageiroField('Contato', 'contato', 'Ex: (21) 98888-7777'),
-            malaDropdown,
-            addPassageiroField('Valor', 'valor', 'R$ 0,00')),
+            // Passageiro selecionado (obrigatório — precisa de um cliente cadastrado p/ a reserva)
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+              React.createElement('label', { style: labelStyle }, 'Passageiro'),
+              React.createElement('div', { style: { ...inputStyle, display: 'flex', alignItems: 'center', color: addPassageiroData.nome ? '#0d0d0d' : '#767676' } },
+                addPassageiroData.nome ? `${addPassageiroData.nome}${addPassageiroData.id ? ` — ${addPassageiroData.id}` : ''}` : 'Busque e selecione um passageiro cadastrado')),
+            // Nº de passageiros
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+              React.createElement('label', { style: labelStyle }, 'Nº de passageiros'),
+              React.createElement('input', {
+                type: 'number', min: 1, value: addPaxCount,
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setAddPaxCount(e.target.value.replace(/[^0-9]/g, '')),
+                style: inputStyle,
+              })),
+            // Nº de bagagens
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+              React.createElement('label', { style: labelStyle }, 'Nº de bagagens'),
+              React.createElement('input', {
+                type: 'number', min: 0, value: addPaxBags,
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setAddPaxBags(e.target.value.replace(/[^0-9]/g, '')),
+                style: inputStyle,
+              })),
+            // Forma de pagamento
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6, width: '100%' } },
+              React.createElement('label', { style: labelStyle }, 'Forma de pagamento'),
+              React.createElement('div', { style: { display: 'flex', gap: 8 } },
+                ...([['cash', 'Dinheiro'], ['pix', 'Pix']] as const).map(([v, l]) =>
+                  React.createElement('button', {
+                    key: v, type: 'button', onClick: () => setAddPaxPagamento(v),
+                    style: { height: 40, padding: '0 18px', borderRadius: 999, border: addPaxPagamento === v ? 'none' : '1px solid #e2e2e2', background: addPaxPagamento === v ? '#0d0d0d' : '#fff', color: addPaxPagamento === v ? '#fff' : '#0d0d0d', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font },
+                  }, l)))),
+            // Valor total (preview a partir do preço/pessoa da viagem)
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+              React.createElement('label', { style: labelStyle }, 'Valor total'),
+              React.createElement('div', { style: { ...inputStyle, display: 'flex', alignItems: 'center', color: '#0d0d0d' } },
+                (() => {
+                  const n = Math.max(1, parseInt(addPaxCount || '1', 10) || 1);
+                  const cents = addPaxTripPriceCents * n;
+                  return addPaxTripPriceCents > 0
+                    ? `R$ ${(cents / 100).toFixed(2).replace('.', ',')} (R$ ${(addPaxTripPriceCents / 100).toFixed(2).replace('.', ',')} × ${n})`
+                    : 'Viagem sem preço definido — será criada com R$ 0,00';
+                })()))),
           // Buttons
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, marginTop: 24, flexShrink: 0 } },
             React.createElement('button', {
-              type: 'button', onClick: async () => {
-                if (!canEditTrip) { showToast('Não é possível alterar passageiros nesta viagem.'); return; }
-                if (!detail?.listItem?.bookingId || !addPassageiroData.nome.trim()) { showToast('Preencha ao menos o nome.'); return; }
-                const currentData = detail.passengerData || [];
-                const bags = addPassageiroData.mala === 'Grande' ? 3 : addPassageiroData.mala === 'Média' ? 2 : 1;
-                const newPassenger = { name: addPassageiroData.nome.trim(), cpf: addPassageiroData.id.trim() || '', bags };
-                const newData = [...currentData, newPassenger];
-                const { error } = await updateBookingFields(detail.listItem.bookingId, {
-                  passenger_data: newData,
-                  passenger_count: newData.length,
-                } as any);
-                if (error) { showToast(error); } else {
-                  showToast('Passageiro adicionado com sucesso');
-                  const d2 = await fetchBookingDetailForAdmin(detail.listItem.bookingId);
-                  if (d2) setDetail(d2);
-                }
+              type: 'button', disabled: addPaxSaving, onClick: async () => {
+                if (!canEditTrip) { showToast('Não é possível adicionar passageiros nesta viagem.'); return; }
+                const tid = detail?.listItem?.tripId;
+                if (!tid) { showToast('Viagem não identificada.'); return; }
+                if (!addPaxUserId || !addPassageiroData.nome.trim()) { showToast('Busque e selecione um passageiro cadastrado.'); return; }
+                const pax = Math.max(1, parseInt(addPaxCount || '1', 10) || 1);
+                const bags = Math.max(0, parseInt(addPaxBags || '0', 10) || 0);
+                setAddPaxSaving(true);
+                const res = await createBookingForTripAsAdmin({
+                  scheduledTripId: tid,
+                  userId: addPaxUserId,
+                  passengerName: addPassageiroData.nome.trim(),
+                  passengerCpf: addPassageiroData.id.trim(),
+                  passengerCount: pax,
+                  bagsCount: bags,
+                  paymentMethod: addPaxPagamento,
+                });
+                setAddPaxSaving(false);
+                if (res.error) { showToast(res.error); return; }
+                showToast(`Reserva criada${typeof res.amountCents === 'number' ? ` — R$ ${(res.amountCents / 100).toFixed(2).replace('.', ',')}` : ''}`);
                 setAddPassageiroOpen(false); setMalaDropdownOpen(false);
               },
-              style: { width: '100%', height: 48, background: '#0d0d0d', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 16, fontWeight: 500, color: '#fff', ...font },
-            }, 'Adicionar passageiro'),
+              style: { width: '100%', height: 48, background: '#0d0d0d', border: 'none', borderRadius: 8, cursor: addPaxSaving ? 'wait' : 'pointer', opacity: addPaxSaving ? 0.6 : 1, fontSize: 16, fontWeight: 500, color: '#fff', ...font },
+            }, addPaxSaving ? 'Criando...' : 'Adicionar passageiro'),
             React.createElement('button', {
               type: 'button', onClick: () => { setAddPassageiroOpen(false); setMalaDropdownOpen(false); },
               style: { width: '100%', height: 48, background: '#e2e2e2', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 16, fontWeight: 500, color: '#b53838', ...font },

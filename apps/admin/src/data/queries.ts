@@ -1063,6 +1063,86 @@ export async function updateBookingFields(
   return { error: error ? (error as Error).message : null };
 }
 
+/**
+ * Cria uma NOVA reserva (booking) para outro passageiro numa viagem já existente
+ * — feature "Adicionar passageiro" do admin. Usa a rota (origem/destino/coords) e
+ * o preço/pessoa da própria viagem. O trigger de capacidade do banco dá baixa em
+ * seats_available e barra overbooking (lança erro se não houver assento).
+ * Requer a policy RLS "Admin can insert bookings" (is_admin()).
+ */
+export async function createBookingForTripAsAdmin(input: {
+  scheduledTripId: string;
+  userId: string;
+  passengerName: string;
+  passengerCpf?: string;
+  passengerCount: number;
+  bagsCount: number;
+  paymentMethod: 'cash' | 'pix';
+}): Promise<{ error: string | null; bookingId?: string; amountCents?: number }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase não configurado' };
+
+  const pax = Math.max(1, Math.floor(input.passengerCount || 1));
+  const bags = Math.max(0, Math.floor(input.bagsCount || 0));
+
+  const { data: trip, error: tripErr } = await (supabase as any)
+    .from('scheduled_trips')
+    .select('id, status, seats_available, price_per_person_cents, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng')
+    .eq('id', input.scheduledTripId)
+    .maybeSingle();
+  if (tripErr || !trip) return { error: tripErr?.message || 'Viagem não encontrada' };
+
+  const tripStatus = String(trip.status ?? '').toLowerCase();
+  if (tripStatus !== 'active') return { error: 'A viagem não está ativa (concluída/cancelada) — não é possível adicionar passageiros.' };
+  if (Number(trip.seats_available ?? 0) < pax) {
+    return { error: `Assentos insuficientes: restam ${Number(trip.seats_available ?? 0)} e você pediu ${pax}.` };
+  }
+  if (
+    trip.origin_lat == null || trip.origin_lng == null ||
+    trip.destination_lat == null || trip.destination_lng == null
+  ) {
+    return { error: 'A viagem está sem coordenadas de origem/destino.' };
+  }
+
+  const perPerson = Number(trip.price_per_person_cents ?? 0);
+  const amountCents = Math.max(0, Math.round((Number.isFinite(perPerson) ? perPerson : 0) * pax));
+
+  const passengerData = [{
+    name: input.passengerName.trim(),
+    cpf: (input.passengerCpf ?? '').trim(),
+    bags,
+  }];
+
+  const { data, error } = await (supabase.from('bookings') as any)
+    .insert({
+      user_id: input.userId,
+      scheduled_trip_id: input.scheduledTripId,
+      origin_address: trip.origin_address ?? '—',
+      origin_lat: trip.origin_lat,
+      origin_lng: trip.origin_lng,
+      destination_address: trip.destination_address ?? '—',
+      destination_lat: trip.destination_lat,
+      destination_lng: trip.destination_lng,
+      passenger_count: pax,
+      bags_count: bags,
+      passenger_data: passengerData,
+      amount_cents: amountCents,
+      status: 'confirmed',
+      payment_method: input.paymentMethod,
+      platform_fee_extra_debit_cents: 0,
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    const msg = (error as Error).message || '';
+    if (/capacidade insuficiente|indispon/i.test(msg)) {
+      return { error: 'Sem assentos disponíveis nesta viagem.' };
+    }
+    return { error: msg || 'Não foi possível criar a reserva.' };
+  }
+  return { error: null, bookingId: (data as any)?.id, amountCents };
+}
+
 export async function updateScheduledTripFields(
   tripId: string,
   fields: {
