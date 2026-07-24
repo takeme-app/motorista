@@ -31,13 +31,14 @@ import {
   fetchBookingDetailForAdmin,
   fetchMotoristas,
   fetchShipmentsForScheduledTrip,
+  fetchTripPassengers,
   fetchSpedyInvoicePdfAsBlob,
   lookupSpedyInvoiceByStripePi,
 } from '../data/queries';
 import type { SpedyInvoiceLookupItem } from '../data/types';
 import { supabase } from '../lib/supabase';
 import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
-import type { BookingDetailForAdmin, TripShipmentListItem } from '../data/types';
+import type { BookingDetailForAdmin, TripShipmentListItem, TripPassengerRow } from '../data/types';
 import type { MotoristaListItem } from '../data/types';
 import MapView from '../components/MapView';
 import { ShipmentHandoffPinsBlock } from '../components/ShipmentHandoffPinsBlock';
@@ -187,57 +188,6 @@ function adminPinChipRow(
   );
 }
 
-/** Variante compacta do PIN dentro de cada card (vários passageiros, mesmo código da reserva). */
-function adminPinChipRowCompact(
-  label: string,
-  code: string | null | undefined,
-  footnote?: string | null,
-): React.ReactElement {
-  return React.createElement(
-    'div',
-    { style: { display: 'flex', flexDirection: 'column' as const, gap: 6 } },
-    React.createElement(
-      'div',
-      { style: { fontSize: 11, color: '#767676', fontFamily: 'Inter, sans-serif', lineHeight: 1.35 } },
-      label,
-    ),
-    React.createElement(
-      'div',
-      { style: { display: 'flex', gap: 4 } },
-      ...pinCharsForDisplay(code).map((ch, i) =>
-        React.createElement(
-          'div',
-          {
-            key: `adm-pc-${label}-${i}`,
-            style: {
-              minWidth: 28,
-              height: 36,
-              borderRadius: 6,
-              border: '1px solid #d4d4d4',
-              background: '#fff',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 15,
-              fontWeight: 700,
-              fontFamily: 'ui-monospace, Menlo, monospace',
-              color: '#0d0d0d',
-            },
-          },
-          ch,
-        ),
-      ),
-    ),
-    footnote
-      ? React.createElement(
-          'div',
-          { style: { fontSize: 10, color: '#a3a3a3', fontFamily: 'Inter, sans-serif', fontStyle: 'italic' as const, lineHeight: 1.35 } },
-          footnote,
-        )
-      : null,
-  );
-}
-
 export default function ViagemDetalheScreen() {
   const { id, eid } = useParams<{ id: string; eid?: string }>();
   const location = useLocation();
@@ -250,6 +200,7 @@ export default function ViagemDetalheScreen() {
   const [imageZoomOpen, setImageZoomOpen] = useState(false);
   const [acompanharTempoReal, setAcompanharTempoReal] = useState(false);
   const [linkedShipments, setLinkedShipments] = useState<TripShipmentListItem[]>([]);
+  const [tripPassengers, setTripPassengers] = useState<TripPassengerRow[]>([]);
   const [supportCreateBusyKey, setSupportCreateBusyKey] = useState<string | null>(null);
   const [tripCoords] = useTripMapCoords(detail);
 
@@ -524,11 +475,15 @@ export default function ViagemDetalheScreen() {
   useEffect(() => {
     if (!resolvedScheduledTripId) {
       setLinkedShipments([]);
+      setTripPassengers([]);
       return;
     }
     let cancel = false;
     fetchShipmentsForScheduledTrip(resolvedScheduledTripId).then((rows) => {
       if (!cancel) setLinkedShipments(rows);
+    });
+    fetchTripPassengers(resolvedScheduledTripId).then((rows) => {
+      if (!cancel) setTripPassengers(rows);
     });
     return () => { cancel = true; };
   }, [resolvedScheduledTripId]);
@@ -633,20 +588,53 @@ export default function ViagemDetalheScreen() {
     return { displayTotal, displayUnit, resumoUnitLabel };
   }, [detail, linkedShipments]);
 
-  /** Alinhado a `bookings.passenger_count`: titular + extras em `passenger_data`, sem duplicar nome do titular. */
-  const passengerDisplayRows = useMemo(() => {
-    type Row = { name: string; pData?: { name?: string; cpf?: string; bags?: number } };
+  /**
+   * Passageiros exibidos. A viagem pode ter VÁRIAS reservas — `tripPassengers` agrega todas.
+   * Enquanto carrega (ou sem reservas), cai no fallback: só a reserva aberta (titular + extras).
+   */
+  type PaxDisplayRow = {
+    name: string;
+    cpf: string | null;
+    bagsRaw: number | null;
+    unitCents: number | null;
+    pickupCode: string | null;
+    bookingId: string;
+    isPrimary: boolean;
+  };
+  const passengerDisplayRows = useMemo<PaxDisplayRow[]>(() => {
+    if (tripPassengers.length) {
+      return tripPassengers.map((tp) => ({
+        name: tp.name,
+        cpf: tp.cpf,
+        bagsRaw: tp.bagsRaw,
+        unitCents: tp.unitCents,
+        pickupCode: tp.pickupCode,
+        bookingId: tp.bookingId,
+        isPrimary: tp.isPrimary,
+      }));
+    }
     if (!detail) {
-      return t ? [{ name: t.passageiro }] as Row[] : [];
+      return t ? [{ name: t.passageiro, cpf: null, bagsRaw: null, unitCents: null, pickupCode: null, bookingId: '', isPrimary: true }] : [];
     }
     if (isShipmentOnlyTrip) return [];
     const count = Math.max(1, Number(detail.passengerCount) || 1);
+    const bookingId = detail.listItem.bookingId;
+    const unit = detail.passengerCount > 0 ? Math.round(detail.amountCents / detail.passengerCount) : detail.amountCents;
+    const pin = detail.pickupCode ?? null;
     const primary = (detail.listItem.passageiro || 'Sem nome').trim();
     const primaryKey = primary.toLowerCase();
     const primaryPData = detail.passengerData.find(
       (p) => (p.name || '').trim().toLowerCase() === primaryKey,
     );
-    const rows: Row[] = [{ name: primary || 'Sem nome', pData: primaryPData }];
+    const rows: PaxDisplayRow[] = [{
+      name: primary || 'Sem nome',
+      cpf: primaryPData?.cpf ?? null,
+      bagsRaw: detail.bagsCount ?? null,
+      unitCents: unit,
+      pickupCode: pin,
+      bookingId,
+      isPrimary: true,
+    }];
     const seen = new Set<string>([primaryKey]);
     for (const p of detail.passengerData) {
       if (rows.length >= count) break;
@@ -655,10 +643,18 @@ export default function ViagemDetalheScreen() {
       const k = nm.toLowerCase();
       if (seen.has(k)) continue;
       seen.add(k);
-      rows.push({ name: nm, pData: p });
+      rows.push({
+        name: nm,
+        cpf: p.cpf ?? null,
+        bagsRaw: p.bags != null ? Number(p.bags) : null,
+        unitCents: unit,
+        pickupCode: pin,
+        bookingId,
+        isPrimary: false,
+      });
     }
     return rows;
-  }, [detail, t, isShipmentOnlyTrip]);
+  }, [detail, t, isShipmentOnlyTrip, tripPassengers]);
 
   const bestSpedyInvoice = useMemo(() => pickBestSpedyInvoice(spedyNf.invoices), [spedyNf.invoices]);
 
@@ -755,51 +751,40 @@ export default function ViagemDetalheScreen() {
     }),
   );
 
-  const pickupCodeTrimmed = detail?.pickupCode?.trim() ?? '';
-  const nPassengersListed = passengerDisplayRows.length;
-
-  const passageiroCard = (row: { name: string; pData?: { name?: string; cpf?: string; bags?: number } }, idx: number) => {
+  const passageiroCard = (row: PaxDisplayRow, idx: number) => {
     const name = row.name;
-    const pData = row.pData;
+    const isOpenedPrimary = Boolean(detail) && row.bookingId === detail?.listItem?.bookingId && row.isPrimary;
     const bags =
-      pData?.bags != null && Number.isFinite(Number(pData.bags))
-        ? Number(pData.bags)
-        : detail && detail.passengerCount <= 1
-          ? Math.max(1, detail.bagsCount ?? 1)
-          : 1;
+      row.bagsRaw != null && Number.isFinite(Number(row.bagsRaw))
+        ? Number(row.bagsRaw)
+        : 1;
     const bagLabel = bags <= 1 ? 'Pequena' : bags <= 2 ? 'Média' : 'Grande';
-    const unitPrice = detail && detail.passengerCount > 0
-      ? fmtBRL(Math.round(moneyResumo.displayTotal / detail.passengerCount))
-      : 'R$ 150,00';
-    const cpfLabel = pData?.cpf ? `CPF: ${pData.cpf}` : '';
+    const unitPrice = row.unitCents != null
+      ? fmtBRL(row.unitCents)
+      : detail && detail.passengerCount > 0
+        ? fmtBRL(Math.round(moneyResumo.displayTotal / detail.passengerCount))
+        : 'R$ 150,00';
+    const cpfLabel = row.cpf ? `CPF: ${row.cpf}` : '';
 
-    const pickupInlineBlock = pickupCodeTrimmed
-      ? nPassengersListed <= 1
-        ? React.createElement(
-            'div',
-            { style: { paddingTop: 12, width: '100%', boxSizing: 'border-box' as const } },
-            adminPinChipRow(
-              'Código de embarque da reserva — informar ao motorista',
-              pickupCodeTrimmed,
-              null,
-              'Todos os passageiros desta reserva partilham este PIN. Encomendas na mesma viagem: ver PINs na secção «Encomendas».',
-            ),
-          )
-        : React.createElement(
-            'div',
-            { style: { paddingTop: 12, width: '100%', boxSizing: 'border-box' as const } },
-            adminPinChipRowCompact(
-              'Embarque — código da reserva (igual para todos)',
-              pickupCodeTrimmed,
-              'Mesmo código indicado acima nesta secção.',
-            ),
-          )
+    // PIN de embarque é por RESERVA — mostrado uma vez, no card do titular de cada reserva.
+    const rowPin = row.pickupCode?.trim() ?? '';
+    const pickupInlineBlock = rowPin && row.isPrimary
+      ? React.createElement(
+          'div',
+          { style: { paddingTop: 12, width: '100%', boxSizing: 'border-box' as const } },
+          adminPinChipRow(
+            'Código de embarque da reserva — informar ao motorista',
+            rowPin,
+            null,
+            'Todos os passageiros desta reserva partilham este PIN. Encomendas na mesma viagem: ver PINs na secção «Encomendas».',
+          ),
+        )
       : null;
 
     return React.createElement('div', { key: `pax-${idx}-${name}`, style: { background: '#f6f6f6', borderRadius: 12, padding: 16, minWidth: 280, maxWidth: 330, flex: '1 1 280px', display: 'flex', flexDirection: 'column' as const, gap: 0 } },
       React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, paddingBottom: 12, borderBottom: '1px solid #e2e2e2', width: '100%', boxSizing: 'border-box' as const } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 12, flex: 1, minWidth: 0 } },
-          idx === 0 && passengerAvatarSrc
+          isOpenedPrimary && passengerAvatarSrc
             ? React.createElement('img', { src: passengerAvatarSrc, alt: name, style: { width: 48, height: 48, borderRadius: '50%', objectFit: 'cover' as const, flexShrink: 0 } })
             : React.createElement('div', { style: { width: 48, height: 48, borderRadius: '50%', background: '#e2e2e2', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 600, color: '#767676', fontFamily: 'Inter, sans-serif' } },
                 name.charAt(0).toUpperCase()),
@@ -809,7 +794,7 @@ export default function ViagemDetalheScreen() {
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 } },
               starFilledSvg,
               React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: '#545454', fontFamily: 'Inter, sans-serif' } }, '—')))),
-        idx === 0 && detail
+        isOpenedPrimary && detail
           ? React.createElement('button', {
             type: 'button',
             disabled: supportCreateBusyKey === 'booking',
@@ -848,42 +833,14 @@ export default function ViagemDetalheScreen() {
   },
     React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
       React.createElement('path', { d: 'M9 18l6-6-6-6', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })));
-  /** PIN `bookings.pickup_code` — único por reserva; acima dos cards só quando há 2+ passageiros (1 pax: PIN só dentro do card). */
-  const bookingPickupPinBlock =
-    pickupCodeTrimmed && nPassengersListed > 1
-      ? React.createElement(
-          'div',
-          { style: { width: '100%', marginBottom: 20 } },
-          adminPinChipRow(
-            'Código de embarque da reserva — informar ao motorista',
-            pickupCodeTrimmed,
-            null,
-          ),
-          React.createElement(
-            'p',
-            {
-              style: {
-                fontSize: 13,
-                color: '#767676',
-                fontFamily: 'Inter, sans-serif',
-                marginTop: 10,
-                marginBottom: 0,
-                lineHeight: 1.5,
-                maxWidth: 720,
-              },
-            },
-            'Um único PIN para todos os passageiros desta reserva (não há código distinto por pessoa). Encomendas na mesma viagem têm PINs próprios na secção «Encomendas».',
-          ),
-        )
-      : null;
-
+  // O PIN de embarque é por RESERVA e é mostrado dentro do card do titular de cada reserva
+  // (uma viagem pode ter várias reservas, cada uma com o seu PIN).
   const passageirosSection = !isShipmentOnlyTrip
     ? React.createElement('div', { style: webStyles.detailPassageirosSection },
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: 16 } },
         React.createElement('h2', { style: { ...webStyles.detailSectionTitle, margin: 0 } }, 'Passageiros'),
         passageirosChevronBtn),
-      bookingPickupPinBlock,
-      React.createElement('div', { style: { display: 'flex', gap: 24, overflowX: 'auto' as const } },
+      React.createElement('div', { style: { display: 'flex', gap: 24, overflowX: 'auto' as const, flexWrap: 'wrap' as const } },
         ...passengerDisplayRows.map((row, i) => passageiroCard(row, i))))
     : null;
 

@@ -20,12 +20,13 @@ import {
   fetchBookingDetailForAdmin,
   fetchMotoristas,
   fetchShipmentsForScheduledTrip,
+  fetchTripPassengers,
   updateBookingFields,
   updateScheduledTripFields,
   updateShipmentFields,
   createBookingForTripAsAdmin,
 } from '../data/queries';
-import type { BookingDetailForAdmin, MotoristaListItem, TripShipmentListItem } from '../data/types';
+import type { BookingDetailForAdmin, MotoristaListItem, TripShipmentListItem, TripPassengerRow } from '../data/types';
 import MapView from '../components/MapView';
 import { useTripStops } from '../hooks/useTripStops';
 import PlacesAddressInput, { type PlaceResolved } from '../components/PlacesAddressInput';
@@ -185,6 +186,7 @@ export default function ViagemEditScreen() {
   const [ocupacao, setOcupacao] = useState(0);
   const [selectedMotorista, setSelectedMotorista] = useState(0);
   const [tripShipments, setTripShipments] = useState<TripShipmentListItem[]>([]);
+  const [tripPassengers, setTripPassengers] = useState<TripPassengerRow[]>([]);
   const [removePassageiroIdx, setRemovePassageiroIdx] = useState<number | null>(null);
   const [editEncomendaIdx, setEditEncomendaIdx] = useState<number | null>(null);
   const [editEncomendaData, setEditEncomendaData] = useState({ nome: '', recolha: '', entrega: '', destinatario: '', telefone: '', observacoes: '' });
@@ -331,6 +333,9 @@ export default function ViagemEditScreen() {
     let cancel = false;
     fetchShipmentsForScheduledTrip(tripId).then((rows) => {
       if (!cancel) setTripShipments(rows);
+    });
+    fetchTripPassengers(tripId).then((rows) => {
+      if (!cancel) setTripPassengers(rows);
     });
     return () => { cancel = true; };
   }, [detail?.listItem?.tripId, detail?.listItem?.bookingId]);
@@ -806,6 +811,8 @@ export default function ViagemEditScreen() {
   const unitCents =
     detail.passengerCount > 0 ? Math.round(detail.amountCents / detail.passengerCount) : detail.amountCents;
   type PassageiroRow = {
+    /** Reserva (`bookings.id`) a que este passageiro pertence (ações por-reserva). */
+    bookingId: string;
     name: string;
     rating: string;
     mala: string;
@@ -816,46 +823,64 @@ export default function ViagemEditScreen() {
     historicoUserId: string | null;
     /** Índice em `passenger_data` para remoção; null = titular exibido a partir do cliente da reserva. */
     passengerDataIndex: number | null;
+    /** Titular da reserva (1º passageiro). */
+    isPrimary: boolean;
   };
   /**
-   * `passenger_count` na reserva é a fonte de verdade para quantos passageiros a viagem tem.
-   * O titular (`listItem.passageiro` = cliente `user_id`) ocupa o 1º lugar; entradas extras vêm de
-   * `passenger_data` sem repetir nome, até completar (count − 1). Assim não aparecem cartões a mais
-   * quando o JSON ainda tem linha órfã (ex.: teste antigo com outro nome e count = 1).
+   * A viagem pode ter VÁRIAS reservas (várias pessoas compraram assento na mesma rota).
+   * `tripPassengers` agrega os passageiros de todas as reservas do `scheduled_trip`. Enquanto
+   * carrega (ou viagem sem reservas), cai no fallback: só os passageiros da reserva aberta.
    */
-  const totalPassengers = Math.max(1, detail.passengerCount || 1);
-  const maxExtrasFromPassengerData = Math.max(0, totalPassengers - 1);
-
-  const passageiros: PassageiroRow[] = [];
-  passageiros.push({
-    name: detail.listItem.passageiro,
-    rating: '—',
-    mala: bagLabel(detail.bagsCount),
-    valor: fmtBRL(unitCents),
-    avatarUrl: detail.clientAvatarUrl ?? null,
-    historicoUserId: detail.userId || null,
-    passengerDataIndex: null,
-  });
-  const seen = new Set<string>([detail.listItem.passageiro.trim().toLowerCase()]);
-  let extrasAdded = 0;
-  detail.passengerData.forEach((p, i) => {
-    if (extrasAdded >= maxExtrasFromPassengerData) return;
-    const n = (p.name || '').trim();
-    if (!n) return;
-    const k = n.toLowerCase();
-    if (seen.has(k)) return;
-    seen.add(k);
-    extrasAdded += 1;
-    passageiros.push({
-      name: n,
+  let passageiros: PassageiroRow[];
+  if (tripPassengers.length) {
+    passageiros = tripPassengers.map((tp) => ({
+      bookingId: tp.bookingId,
+      name: tp.name,
       rating: '—',
-      mala: bagLabel(p.bags),
+      mala: bagLabel(tp.bagsRaw ?? undefined),
+      valor: fmtBRL(tp.unitCents),
+      avatarUrl: tp.avatarUrl,
+      historicoUserId: tp.historicoUserId,
+      passengerDataIndex: tp.passengerDataIndex,
+      isPrimary: tp.isPrimary,
+    }));
+  } else {
+    const totalPassengers = Math.max(1, detail.passengerCount || 1);
+    const maxExtrasFromPassengerData = Math.max(0, totalPassengers - 1);
+    passageiros = [{
+      bookingId: detail.listItem.bookingId,
+      name: detail.listItem.passageiro,
+      rating: '—',
+      mala: bagLabel(detail.bagsCount),
       valor: fmtBRL(unitCents),
-      avatarUrl: detail.avatarUrlByPassengerCpfDigits[cpfDigitsKey(p.cpf)] ?? null,
-      historicoUserId: null,
-      passengerDataIndex: i,
+      avatarUrl: detail.clientAvatarUrl ?? null,
+      historicoUserId: detail.userId || null,
+      passengerDataIndex: null,
+      isPrimary: true,
+    }];
+    const seen = new Set<string>([detail.listItem.passageiro.trim().toLowerCase()]);
+    let extrasAdded = 0;
+    detail.passengerData.forEach((p, i) => {
+      if (extrasAdded >= maxExtrasFromPassengerData) return;
+      const n = (p.name || '').trim();
+      if (!n) return;
+      const k = n.toLowerCase();
+      if (seen.has(k)) return;
+      seen.add(k);
+      extrasAdded += 1;
+      passageiros.push({
+        bookingId: detail.listItem.bookingId,
+        name: n,
+        rating: '—',
+        mala: bagLabel(p.bags),
+        valor: fmtBRL(unitCents),
+        avatarUrl: detail.avatarUrlByPassengerCpfDigits[cpfDigitsKey(p.cpf)] ?? null,
+        historicoUserId: null,
+        passengerDataIndex: i,
+        isPrimary: false,
+      });
     });
-  });
+  }
 
   const valorMedium: React.CSSProperties = { fontSize: 16, fontWeight: 500, color: '#0d0d0d', ...font };
 
@@ -893,9 +918,14 @@ export default function ViagemEditScreen() {
                 type: 'button',
                 title: 'Remover passageiro',
                 onClick: async () => {
-                  if (!canEditPassengers || !detail?.listItem?.bookingId) return;
+                  if (!canEditPassengers) return;
                   if (p.passengerDataIndex === null) {
-                    showToast('O passageiro principal é o titular da reserva; não pode ser removido desta lista.');
+                    showToast('Este é o titular da reserva. Para removê-lo, cancele a reserva dele.');
+                    return;
+                  }
+                  // Acompanhantes só podem ser removidos a partir da reserva aberta (temos o passenger_data dela).
+                  if (p.bookingId !== detail.listItem.bookingId) {
+                    showToast('Abra a reserva deste passageiro para removê-lo.');
                     return;
                   }
                   const currentData = [...(detail.passengerData || [])];
@@ -908,6 +938,8 @@ export default function ViagemEditScreen() {
                     showToast('Passageiro removido');
                     const d2 = await fetchBookingDetailForAdmin(detail.listItem.bookingId);
                     if (d2) setDetail(d2);
+                    const tid = detail.listItem.tripId;
+                    if (tid) setTripPassengers(await fetchTripPassengers(tid));
                   }
                 },
                 style: { width: 40, height: 40, borderRadius: '50%', background: '#f1f1f1', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 },
@@ -923,11 +955,11 @@ export default function ViagemEditScreen() {
       React.createElement('button', {
         type: 'button',
         onClick: () => {
-          if (!p.historicoUserId || !detail?.listItem?.bookingId) {
+          if (!p.historicoUserId || !p.bookingId) {
             showToast('Histórico disponível para o titular da reserva cadastrado no sistema.');
             return;
           }
-          navigate(`/passageiros/${p.historicoUserId}/viagem/${detail.listItem.bookingId}/historico`);
+          navigate(`/passageiros/${p.historicoUserId}/viagem/${p.bookingId}/historico`);
         },
         style: {
           width: '100%',
@@ -1829,6 +1861,8 @@ export default function ViagemEditScreen() {
                 if (res.error) { showToast(res.error); return; }
                 showToast(`Reserva criada${typeof res.amountCents === 'number' ? ` — R$ ${(res.amountCents / 100).toFixed(2).replace('.', ',')}` : ''}`);
                 setAddPassageiroOpen(false); setMalaDropdownOpen(false);
+                // Atualiza a lista para o novo passageiro aparecer na hora.
+                if (tid) setTripPassengers(await fetchTripPassengers(tid));
               },
               style: { width: '100%', height: 48, background: '#0d0d0d', border: 'none', borderRadius: 8, cursor: addPaxSaving ? 'wait' : 'pointer', opacity: addPaxSaving ? 0.6 : 1, fontSize: 16, fontWeight: 500, color: '#fff', ...font },
             }, addPaxSaving ? 'Criando...' : 'Adicionar passageiro'),

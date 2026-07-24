@@ -25,6 +25,7 @@ import type {
   PaymentMethodRow,
   AdminUserListItem,
   BookingDetailForAdmin,
+  TripPassengerRow,
   EncomendaEditDetail,
   TripShipmentListItem,
   SpedyInvoiceLookupItem,
@@ -486,16 +487,50 @@ export async function fetchViagens(): Promise<ViagemListItem[]> {
     listItemFromBookingJoin(b, profileMap, driverNameMap, driverPartnerMap),
   );
 
+  // Nº de encomendas por viagem (a partir dos vínculos já buscados; até 500 shipments recentes).
+  const shipmentCountByTrip = new Map<string, number>();
+  for (const row of shipLinkRows || []) {
+    const tid = String((row as any).scheduled_trip_id ?? '').trim();
+    if (tid) shipmentCountByTrip.set(tid, (shipmentCountByTrip.get(tid) ?? 0) + 1);
+  }
+
+  // Agrupa por VIAGEM (`scheduled_trip`): uma viagem pode ter várias reservas (vários passageiros
+  // compraram assento na mesma rota). Mostra 1 linha por viagem, com o total de passageiros.
+  // Representante = 1ª reserva não-cancelada (ordem = mais recente primeiro); só fica «cancelado»
+  // se todas as reservas da viagem estiverem canceladas.
+  const tripGroups = new Map<string, { rep: ViagemListItem; paxSum: number; repCancelled: boolean }>();
+  for (const item of bookingItems) {
+    const tid = String(item.tripId || item.bookingId);
+    const isCancelled = item.bookingDbStatus === 'cancelled';
+    const g = tripGroups.get(tid);
+    if (!g) {
+      tripGroups.set(tid, { rep: item, paxSum: isCancelled ? 0 : item.passengerCount, repCancelled: isCancelled });
+    } else {
+      if (!isCancelled) g.paxSum += item.passengerCount;
+      if (g.repCancelled && !isCancelled) { g.rep = item; g.repCancelled = false; }
+    }
+  }
+  const groupedItems: ViagemListItem[] = [...tripGroups.values()].map(({ rep, paxSum }) => ({
+    ...rep,
+    tripPassengerCount: paxSum,
+    tripShipmentCount: shipmentCountByTrip.get(String(rep.tripId)) ?? 0,
+  }));
+
   const orphanItems: ViagemListItem[] = [];
   for (const tid of orphanTripIds) {
     const trip = tripByOrphanId.get(tid);
     if (!trip) continue;
     const ship = firstShipByTrip.get(tid) ?? null;
     const row = syntheticJoinRowFromTripShipment(trip, ship);
-    orphanItems.push(listItemFromBookingJoin(row, profileMap, driverNameMap, driverPartnerMap));
+    const item = listItemFromBookingJoin(row, profileMap, driverNameMap, driverPartnerMap);
+    orphanItems.push({
+      ...item,
+      tripPassengerCount: 0,
+      tripShipmentCount: shipmentCountByTrip.get(tid) ?? 0,
+    });
   }
 
-  const merged = [...bookingItems, ...orphanItems];
+  const merged = [...groupedItems, ...orphanItems];
   merged.sort((a, b) => {
     const ta = new Date(a.departureAtIso).getTime();
     const tb = new Date(b.departureAtIso).getTime();
@@ -1146,7 +1181,127 @@ export async function createBookingForTripAsAdmin(input: {
     }
     return { error: msg || 'Não foi possível criar a reserva.' };
   }
+
+  // Notifica o passageiro adicionado (push via trigger notifications_push → dispatch-notification-fcm).
+  // Não bloqueia a criação da reserva caso a notificação falhe.
+  try {
+    await createNotificationForUser(
+      input.userId,
+      'Você foi adicionado a uma viagem',
+      'A TakeMe criou uma reserva para você. Confira os detalhes no app.',
+      'travel_updates',
+      'cliente',
+    );
+  } catch {
+    /* silencioso: a reserva já foi criada */
+  }
+
   return { error: null, bookingId: (data as any)?.id, amountCents };
+}
+
+/**
+ * Agrega os passageiros de TODAS as reservas ativas de uma viagem (`scheduled_trip_id`).
+ * Uma viagem pode ter várias reservas (várias pessoas compraram assento na mesma rota).
+ * Cada passageiro carrega a `bookingId` de origem para ações por-reserva.
+ * Espelha a lógica de dedup do detalhe: titular (1º) + acompanhantes de `passenger_data`
+ * sem repetir nome, limitado a (`passenger_count` − 1) por reserva.
+ */
+export async function fetchTripPassengers(scheduledTripId: string): Promise<TripPassengerRow[]> {
+  if (!isSupabaseConfigured || !scheduledTripId) return [];
+  const { data: rows } = await supabase
+    .from('bookings')
+    .select('id, user_id, passenger_count, bags_count, passenger_data, amount_cents, status, pickup_code, payment_method, created_at')
+    .eq('scheduled_trip_id', scheduledTripId)
+    .in('status', ['pending', 'paid', 'confirmed'])
+    .order('created_at', { ascending: true });
+  const bookings = (rows || []) as any[];
+  if (!bookings.length) return [];
+
+  // Nome + avatar do titular de cada reserva (profiles por id).
+  const userIds = [...new Set(bookings.map((b) => b.user_id).filter(Boolean))] as string[];
+  const nameById: Record<string, string> = {};
+  const avatarById: Record<string, string | null> = {};
+  if (userIds.length) {
+    const { data: profs } = await supabase.from('profiles').select('id, full_name, avatar_url').in('id', userIds);
+    (profs || []).forEach((p: any) => {
+      nameById[p.id] = p.full_name || 'Sem nome';
+      avatarById[p.id] = p.avatar_url ?? null;
+    });
+  }
+
+  // Avatar dos acompanhantes por CPF (só dígitos) cadastrado em profiles.
+  const cpfDigits = (c: unknown) => String(c ?? '').replace(/\D/g, '');
+  const allCpfDigits = [...new Set(
+    bookings.flatMap((b) => (Array.isArray(b.passenger_data) ? b.passenger_data.map((p: any) => cpfDigits(p?.cpf)) : []))
+      .filter((d: string) => d.length >= 11),
+  )] as string[];
+  const cpfVariants = [...new Set(
+    allCpfDigits.flatMap((d) => [d, `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`]),
+  )];
+  const avatarByCpf: Record<string, string | null> = {};
+  if (cpfVariants.length) {
+    const { data: cpfProfs } = await supabase.from('profiles').select('cpf, avatar_url').in('cpf', cpfVariants);
+    (cpfProfs || []).forEach((p: any) => {
+      const k = cpfDigits(p.cpf);
+      if (k) avatarByCpf[k] = p.avatar_url ?? null;
+    });
+  }
+
+  const out: TripPassengerRow[] = [];
+  for (const b of bookings) {
+    const count = Math.max(1, Number(b.passenger_count ?? 1));
+    const totalCents = Number(b.amount_cents ?? 0);
+    const unitCents = count > 0 ? Math.round(totalCents / count) : totalCents;
+    const titularName = nameById[b.user_id] || 'Sem nome';
+    const pin = b.pickup_code != null && String(b.pickup_code).trim() ? String(b.pickup_code).trim() : null;
+    const status = String(b.status || '');
+    const payment = b.payment_method ?? null;
+
+    out.push({
+      bookingId: b.id,
+      name: titularName,
+      cpf: null,
+      bagsRaw: b.bags_count != null ? Number(b.bags_count) : null,
+      unitCents,
+      avatarUrl: avatarById[b.user_id] ?? null,
+      isPrimary: true,
+      historicoUserId: b.user_id || null,
+      passengerDataIndex: null,
+      pickupCode: pin,
+      status,
+      paymentMethod: payment,
+    });
+
+    const pd = Array.isArray(b.passenger_data) ? b.passenger_data : [];
+    const seen = new Set<string>([titularName.trim().toLowerCase()]);
+    const maxExtras = Math.max(0, count - 1);
+    let added = 0;
+    pd.forEach((p: any, i: number) => {
+      if (added >= maxExtras) return;
+      const n = String(p?.name || '').trim();
+      if (!n) return;
+      const k = n.toLowerCase();
+      if (seen.has(k)) return;
+      seen.add(k);
+      added += 1;
+      const bagsVal = p?.bags != null && p.bags !== '' ? Number(p.bags) : null;
+      out.push({
+        bookingId: b.id,
+        name: n,
+        cpf: p?.cpf ? String(p.cpf) : null,
+        bagsRaw: Number.isFinite(bagsVal as number) ? (bagsVal as number) : null,
+        unitCents,
+        avatarUrl: avatarByCpf[cpfDigits(p?.cpf)] ?? null,
+        isPrimary: false,
+        historicoUserId: null,
+        passengerDataIndex: i,
+        pickupCode: pin,
+        status,
+        paymentMethod: payment,
+      });
+    });
+  }
+  return out;
 }
 
 export async function updateScheduledTripFields(

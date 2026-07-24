@@ -114,6 +114,13 @@ export interface ViagemListItem {
   platformFeeExtraDebitCents: number;
   /** Preenchido em algumas listagens quando o perfil do cliente expõe foto. */
   passageiroAvatarUrl?: string | null;
+  /**
+   * Lista agrupada por viagem: nº total de passageiros (soma das reservas ativas do `scheduled_trip`).
+   * Ausente em contextos não-agrupados.
+   */
+  tripPassengerCount?: number;
+  /** Lista agrupada por viagem: nº de encomendas ligadas ao `scheduled_trip`. */
+  tripShipmentCount?: number;
 }
 
 /** Item retornado pela Edge `lookup-spedy-invoice` (NF-e ou NFS-e na Spedy). */
@@ -166,6 +173,35 @@ export interface BookingDetailForAdmin {
   platformFeeExtraDebitCents: number;
   /** Taxa admin da viagem (snapshot em `bookings.admin_earning_cents`). */
   adminEarningCents: number;
+}
+
+/**
+ * Passageiro agregado de TODAS as reservas de uma viagem (`scheduled_trip_id`).
+ * Uma viagem pode ter várias reservas (várias pessoas compraram assento na mesma rota);
+ * cada linha aponta para a `bookingId` de origem para ações por-reserva (histórico, PIN).
+ */
+export interface TripPassengerRow {
+  /** Reserva (`bookings.id`) a que este passageiro pertence. */
+  bookingId: string;
+  name: string;
+  cpf: string | null;
+  /** `bags` do passageiro (titular usa `bookings.bags_count`, extra usa `passenger_data[].bags`). */
+  bagsRaw: number | null;
+  /** Valor por pessoa da reserva (`amount_cents` / `passenger_count`). */
+  unitCents: number;
+  avatarUrl: string | null;
+  /** Titular da reserva (1º passageiro, `bookings.user_id`). */
+  isPrimary: boolean;
+  /** `user_id` do titular (para "Ver histórico"); null para acompanhantes. */
+  historicoUserId: string | null;
+  /** Índice em `passenger_data` da reserva (para remoção); null = titular. */
+  passengerDataIndex: number | null;
+  /** PIN de embarque da reserva (`bookings.pickup_code`). */
+  pickupCode: string | null;
+  /** Status da reserva (`bookings.status`). */
+  status: string;
+  /** Forma de pagamento da reserva (`bookings.payment_method`). */
+  paymentMethod: string | null;
 }
 
 /** Linha de `driver_platform_fee_ledger` (taxa plataforma em dinheiro / abates). */

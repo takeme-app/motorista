@@ -255,9 +255,11 @@ export default function ViagensScreen() {
 
   // Table columns — use flex proportions to fit container width
   const tableCols = [
-    { label: 'Passageiros', flex: '1 1 15%', minWidth: 140 },
-    { label: 'Origem', flex: '1 1 13%', minWidth: 100 },
-    { label: 'Destino', flex: '1 1 13%', minWidth: 100 },
+    { label: 'Motorista', flex: '1 1 15%', minWidth: 150 },
+    { label: 'Origem', flex: '1 1 12%', minWidth: 100 },
+    { label: 'Destino', flex: '1 1 12%', minWidth: 100 },
+    { label: 'Passag.', flex: '0 0 68px', minWidth: 68 },
+    { label: 'Encom.', flex: '0 0 68px', minWidth: 68 },
     { label: 'Data', flex: '0 0 96px', minWidth: 96 },
     { label: 'Embarque', flex: '0 0 72px', minWidth: 72 },
     { label: 'Chegada', flex: '0 0 68px', minWidth: 68 },
@@ -350,41 +352,37 @@ export default function ViagensScreen() {
       tabIndex: 0,
       onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTripDetail(row, item); } },
     },
-      // Passageiros
+      // Motorista (uma viagem pode ter vários passageiros; a lista é por viagem)
       React.createElement('div', { style: { ...webStyles.viagensPassengerCell, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth } },
-        React.createElement('div', {
-          style: { cursor: hasBooking ? 'pointer' : 'default', opacity: hasBooking ? 1 : 0.85 },
-          onClick: (e: React.MouseEvent) => {
-            e.stopPropagation();
-            if (!hasBooking) return;
-            setAlterarPassageiroData({ id: item.bookingId, nome: row.passageiro, contato: '(21) 98888-7777', mala: 'Pequena', valor: 'R$ 25,00' });
-            setAlterarPassageiroOpen(true);
-          },
-        }, renderAvatar(row.passageiro, item.passageiroAvatarUrl)),
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', lineHeight: '1.5' } }, row.passageiro)),
+        renderAvatar(item.motoristaNome || '—'),
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', lineHeight: '1.5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, item.motoristaNome || '—')),
       // Origem
       React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, row.origem),
       // Destino
       React.createElement('div', { style: { ...cellBase, flex: tableCols[2].flex, minWidth: tableCols[2].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, row.destino),
+      // Passageiros (nº)
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[3].flex, minWidth: tableCols[3].minWidth, fontWeight: 600, justifyContent: 'center' } }, String(item.tripPassengerCount ?? item.passengerCount ?? 0)),
+      // Encomendas (nº)
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[4].flex, minWidth: tableCols[4].minWidth, fontWeight: 600, justifyContent: 'center' } }, String(item.tripShipmentCount ?? 0)),
       // Data
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[3].flex, minWidth: tableCols[3].minWidth, fontWeight: 400 } }, row.data),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth, fontWeight: 400 } }, row.data),
       // Embarque
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[4].flex, minWidth: tableCols[4].minWidth, fontWeight: 400 } }, row.embarque),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[6].flex, minWidth: tableCols[6].minWidth, fontWeight: 400 } }, row.embarque),
       // Chegada
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[5].flex, minWidth: tableCols[5].minWidth, fontWeight: 400 } }, row.chegada),
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[7].flex, minWidth: tableCols[7].minWidth, fontWeight: 400 } }, row.chegada),
       // Pagamento
       React.createElement('div', {
         style: {
-          ...cellBase, flex: tableCols[6].flex, minWidth: tableCols[6].minWidth, fontWeight: 500, fontSize: 12,
+          ...cellBase, flex: tableCols[8].flex, minWidth: tableCols[8].minWidth, fontWeight: 500, fontSize: 12,
           color: item.paymentMethod === 'cash' ? '#b45309' : '#3a3a3a',
         },
       }, viagemPagamentoShort(item.paymentMethod)),
       // Status
-      React.createElement('div', { style: { ...cellBase, flex: tableCols[7].flex, minWidth: tableCols[7].minWidth } },
+      React.createElement('div', { style: { ...cellBase, flex: tableCols[9].flex, minWidth: tableCols[9].minWidth } },
         statusPill(statusLabels[row.status], st.bg, st.color)),
       // Visualizar/Editar
       React.createElement('div', {
-        style: { flex: tableCols[8].flex, minWidth: tableCols[8].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' },
+        style: { flex: tableCols[10].flex, minWidth: tableCols[10].minWidth, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' },
         onClick: (e: React.MouseEvent) => e.stopPropagation(),
       },
         React.createElement('div', { style: webStyles.viagensActionIcons },
