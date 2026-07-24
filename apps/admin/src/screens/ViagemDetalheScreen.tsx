@@ -446,6 +446,34 @@ export default function ViagemDetalheScreen() {
     return () => { cancel = true; };
   }, [id, preferShipmentIdForTripDetail]);
 
+  // Realtime: reflete mudanças de reservas/encomendas da viagem sem precisar recarregar
+  // o navegador (ex.: cliente cancela pelo app → passageiro some da lista). Tela é read-only.
+  useEffect(() => {
+    if (!id || id.startsWith('act-')) return;
+    const tripId = resolvedScheduledTripId;
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const refetch = () => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        debounce = null;
+        void fetchBookingDetailForAdmin(id, { preferShipmentId: preferShipmentIdForTripDetail }).then((d) => { if (d) setDetail(d); });
+        if (tripId) {
+          void fetchTripPassengers(tripId).then(setTripPassengers);
+          void fetchShipmentsForScheduledTrip(tripId).then(setLinkedShipments);
+        }
+      }, 450);
+    };
+    const channel = supabase
+      .channel(`admin-viagem-detalhe-${id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, refetch)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'shipments' }, refetch)
+      .subscribe();
+    return () => {
+      if (debounce) clearTimeout(debounce);
+      void supabase.removeChannel(channel);
+    };
+  }, [id, resolvedScheduledTripId, preferShipmentIdForTripDetail]);
+
   useEffect(() => {
     if (!isMotoristas) return;
     fetchMotoristas().then((m) => setAvailDrivers(m.slice(0, 12)));

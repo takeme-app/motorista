@@ -340,6 +340,32 @@ export default function ViagemEditScreen() {
     return () => { cancel = true; };
   }, [detail?.listItem?.tripId, detail?.listItem?.bookingId]);
 
+  // Realtime: mantém a lista de passageiros/encomendas em dia quando reservas mudam
+  // noutro lugar (ex.: cliente cancela pelo app). Não recarrega o formulário para não
+  // sobrescrever edições em andamento no topo da tela.
+  useEffect(() => {
+    const tripId = detail?.listItem?.tripId;
+    if (!tripId) return;
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const refetch = () => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        debounce = null;
+        void fetchTripPassengers(tripId).then(setTripPassengers);
+        void fetchShipmentsForScheduledTrip(tripId).then(setTripShipments);
+      }, 450);
+    };
+    const channel = supabase
+      .channel(`admin-viagem-edit-${tripId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, refetch)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'shipments' }, refetch)
+      .subscribe();
+    return () => {
+      if (debounce) clearTimeout(debounce);
+      void supabase.removeChannel(channel);
+    };
+  }, [detail?.listItem?.tripId]);
+
   // Veículo do motorista (coordenadas do mapa vêm de useTripMapCoords)
   useEffect(() => {
     if (!detail?.listItem?.tripId) return;
