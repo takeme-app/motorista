@@ -100,6 +100,8 @@ export interface ViagemListItem {
   departureAtIso: string;
   /** Nome do motorista (profiles) */
   motoristaNome: string;
+  /** `profiles.avatar_url` do motorista (path de storage; resolver p/ exibir). */
+  motoristaAvatarUrl?: string | null;
   /** take_me = frota; motorista = parceiro (worker_profiles.subtype === partner) */
   motoristaCategoria: 'take_me' | 'motorista';
   /** Status bruto em `bookings.status` (ações admin) */

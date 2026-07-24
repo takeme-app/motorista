@@ -316,7 +316,9 @@ export default function ViagensScreen() {
   const [resolvedAvatars, setResolvedAvatars] = useState<Record<string, string>>({});
   useEffect(() => {
     let cancelled = false;
-    const paths = [...new Set(viagens.map((v) => v.passageiroAvatarUrl).filter(Boolean))] as string[];
+    const paths = [...new Set(
+      viagens.flatMap((v) => [v.passageiroAvatarUrl, v.motoristaAvatarUrl]).filter(Boolean),
+    )] as string[];
     if (paths.length === 0) return;
     void (async () => {
       const map: Record<string, string> = {};
@@ -365,7 +367,7 @@ export default function ViagensScreen() {
     },
       // Motorista (uma viagem pode ter vários passageiros; a lista é por viagem)
       React.createElement('div', { style: { ...webStyles.viagensPassengerCell, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth } },
-        renderAvatar(item.motoristaNome || '—'),
+        renderAvatar(item.motoristaNome || '—', item.motoristaAvatarUrl),
         React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', lineHeight: '1.5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, item.motoristaNome || '—')),
       // Origem
       React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, row.origem),

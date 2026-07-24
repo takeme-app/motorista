@@ -251,6 +251,25 @@ export function shortAddr(addr: string): string {
   return addr;
 }
 
+/**
+ * Extrai só a CIDADE de um endereço livre (para as colunas Origem/Destino da lista).
+ * Heurística tolerante aos formatos usados: "Cidade, Estado", "Cidade - Estado, CEP",
+ * "Rua X, Cidade, UF, CEP". Descarta logradouro e CEP; remove o «- Estado» ao final.
+ */
+export function cityFromAddr(addr: string): string {
+  const raw = String(addr ?? '').trim();
+  if (!raw) return '—';
+  const parts = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  const streetRe = /^(rua|r\.|av\.?|avenida|travessa|tv\.|estrada|rod\.?|rodovia|alameda|al\.|pra[çc]a|p[çc]a|beco|viela|quadra|qd|lote|passagem|a partir)/i;
+  const isCep = (s: string) => /\d{5}-?\d{3}/.test(s) || /^\d[\d\s-]*$/.test(s);
+  const stripState = (s: string) => (s.split(' - ')[0].trim() || s);
+  let cityPart = parts[0] ?? raw;
+  if (parts.length > 1 && streetRe.test(parts[0])) {
+    cityPart = parts.slice(1).find((p) => !isCep(p)) ?? parts[1];
+  }
+  return stripState(cityPart) || raw;
+}
+
 /** Comparação tolerante a PT/EN, maiúsculas e acentos (dados legados ou edição manual no SQL). */
 function normViagemStatusKey(raw: unknown): string {
   return String(raw ?? '')
@@ -469,13 +488,17 @@ export async function fetchViagens(): Promise<ViagemListItem[]> {
   const uniqueDriverIds = [...new Set(driverIds)];
 
   const driverNameMap: Record<string, string> = {};
+  const driverAvatarMap: Record<string, string | null> = {};
   const driverPartnerMap: Record<string, boolean> = {};
   if (uniqueDriverIds.length > 0) {
     const { data: driverProfiles } = await supabase
       .from('profiles')
-      .select('id, full_name')
+      .select('id, full_name, avatar_url')
       .in('id', uniqueDriverIds);
-    (driverProfiles || []).forEach((p: any) => { driverNameMap[p.id] = p.full_name || 'Sem nome'; });
+    (driverProfiles || []).forEach((p: any) => {
+      driverNameMap[p.id] = p.full_name || 'Sem nome';
+      driverAvatarMap[p.id] = p.avatar_url ?? null;
+    });
     const { data: workers } = await (supabase as any)
       .from('worker_profiles')
       .select('id, subtype')
@@ -484,7 +507,7 @@ export async function fetchViagens(): Promise<ViagemListItem[]> {
   }
 
   const bookingItems: ViagemListItem[] = (data as any[]).map((b: any) =>
-    listItemFromBookingJoin(b, profileMap, driverNameMap, driverPartnerMap),
+    listItemFromBookingJoin(b, profileMap, driverNameMap, driverPartnerMap, driverAvatarMap),
   );
 
   // Nº de encomendas por viagem (a partir dos vínculos já buscados; até 500 shipments recentes).
@@ -522,7 +545,7 @@ export async function fetchViagens(): Promise<ViagemListItem[]> {
     if (!trip) continue;
     const ship = firstShipByTrip.get(tid) ?? null;
     const row = syntheticJoinRowFromTripShipment(trip, ship);
-    const item = listItemFromBookingJoin(row, profileMap, driverNameMap, driverPartnerMap);
+    const item = listItemFromBookingJoin(row, profileMap, driverNameMap, driverPartnerMap, driverAvatarMap);
     orphanItems.push({
       ...item,
       tripPassengerCount: 0,
@@ -588,6 +611,7 @@ function listItemFromBookingJoin(
   profileMap: Record<string, string>,
   driverNameMap: Record<string, string>,
   driverPartnerMap: Record<string, boolean>,
+  driverAvatarMap: Record<string, string | null> = {},
 ): ViagemListItem {
   const trip = b.scheduled_trips;
   const dep = trip?.departure_at ?? b.created_at;
@@ -597,8 +621,8 @@ function listItemFromBookingJoin(
   return {
     bookingId: String(b.id ?? ''),
     passageiro: profileMap[b.user_id] ?? 'Sem nome',
-    origem: shortAddr(b.origin_address),
-    destino: shortAddr(b.destination_address),
+    origem: cityFromAddr(b.origin_address),
+    destino: cityFromAddr(b.destination_address),
     data: fmtDate(dep),
     embarque: fmtTime(dep),
     chegada: fmtTime(trip?.arrival_at ?? b.created_at),
@@ -607,6 +631,7 @@ function listItemFromBookingJoin(
     driverId,
     departureAtIso: dep ? new Date(dep).toISOString() : new Date(b.created_at).toISOString(),
     motoristaNome: driverId ? (driverNameMap[driverId] ?? '—') : '—',
+    motoristaAvatarUrl: driverId ? (driverAvatarMap[driverId] ?? null) : null,
     motoristaCategoria: (isPartner ? 'motorista' : 'take_me') as 'take_me' | 'motorista',
     bookingDbStatus: String(b.status ?? ''),
     passengerCount: Number(b.passenger_count ?? 1),
