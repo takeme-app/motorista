@@ -823,23 +823,12 @@ export default function ViagemDetalheScreen() {
           React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' } }, unitPrice))));
   };
 
-  const passageirosChevronBtn = React.createElement('button', {
-    type: 'button',
-    style: {
-      width: 29, height: 29, padding: 0, border: 'none', background: 'transparent', cursor: 'pointer',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, flexShrink: 0,
-    },
-    'aria-label': 'Ver mais passageiros',
-  },
-    React.createElement('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', style: { display: 'block' } },
-      React.createElement('path', { d: 'M9 18l6-6-6-6', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' })));
   // O PIN de embarque é por RESERVA e é mostrado dentro do card do titular de cada reserva
   // (uma viagem pode ter várias reservas, cada uma com o seu PIN).
   const passageirosSection = !isShipmentOnlyTrip
     ? React.createElement('div', { style: webStyles.detailPassageirosSection },
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: 16 } },
-        React.createElement('h2', { style: { ...webStyles.detailSectionTitle, margin: 0 } }, 'Passageiros'),
-        passageirosChevronBtn),
+        React.createElement('h2', { style: { ...webStyles.detailSectionTitle, margin: 0 } }, 'Passageiros')),
       React.createElement('div', { style: { display: 'flex', gap: 24, overflowX: 'auto' as const, flexWrap: 'wrap' as const } },
         ...passengerDisplayRows.map((row, i) => passageiroCard(row, i))))
     : null;
