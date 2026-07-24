@@ -1225,6 +1225,41 @@ export async function createBookingForTripAsAdmin(input: {
 }
 
 /**
+ * Cancela uma reserva pelo admin via edge `admin-cancel-booking`.
+ * Cartão: aplica a política de janela e estorna via Stripe quando cabível.
+ * Pix/Dinheiro: apenas cancela (estorno é manual/presencial). A notificação ao
+ * cliente é disparada pelo trigger do banco ao status virar 'cancelled'.
+ */
+export async function cancelBookingAsAdmin(bookingId: string): Promise<{
+  error: string | null;
+  refunded?: boolean;
+  refundAmountCents?: number;
+  paymentMethod?: string;
+  insideWindow?: boolean;
+  manualRefundPending?: boolean;
+}> {
+  const { data, error } = await invokeEdgeFunction<{
+    cancelled: boolean;
+    refunded: boolean;
+    refund_amount_cents: number;
+    payment_method: string;
+    inside_window: boolean;
+    manual_refund_pending: boolean;
+  }>('admin-cancel-booking', 'POST', undefined, { booking_id: bookingId });
+  if (error || !data?.cancelled) {
+    return { error: error || 'Não foi possível cancelar a reserva.' };
+  }
+  return {
+    error: null,
+    refunded: data.refunded,
+    refundAmountCents: data.refund_amount_cents,
+    paymentMethod: data.payment_method,
+    insideWindow: data.inside_window,
+    manualRefundPending: data.manual_refund_pending,
+  };
+}
+
+/**
  * Agrega os passageiros de TODAS as reservas ativas de uma viagem (`scheduled_trip_id`).
  * Uma viagem pode ter várias reservas (várias pessoas compraram assento na mesma rota).
  * Cada passageiro carrega a `bookingId` de origem para ações por-reserva.

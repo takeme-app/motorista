@@ -25,6 +25,7 @@ import {
   updateScheduledTripFields,
   updateShipmentFields,
   createBookingForTripAsAdmin,
+  cancelBookingAsAdmin,
 } from '../data/queries';
 import type { BookingDetailForAdmin, MotoristaListItem, TripShipmentListItem, TripPassengerRow } from '../data/types';
 import MapView from '../components/MapView';
@@ -187,6 +188,8 @@ export default function ViagemEditScreen() {
   const [selectedMotorista, setSelectedMotorista] = useState(0);
   const [tripShipments, setTripShipments] = useState<TripShipmentListItem[]>([]);
   const [tripPassengers, setTripPassengers] = useState<TripPassengerRow[]>([]);
+  const [cancelBookingTarget, setCancelBookingTarget] = useState<{ bookingId: string; name: string; valor: string; paymentMethod: string | null } | null>(null);
+  const [cancelBookingSaving, setCancelBookingSaving] = useState(false);
   const [removePassageiroIdx, setRemovePassageiroIdx] = useState<number | null>(null);
   const [editEncomendaIdx, setEditEncomendaIdx] = useState<number | null>(null);
   const [editEncomendaData, setEditEncomendaData] = useState({ nome: '', recolha: '', entrega: '', destinatario: '', telefone: '', observacoes: '' });
@@ -851,6 +854,8 @@ export default function ViagemEditScreen() {
     passengerDataIndex: number | null;
     /** Titular da reserva (1º passageiro). */
     isPrimary: boolean;
+    /** Forma de pagamento da reserva (para o aviso de reembolso ao cancelar). */
+    paymentMethod: string | null;
   };
   /**
    * A viagem pode ter VÁRIAS reservas (várias pessoas compraram assento na mesma rota).
@@ -869,6 +874,7 @@ export default function ViagemEditScreen() {
       historicoUserId: tp.historicoUserId,
       passengerDataIndex: tp.passengerDataIndex,
       isPrimary: tp.isPrimary,
+      paymentMethod: tp.paymentMethod,
     }));
   } else {
     const totalPassengers = Math.max(1, detail.passengerCount || 1);
@@ -883,6 +889,7 @@ export default function ViagemEditScreen() {
       historicoUserId: detail.userId || null,
       passengerDataIndex: null,
       isPrimary: true,
+      paymentMethod: detail.paymentMethod ?? null,
     }];
     const seen = new Set<string>([detail.listItem.passageiro.trim().toLowerCase()]);
     let extrasAdded = 0;
@@ -904,6 +911,7 @@ export default function ViagemEditScreen() {
         historicoUserId: null,
         passengerDataIndex: i,
         isPrimary: false,
+        paymentMethod: detail.paymentMethod ?? null,
       });
     });
   }
@@ -946,7 +954,8 @@ export default function ViagemEditScreen() {
                 onClick: async () => {
                   if (!canEditPassengers) return;
                   if (p.passengerDataIndex === null) {
-                    showToast('Este é o titular da reserva. Para removê-lo, cancele a reserva dele.');
+                    // Titular = cancelar a reserva inteira (com política de reembolso).
+                    setCancelBookingTarget({ bookingId: p.bookingId, name: p.name, valor: p.valor, paymentMethod: p.paymentMethod });
                     return;
                   }
                   // Acompanhantes só podem ser removidos a partir da reserva aberta (temos o passenger_data dela).
@@ -1364,6 +1373,70 @@ export default function ViagemEditScreen() {
                 cursor: 'pointer', fontSize: 16, fontWeight: 500, color: '#0d0d0d', ...font,
               },
             }, 'Voltar'))))
+    : null;
+
+  // ── Cancelar reserva (com política de reembolso por forma de pagamento) ──
+  const cancelBookingModal = cancelBookingTarget
+    ? (() => {
+        const pm = (cancelBookingTarget.paymentMethod ?? 'card').toLowerCase();
+        const aviso =
+          pm === 'card'
+            ? 'Pagamento no cartão. Se estiver dentro da janela de reembolso, o estorno será feito automaticamente no cartão (pode levar alguns dias). Fora da janela, não há estorno.'
+            : pm === 'pix'
+              ? `Pagamento via Pix. A devolução de ${cancelBookingTarget.valor} precisa ser feita manualmente (o Pix não é integrado).`
+              : `Pagamento em dinheiro com o motorista. Combine a devolução de ${cancelBookingTarget.valor} diretamente com o motorista ou pelo suporte.`;
+        return React.createElement('div', {
+          style: {
+            position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0,
+            background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+          },
+          onClick: () => { if (!cancelBookingSaving) setCancelBookingTarget(null); },
+        },
+          React.createElement('div', {
+            style: {
+              background: '#fff', borderRadius: 16, padding: 24, width: '100%', maxWidth: 420,
+              boxShadow: '6px 6px 12px rgba(0,0,0,0.15)', display: 'flex', flexDirection: 'column' as const, gap: 16,
+              boxSizing: 'border-box' as const,
+            },
+            onClick: (e: React.MouseEvent) => e.stopPropagation(),
+          },
+            React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } },
+              'Cancelar reserva?'),
+            React.createElement('p', { style: { fontSize: 14, color: '#545454', margin: 0, lineHeight: 1.5, ...font } },
+              `Reserva de ${cancelBookingTarget.name} (${cancelBookingTarget.valor}). ${aviso}`),
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%', marginTop: 8 } },
+              React.createElement('button', {
+                type: 'button', disabled: cancelBookingSaving,
+                onClick: async () => {
+                  const target = cancelBookingTarget;
+                  if (!target) return;
+                  setCancelBookingSaving(true);
+                  const res = await cancelBookingAsAdmin(target.bookingId);
+                  setCancelBookingSaving(false);
+                  if (res.error) { showToast(res.error); return; }
+                  setCancelBookingTarget(null);
+                  const parts = ['Reserva cancelada'];
+                  if (res.refunded) parts.push(`estorno de R$ ${((res.refundAmountCents ?? 0) / 100).toFixed(2).replace('.', ',')} iniciado no cartão`);
+                  else if (res.manualRefundPending) parts.push('devolução via Pix é manual');
+                  showToast(parts.join(' — '));
+                  const tid = detail?.listItem?.tripId;
+                  if (tid) setTripPassengers(await fetchTripPassengers(tid));
+                },
+                style: {
+                  width: '100%', height: 48, background: '#b53838', border: 'none', borderRadius: 8,
+                  cursor: cancelBookingSaving ? 'wait' : 'pointer', opacity: cancelBookingSaving ? 0.6 : 1,
+                  fontSize: 16, fontWeight: 600, color: '#fff', ...font,
+                },
+              }, cancelBookingSaving ? 'Cancelando...' : 'Sim, cancelar reserva'),
+              React.createElement('button', {
+                type: 'button', disabled: cancelBookingSaving,
+                onClick: () => setCancelBookingTarget(null),
+                style: {
+                  width: '100%', height: 48, background: '#f1f1f1', border: 'none', borderRadius: 8,
+                  cursor: 'pointer', fontSize: 16, fontWeight: 500, color: '#0d0d0d', ...font,
+                },
+              }, 'Manter reserva'))));
+      })()
     : null;
 
   // ── Edit encomenda slide panel (Figma 814-26519) ────────────────────
@@ -1992,6 +2065,7 @@ export default function ViagemEditScreen() {
       metricasSection,
       historicoSection,
       removeModal,
+      cancelBookingModal,
       editEncomendaPanel,
       addEncomendaPanel,
       addPassageiroPanel,
