@@ -137,6 +137,17 @@ export default function ViagensScreen() {
 
   const counts = useMemo(() => viagemCountsFromItems(viagensFiltradas), [viagensFiltradas]);
 
+  // ── Paginação da lista (viagens já vêm ordenadas por data, mais recentes primeiro) ──
+  const PAGE_SIZE = 15;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(viagensFiltradas.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  useEffect(() => { setPage(1); }, [listFilter]);
+  const viagensPaginadas = useMemo(
+    () => viagensFiltradas.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [viagensFiltradas, currentPage],
+  );
+
   // ── Alterar passageiro panel (Figma 1271-32750) ────────────────────
   const [alterarPassageiroOpen, setAlterarPassageiroOpen] = useState(false);
   const [alterarPassageiroData, setAlterarPassageiroData] = useState({ id: '', nome: '', contato: '', mala: 'Pequena', valor: 'R$ 25,00' });
@@ -271,7 +282,7 @@ export default function ViagensScreen() {
     (m === 'cash' ? 'Din.' : m === 'pix' ? 'Pix' : 'Cart.');
 
   type RowWithItem = { row: ViagemRow; item: ViagemListItem };
-  const viagensTableRows: RowWithItem[] = viagensFiltradas.map((v) => ({
+  const viagensTableRows: RowWithItem[] = viagensPaginadas.map((v) => ({
     item: v,
     row: {
       passageiro: v.passageiro,
@@ -421,12 +432,40 @@ export default function ViagensScreen() {
     onClick: () => setTableFilterOpen(true),
   }, React.createElement('span', { style: { display: 'flex', alignItems: 'center' } }, filterIconSvg), 'Filtro');
 
+  const pageNavBtn = (label: string, disabled: boolean, onClick: () => void) =>
+    React.createElement('button', {
+      type: 'button',
+      disabled,
+      onClick,
+      style: {
+        height: 36, padding: '0 16px', borderRadius: 8, border: '1px solid #e2e2e2',
+        background: '#fff', cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.45 : 1, fontSize: 14, fontWeight: 500, color: '#0d0d0d',
+        fontFamily: 'Inter, sans-serif',
+      } as React.CSSProperties,
+    }, label);
+
+  const paginacaoControls = viagensFiltradas.length > 0
+    ? React.createElement('div', {
+        style: {
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 12, padding: '16px 8px 4px', flexWrap: 'wrap' as const,
+        },
+      },
+        React.createElement('span', { style: { fontSize: 13, color: '#767676', fontFamily: 'Inter, sans-serif' } },
+          `Página ${currentPage} de ${totalPages} · ${viagensFiltradas.length} ${viagensFiltradas.length === 1 ? 'viagem' : 'viagens'}`),
+        React.createElement('div', { style: { display: 'flex', gap: 8 } },
+          pageNavBtn('Anterior', currentPage <= 1, () => setPage(currentPage - 1)),
+          pageNavBtn('Próxima', currentPage >= totalPages, () => setPage(currentPage + 1))))
+    : null;
+
   const viagensTableSection = React.createElement('div', { style: webStyles.viagensTableSection },
     React.createElement('div', { style: webStyles.viagensTableSectionHeader },
       React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', lineHeight: '1.5' } }, 'Lista de viagens'),
       filtroBtn),
     viagensTableHeader,
-    ...viagensTableBody);
+    ...viagensTableBody,
+    paginacaoControls);
 
   // Modal Filtro da tabela (Figma 1132-26548)
   const statusOptions: { id: 'todos' | 'pendentes' | 'em_andamento' | 'agendadas' | 'concluidas' | 'canceladas'; label: string }[] = [
