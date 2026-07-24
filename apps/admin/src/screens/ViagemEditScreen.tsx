@@ -20,11 +20,14 @@ import {
   fetchBookingDetailForAdmin,
   fetchMotoristas,
   fetchShipmentsForScheduledTrip,
+  fetchTripPassengers,
   updateBookingFields,
   updateScheduledTripFields,
   updateShipmentFields,
+  createBookingForTripAsAdmin,
+  cancelBookingAsAdmin,
 } from '../data/queries';
-import type { BookingDetailForAdmin, MotoristaListItem, TripShipmentListItem } from '../data/types';
+import type { BookingDetailForAdmin, MotoristaListItem, TripShipmentListItem, TripPassengerRow } from '../data/types';
 import MapView from '../components/MapView';
 import { useTripStops } from '../hooks/useTripStops';
 import PlacesAddressInput, { type PlaceResolved } from '../components/PlacesAddressInput';
@@ -184,6 +187,9 @@ export default function ViagemEditScreen() {
   const [ocupacao, setOcupacao] = useState(0);
   const [selectedMotorista, setSelectedMotorista] = useState(0);
   const [tripShipments, setTripShipments] = useState<TripShipmentListItem[]>([]);
+  const [tripPassengers, setTripPassengers] = useState<TripPassengerRow[]>([]);
+  const [cancelBookingTarget, setCancelBookingTarget] = useState<{ bookingId: string; name: string; valor: string; paymentMethod: string | null } | null>(null);
+  const [cancelBookingSaving, setCancelBookingSaving] = useState(false);
   const [removePassageiroIdx, setRemovePassageiroIdx] = useState<number | null>(null);
   const [editEncomendaIdx, setEditEncomendaIdx] = useState<number | null>(null);
   const [editEncomendaData, setEditEncomendaData] = useState({ nome: '', recolha: '', entrega: '', destinatario: '', telefone: '', observacoes: '' });
@@ -202,6 +208,12 @@ export default function ViagemEditScreen() {
   const [addPassageiroOpen, setAddPassageiroOpen] = useState(false);
   const [addPassageiroData, setAddPassageiroData] = useState({ id: '', nome: '', contato: '', mala: '', valor: '' });
   const [malaDropdownOpen, setMalaDropdownOpen] = useState(false);
+  // Nova reserva (fluxo B): passageiro cadastrado selecionado + nº de pessoas/bagagens + pagamento.
+  const [addPaxUserId, setAddPaxUserId] = useState('');
+  const [addPaxBags, setAddPaxBags] = useState('0');
+  const [addPaxPagamento, setAddPaxPagamento] = useState<'cash' | 'pix'>('cash');
+  const [addPaxTripPriceCents, setAddPaxTripPriceCents] = useState<number>(0);
+  const [addPaxSaving, setAddPaxSaving] = useState(false);
 
   // Busca de passageiro no banco
   // Multi-ponto
@@ -325,8 +337,37 @@ export default function ViagemEditScreen() {
     fetchShipmentsForScheduledTrip(tripId).then((rows) => {
       if (!cancel) setTripShipments(rows);
     });
+    fetchTripPassengers(tripId).then((rows) => {
+      if (!cancel) setTripPassengers(rows);
+    });
     return () => { cancel = true; };
   }, [detail?.listItem?.tripId, detail?.listItem?.bookingId]);
+
+  // Realtime: mantém a lista de passageiros/encomendas em dia quando reservas mudam
+  // noutro lugar (ex.: cliente cancela pelo app). Não recarrega o formulário para não
+  // sobrescrever edições em andamento no topo da tela.
+  useEffect(() => {
+    const tripId = detail?.listItem?.tripId;
+    if (!tripId) return;
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const refetch = () => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        debounce = null;
+        void fetchTripPassengers(tripId).then(setTripPassengers);
+        void fetchShipmentsForScheduledTrip(tripId).then(setTripShipments);
+      }, 450);
+    };
+    const channel = supabase
+      .channel(`admin-viagem-edit-${tripId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, refetch)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'shipments' }, refetch)
+      .subscribe();
+    return () => {
+      if (debounce) clearTimeout(debounce);
+      void supabase.removeChannel(channel);
+    };
+  }, [detail?.listItem?.tripId]);
 
   // Veículo do motorista (coordenadas do mapa vêm de useTripMapCoords)
   useEffect(() => {
@@ -799,6 +840,8 @@ export default function ViagemEditScreen() {
   const unitCents =
     detail.passengerCount > 0 ? Math.round(detail.amountCents / detail.passengerCount) : detail.amountCents;
   type PassageiroRow = {
+    /** Reserva (`bookings.id`) a que este passageiro pertence (ações por-reserva). */
+    bookingId: string;
     name: string;
     rating: string;
     mala: string;
@@ -809,46 +852,69 @@ export default function ViagemEditScreen() {
     historicoUserId: string | null;
     /** Índice em `passenger_data` para remoção; null = titular exibido a partir do cliente da reserva. */
     passengerDataIndex: number | null;
+    /** Titular da reserva (1º passageiro). */
+    isPrimary: boolean;
+    /** Forma de pagamento da reserva (para o aviso de reembolso ao cancelar). */
+    paymentMethod: string | null;
   };
   /**
-   * `passenger_count` na reserva é a fonte de verdade para quantos passageiros a viagem tem.
-   * O titular (`listItem.passageiro` = cliente `user_id`) ocupa o 1º lugar; entradas extras vêm de
-   * `passenger_data` sem repetir nome, até completar (count − 1). Assim não aparecem cartões a mais
-   * quando o JSON ainda tem linha órfã (ex.: teste antigo com outro nome e count = 1).
+   * A viagem pode ter VÁRIAS reservas (várias pessoas compraram assento na mesma rota).
+   * `tripPassengers` agrega os passageiros de todas as reservas do `scheduled_trip`. Enquanto
+   * carrega (ou viagem sem reservas), cai no fallback: só os passageiros da reserva aberta.
    */
-  const totalPassengers = Math.max(1, detail.passengerCount || 1);
-  const maxExtrasFromPassengerData = Math.max(0, totalPassengers - 1);
-
-  const passageiros: PassageiroRow[] = [];
-  passageiros.push({
-    name: detail.listItem.passageiro,
-    rating: '—',
-    mala: bagLabel(detail.bagsCount),
-    valor: fmtBRL(unitCents),
-    avatarUrl: detail.clientAvatarUrl ?? null,
-    historicoUserId: detail.userId || null,
-    passengerDataIndex: null,
-  });
-  const seen = new Set<string>([detail.listItem.passageiro.trim().toLowerCase()]);
-  let extrasAdded = 0;
-  detail.passengerData.forEach((p, i) => {
-    if (extrasAdded >= maxExtrasFromPassengerData) return;
-    const n = (p.name || '').trim();
-    if (!n) return;
-    const k = n.toLowerCase();
-    if (seen.has(k)) return;
-    seen.add(k);
-    extrasAdded += 1;
-    passageiros.push({
-      name: n,
+  let passageiros: PassageiroRow[];
+  if (tripPassengers.length) {
+    passageiros = tripPassengers.map((tp) => ({
+      bookingId: tp.bookingId,
+      name: tp.name,
       rating: '—',
-      mala: bagLabel(p.bags),
+      mala: bagLabel(tp.bagsRaw ?? undefined),
+      valor: fmtBRL(tp.unitCents),
+      avatarUrl: tp.avatarUrl,
+      historicoUserId: tp.historicoUserId,
+      passengerDataIndex: tp.passengerDataIndex,
+      isPrimary: tp.isPrimary,
+      paymentMethod: tp.paymentMethod,
+    }));
+  } else {
+    const totalPassengers = Math.max(1, detail.passengerCount || 1);
+    const maxExtrasFromPassengerData = Math.max(0, totalPassengers - 1);
+    passageiros = [{
+      bookingId: detail.listItem.bookingId,
+      name: detail.listItem.passageiro,
+      rating: '—',
+      mala: bagLabel(detail.bagsCount),
       valor: fmtBRL(unitCents),
-      avatarUrl: detail.avatarUrlByPassengerCpfDigits[cpfDigitsKey(p.cpf)] ?? null,
-      historicoUserId: null,
-      passengerDataIndex: i,
+      avatarUrl: detail.clientAvatarUrl ?? null,
+      historicoUserId: detail.userId || null,
+      passengerDataIndex: null,
+      isPrimary: true,
+      paymentMethod: detail.paymentMethod ?? null,
+    }];
+    const seen = new Set<string>([detail.listItem.passageiro.trim().toLowerCase()]);
+    let extrasAdded = 0;
+    detail.passengerData.forEach((p, i) => {
+      if (extrasAdded >= maxExtrasFromPassengerData) return;
+      const n = (p.name || '').trim();
+      if (!n) return;
+      const k = n.toLowerCase();
+      if (seen.has(k)) return;
+      seen.add(k);
+      extrasAdded += 1;
+      passageiros.push({
+        bookingId: detail.listItem.bookingId,
+        name: n,
+        rating: '—',
+        mala: bagLabel(p.bags),
+        valor: fmtBRL(unitCents),
+        avatarUrl: detail.avatarUrlByPassengerCpfDigits[cpfDigitsKey(p.cpf)] ?? null,
+        historicoUserId: null,
+        passengerDataIndex: i,
+        isPrimary: false,
+        paymentMethod: detail.paymentMethod ?? null,
+      });
     });
-  });
+  }
 
   const valorMedium: React.CSSProperties = { fontSize: 16, fontWeight: 500, color: '#0d0d0d', ...font };
 
@@ -886,9 +952,15 @@ export default function ViagemEditScreen() {
                 type: 'button',
                 title: 'Remover passageiro',
                 onClick: async () => {
-                  if (!canEditPassengers || !detail?.listItem?.bookingId) return;
+                  if (!canEditPassengers) return;
                   if (p.passengerDataIndex === null) {
-                    showToast('O passageiro principal é o titular da reserva; não pode ser removido desta lista.');
+                    // Titular = cancelar a reserva inteira (com política de reembolso).
+                    setCancelBookingTarget({ bookingId: p.bookingId, name: p.name, valor: p.valor, paymentMethod: p.paymentMethod });
+                    return;
+                  }
+                  // Acompanhantes só podem ser removidos a partir da reserva aberta (temos o passenger_data dela).
+                  if (p.bookingId !== detail.listItem.bookingId) {
+                    showToast('Abra a reserva deste passageiro para removê-lo.');
                     return;
                   }
                   const currentData = [...(detail.passengerData || [])];
@@ -901,6 +973,8 @@ export default function ViagemEditScreen() {
                     showToast('Passageiro removido');
                     const d2 = await fetchBookingDetailForAdmin(detail.listItem.bookingId);
                     if (d2) setDetail(d2);
+                    const tid = detail.listItem.tripId;
+                    if (tid) setTripPassengers(await fetchTripPassengers(tid));
                   }
                 },
                 style: { width: 40, height: 40, borderRadius: '50%', background: '#f1f1f1', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 },
@@ -916,11 +990,11 @@ export default function ViagemEditScreen() {
       React.createElement('button', {
         type: 'button',
         onClick: () => {
-          if (!p.historicoUserId || !detail?.listItem?.bookingId) {
+          if (!p.historicoUserId || !p.bookingId) {
             showToast('Histórico disponível para o titular da reserva cadastrado no sistema.');
             return;
           }
-          navigate(`/passageiros/${p.historicoUserId}/viagem/${detail.listItem.bookingId}/historico`);
+          navigate(`/passageiros/${p.historicoUserId}/viagem/${p.bookingId}/historico`);
         },
         style: {
           width: '100%',
@@ -944,8 +1018,18 @@ export default function ViagemEditScreen() {
       canEditPassengers
         ? React.createElement('button', {
           type: 'button',
-          onClick: () => {
-            showToast('Em breve vamos ativar esta funcionalidade.');
+          onClick: async () => {
+            // Fluxo B: cria NOVA reserva para outro passageiro na mesma viagem.
+            setAddPassageiroData({ id: '', nome: '', contato: '', mala: '', valor: '' });
+            setAddPaxUserId(''); setAddPaxBags('0'); setAddPaxPagamento('cash');
+            setAddPaxTripPriceCents(0); setAddPaxSaving(false);
+            setPassengerSearch(''); setPassengerResults([]);
+            setAddPassageiroOpen(true);
+            const tid = detail?.listItem?.tripId;
+            if (tid) {
+              const { data: t } = await (supabase as any).from('scheduled_trips').select('price_per_person_cents').eq('id', tid).maybeSingle();
+              setAddPaxTripPriceCents(Number(t?.price_per_person_cents ?? 0));
+            }
           },
           style: {
             display: 'flex',
@@ -1289,6 +1373,70 @@ export default function ViagemEditScreen() {
                 cursor: 'pointer', fontSize: 16, fontWeight: 500, color: '#0d0d0d', ...font,
               },
             }, 'Voltar'))))
+    : null;
+
+  // ── Cancelar reserva (com política de reembolso por forma de pagamento) ──
+  const cancelBookingModal = cancelBookingTarget
+    ? (() => {
+        const pm = (cancelBookingTarget.paymentMethod ?? 'card').toLowerCase();
+        const aviso =
+          pm === 'card'
+            ? 'Pagamento no cartão. Se estiver dentro da janela de reembolso, o estorno será feito automaticamente no cartão (pode levar alguns dias). Fora da janela, não há estorno.'
+            : pm === 'pix'
+              ? `Pagamento via Pix. A devolução de ${cancelBookingTarget.valor} precisa ser feita manualmente (o Pix não é integrado).`
+              : `Pagamento em dinheiro com o motorista. Combine a devolução de ${cancelBookingTarget.valor} diretamente com o motorista ou pelo suporte.`;
+        return React.createElement('div', {
+          style: {
+            position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0,
+            background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+          },
+          onClick: () => { if (!cancelBookingSaving) setCancelBookingTarget(null); },
+        },
+          React.createElement('div', {
+            style: {
+              background: '#fff', borderRadius: 16, padding: 24, width: '100%', maxWidth: 420,
+              boxShadow: '6px 6px 12px rgba(0,0,0,0.15)', display: 'flex', flexDirection: 'column' as const, gap: 16,
+              boxSizing: 'border-box' as const,
+            },
+            onClick: (e: React.MouseEvent) => e.stopPropagation(),
+          },
+            React.createElement('h2', { style: { fontSize: 20, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } },
+              'Cancelar reserva?'),
+            React.createElement('p', { style: { fontSize: 14, color: '#545454', margin: 0, lineHeight: 1.5, ...font } },
+              `Reserva de ${cancelBookingTarget.name} (${cancelBookingTarget.valor}). ${aviso}`),
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%', marginTop: 8 } },
+              React.createElement('button', {
+                type: 'button', disabled: cancelBookingSaving,
+                onClick: async () => {
+                  const target = cancelBookingTarget;
+                  if (!target) return;
+                  setCancelBookingSaving(true);
+                  const res = await cancelBookingAsAdmin(target.bookingId);
+                  setCancelBookingSaving(false);
+                  if (res.error) { showToast(res.error); return; }
+                  setCancelBookingTarget(null);
+                  const parts = ['Reserva cancelada'];
+                  if (res.refunded) parts.push(`estorno de R$ ${((res.refundAmountCents ?? 0) / 100).toFixed(2).replace('.', ',')} iniciado no cartão`);
+                  else if (res.manualRefundPending) parts.push('devolução via Pix é manual');
+                  showToast(parts.join(' — '));
+                  const tid = detail?.listItem?.tripId;
+                  if (tid) setTripPassengers(await fetchTripPassengers(tid));
+                },
+                style: {
+                  width: '100%', height: 48, background: '#b53838', border: 'none', borderRadius: 8,
+                  cursor: cancelBookingSaving ? 'wait' : 'pointer', opacity: cancelBookingSaving ? 0.6 : 1,
+                  fontSize: 16, fontWeight: 600, color: '#fff', ...font,
+                },
+              }, cancelBookingSaving ? 'Cancelando...' : 'Sim, cancelar reserva'),
+              React.createElement('button', {
+                type: 'button', disabled: cancelBookingSaving,
+                onClick: () => setCancelBookingTarget(null),
+                style: {
+                  width: '100%', height: 48, background: '#f1f1f1', border: 'none', borderRadius: 8,
+                  cursor: 'pointer', fontSize: 16, fontWeight: 500, color: '#0d0d0d', ...font,
+                },
+              }, 'Manter reserva'))));
+      })()
     : null;
 
   // ── Edit encomenda slide panel (Figma 814-26519) ────────────────────
@@ -1744,7 +1892,8 @@ export default function ViagemEditScreen() {
                   React.createElement('button', {
                     key: p.id, type: 'button',
                     onClick: () => {
-                      setAddPassageiroData(prev => ({ ...prev, id: p.cpf || p.id, nome: p.full_name || '' }));
+                      setAddPassageiroData(prev => ({ ...prev, id: p.cpf || '', nome: p.full_name || '' }));
+                      setAddPaxUserId(p.id);
                       setPassengerSearch('');
                       setPassengerResults([]);
                     },
@@ -1758,34 +1907,64 @@ export default function ViagemEditScreen() {
                     React.createElement('span', { style: { fontSize: 12, color: '#767676' } },
                       [p.cpf && `CPF: ${p.cpf}`, p.phone && `Tel: ${p.phone}`].filter(Boolean).join(' • '))))) : null,
               passengerSearching ? React.createElement('span', { style: { fontSize: 12, color: '#767676', marginTop: 4, ...font } }, 'Buscando...') : null),
-            addPassageiroField('ID do passageiro', 'id', 'CPF ou ID do passageiro'),
-            addPassageiroField('Nome completo', 'nome', 'Nome do passageiro'),
-            addPassageiroField('Contato', 'contato', 'Ex: (21) 98888-7777'),
-            malaDropdown,
-            addPassageiroField('Valor', 'valor', 'R$ 0,00')),
+            // Passageiro selecionado (obrigatório — precisa de um cliente cadastrado p/ a reserva)
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+              React.createElement('label', { style: labelStyle }, 'Passageiro'),
+              React.createElement('div', { style: { ...inputStyle, display: 'flex', alignItems: 'center', color: addPassageiroData.nome ? '#0d0d0d' : '#767676' } },
+                addPassageiroData.nome ? `${addPassageiroData.nome}${addPassageiroData.id ? ` — ${addPassageiroData.id}` : ''}` : 'Busque e selecione um passageiro cadastrado')),
+            // Nº de bagagens
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+              React.createElement('label', { style: labelStyle }, 'Nº de bagagens'),
+              React.createElement('input', {
+                type: 'number', min: 0, value: addPaxBags,
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setAddPaxBags(e.target.value.replace(/[^0-9]/g, '')),
+                style: inputStyle,
+              })),
+            // Forma de pagamento
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6, width: '100%' } },
+              React.createElement('label', { style: labelStyle }, 'Forma de pagamento'),
+              React.createElement('div', { style: { display: 'flex', gap: 8 } },
+                ...([['cash', 'Dinheiro'], ['pix', 'Pix']] as const).map(([v, l]) =>
+                  React.createElement('button', {
+                    key: v, type: 'button', onClick: () => setAddPaxPagamento(v),
+                    style: { height: 40, padding: '0 18px', borderRadius: 999, border: addPaxPagamento === v ? 'none' : '1px solid #e2e2e2', background: addPaxPagamento === v ? '#0d0d0d' : '#fff', color: addPaxPagamento === v ? '#fff' : '#0d0d0d', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font },
+                  }, l)))),
+            // Valor total (preview a partir do preço/pessoa da viagem)
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, width: '100%' } },
+              React.createElement('label', { style: labelStyle }, 'Valor total'),
+              React.createElement('div', { style: { ...inputStyle, display: 'flex', alignItems: 'center', color: '#0d0d0d' } },
+                addPaxTripPriceCents > 0
+                  ? `R$ ${(addPaxTripPriceCents / 100).toFixed(2).replace('.', ',')}`
+                  : 'Viagem sem preço definido — será criada com R$ 0,00'))),
           // Buttons
           React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 10, marginTop: 24, flexShrink: 0 } },
             React.createElement('button', {
-              type: 'button', onClick: async () => {
-                if (!canEditTrip) { showToast('Não é possível alterar passageiros nesta viagem.'); return; }
-                if (!detail?.listItem?.bookingId || !addPassageiroData.nome.trim()) { showToast('Preencha ao menos o nome.'); return; }
-                const currentData = detail.passengerData || [];
-                const bags = addPassageiroData.mala === 'Grande' ? 3 : addPassageiroData.mala === 'Média' ? 2 : 1;
-                const newPassenger = { name: addPassageiroData.nome.trim(), cpf: addPassageiroData.id.trim() || '', bags };
-                const newData = [...currentData, newPassenger];
-                const { error } = await updateBookingFields(detail.listItem.bookingId, {
-                  passenger_data: newData,
-                  passenger_count: newData.length,
-                } as any);
-                if (error) { showToast(error); } else {
-                  showToast('Passageiro adicionado com sucesso');
-                  const d2 = await fetchBookingDetailForAdmin(detail.listItem.bookingId);
-                  if (d2) setDetail(d2);
-                }
+              type: 'button', disabled: addPaxSaving, onClick: async () => {
+                if (!canEditTrip) { showToast('Não é possível adicionar passageiros nesta viagem.'); return; }
+                const tid = detail?.listItem?.tripId;
+                if (!tid) { showToast('Viagem não identificada.'); return; }
+                if (!addPaxUserId || !addPassageiroData.nome.trim()) { showToast('Busque e selecione um passageiro cadastrado.'); return; }
+                const pax = 1; // 1 passagem por passageiro selecionado
+                const bags = Math.max(0, parseInt(addPaxBags || '0', 10) || 0);
+                setAddPaxSaving(true);
+                const res = await createBookingForTripAsAdmin({
+                  scheduledTripId: tid,
+                  userId: addPaxUserId,
+                  passengerName: addPassageiroData.nome.trim(),
+                  passengerCpf: addPassageiroData.id.trim(),
+                  passengerCount: pax,
+                  bagsCount: bags,
+                  paymentMethod: addPaxPagamento,
+                });
+                setAddPaxSaving(false);
+                if (res.error) { showToast(res.error); return; }
+                showToast(`Reserva criada${typeof res.amountCents === 'number' ? ` — R$ ${(res.amountCents / 100).toFixed(2).replace('.', ',')}` : ''}`);
                 setAddPassageiroOpen(false); setMalaDropdownOpen(false);
+                // Atualiza a lista para o novo passageiro aparecer na hora.
+                if (tid) setTripPassengers(await fetchTripPassengers(tid));
               },
-              style: { width: '100%', height: 48, background: '#0d0d0d', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 16, fontWeight: 500, color: '#fff', ...font },
-            }, 'Adicionar passageiro'),
+              style: { width: '100%', height: 48, background: '#0d0d0d', border: 'none', borderRadius: 8, cursor: addPaxSaving ? 'wait' : 'pointer', opacity: addPaxSaving ? 0.6 : 1, fontSize: 16, fontWeight: 500, color: '#fff', ...font },
+            }, addPaxSaving ? 'Criando...' : 'Adicionar passageiro'),
             React.createElement('button', {
               type: 'button', onClick: () => { setAddPassageiroOpen(false); setMalaDropdownOpen(false); },
               style: { width: '100%', height: 48, background: '#e2e2e2', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 16, fontWeight: 500, color: '#b53838', ...font },
@@ -1886,6 +2065,7 @@ export default function ViagemEditScreen() {
       metricasSection,
       historicoSection,
       removeModal,
+      cancelBookingModal,
       editEncomendaPanel,
       addEncomendaPanel,
       addPassageiroPanel,

@@ -148,7 +148,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('bookings')
         .select(
-          'id, origin_address, destination_address, amount_cents, status, created_at, passenger_count, bags_count, scheduled_trip_id, cancellation_reason, scheduled_trips(status, driver_journey_started_at, departure_at)',
+          'id, origin_address, destination_address, amount_cents, status, created_at, passenger_count, bags_count, scheduled_trip_id, cancellation_reason, payment_method, scheduled_trips(status, driver_journey_started_at, departure_at)',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -156,7 +156,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('shipments')
         .select(
-          'id, origin_address, destination_address, amount_cents, status, created_at, package_size, admin_approved_at, scheduled_trip_id, driver_id, cancellation_reason, scheduled_trips(status, driver_journey_started_at, departure_at)',
+          'id, origin_address, destination_address, amount_cents, status, created_at, package_size, admin_approved_at, scheduled_trip_id, driver_id, cancellation_reason, payment_method, scheduled_trips(status, driver_journey_started_at, departure_at)',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -164,7 +164,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('dependent_shipments')
         .select(
-          'id, origin_address, destination_address, full_name, amount_cents, status, created_at, bags_count, scheduled_trip_id, cancellation_reason, scheduled_trips(status, driver_journey_started_at, departure_at)',
+          'id, origin_address, destination_address, full_name, amount_cents, status, created_at, bags_count, scheduled_trip_id, cancellation_reason, payment_method, scheduled_trips(status, driver_journey_started_at, departure_at)',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -190,6 +190,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       bags_count?: number;
       scheduled_trip_id?: string | null;
       cancellation_reason?: string | null;
+      payment_method?: string | null;
       scheduled_trips?:
         | { status?: string; driver_journey_started_at?: string | null; departure_at?: string | null }
         | { status?: string; driver_journey_started_at?: string | null; departure_at?: string | null }[]
@@ -253,7 +254,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         title: dest,
         originAddress: origin,
         dateTime: formatBookingDate(tripDepartureAt ?? b.created_at),
-        priceFormatted: formatActivityTotalPaidLine(b.amount_cents),
+        priceFormatted: formatActivityTotalPaidLine(b.amount_cents, b.payment_method),
         categoryLabel: 'Viagem',
         sectionBadge,
         bookingStatus: b.status,
@@ -300,7 +301,10 @@ export function ActivitiesScreen({ navigation }: Props) {
         title: dest,
         originAddress: origin,
         dateTime: formatBookingDate(tripDepartureShip ?? (s as { created_at: string }).created_at),
-        priceFormatted: formatActivityTotalPaidLine((s as { amount_cents?: number }).amount_cents),
+        priceFormatted: formatActivityTotalPaidLine(
+          (s as { amount_cents?: number }).amount_cents,
+          (s as { payment_method?: string | null }).payment_method,
+        ),
         categoryLabel: 'Envio',
         sectionBadge,
         created_at: (s as { created_at: string }).created_at,
@@ -343,7 +347,10 @@ export function ActivitiesScreen({ navigation }: Props) {
         title,
         originAddress: origin,
         dateTime: formatBookingDate(tripDepartureDep ?? (d as { created_at: string }).created_at),
-        priceFormatted: formatActivityTotalPaidLine((d as { amount_cents?: number }).amount_cents),
+        priceFormatted: formatActivityTotalPaidLine(
+          (d as { amount_cents?: number }).amount_cents,
+          (d as { payment_method?: string | null }).payment_method,
+        ),
         categoryLabel: 'Envio dependente',
         sectionBadge,
         created_at: (d as { created_at: string }).created_at,

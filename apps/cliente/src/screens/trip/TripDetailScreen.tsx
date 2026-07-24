@@ -867,7 +867,11 @@ export function TripDetailScreen({ navigation, route }: Props) {
           </View>
           <View style={styles.cardStatusRow}>
             <View>
-              <Text style={styles.cardPriceCaption}>Total pago na reserva</Text>
+              <Text style={styles.cardPriceCaption}>
+                {['pix', 'cash'].includes((detail.payment_method ?? '').toLowerCase())
+                  ? 'Total a pagar'
+                  : 'Total pago na reserva'}
+              </Text>
               <Text style={styles.cardPrice}>{formatTripFareBrl(detail.amount_cents)}</Text>
             </View>
           </View>

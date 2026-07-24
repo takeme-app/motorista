@@ -25,6 +25,7 @@ import type {
   PaymentMethodRow,
   AdminUserListItem,
   BookingDetailForAdmin,
+  TripPassengerRow,
   EncomendaEditDetail,
   TripShipmentListItem,
   SpedyInvoiceLookupItem,
@@ -250,6 +251,25 @@ export function shortAddr(addr: string): string {
   return addr;
 }
 
+/**
+ * Extrai só a CIDADE de um endereço livre (para as colunas Origem/Destino da lista).
+ * Heurística tolerante aos formatos usados: "Cidade, Estado", "Cidade - Estado, CEP",
+ * "Rua X, Cidade, UF, CEP". Descarta logradouro e CEP; remove o «- Estado» ao final.
+ */
+export function cityFromAddr(addr: string): string {
+  const raw = String(addr ?? '').trim();
+  if (!raw) return '—';
+  const parts = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  const streetRe = /^(rua|r\.|av\.?|avenida|travessa|tv\.|estrada|rod\.?|rodovia|alameda|al\.|pra[çc]a|p[çc]a|beco|viela|quadra|qd|lote|passagem|a partir)/i;
+  const isCep = (s: string) => /\d{5}-?\d{3}/.test(s) || /^\d[\d\s-]*$/.test(s);
+  const stripState = (s: string) => (s.split(' - ')[0].trim() || s);
+  let cityPart = parts[0] ?? raw;
+  if (parts.length > 1 && streetRe.test(parts[0])) {
+    cityPart = parts.slice(1).find((p) => !isCep(p)) ?? parts[1];
+  }
+  return stripState(cityPart) || raw;
+}
+
 /** Comparação tolerante a PT/EN, maiúsculas e acentos (dados legados ou edição manual no SQL). */
 function normViagemStatusKey(raw: unknown): string {
   return String(raw ?? '')
@@ -468,13 +488,17 @@ export async function fetchViagens(): Promise<ViagemListItem[]> {
   const uniqueDriverIds = [...new Set(driverIds)];
 
   const driverNameMap: Record<string, string> = {};
+  const driverAvatarMap: Record<string, string | null> = {};
   const driverPartnerMap: Record<string, boolean> = {};
   if (uniqueDriverIds.length > 0) {
     const { data: driverProfiles } = await supabase
       .from('profiles')
-      .select('id, full_name')
+      .select('id, full_name, avatar_url')
       .in('id', uniqueDriverIds);
-    (driverProfiles || []).forEach((p: any) => { driverNameMap[p.id] = p.full_name || 'Sem nome'; });
+    (driverProfiles || []).forEach((p: any) => {
+      driverNameMap[p.id] = p.full_name || 'Sem nome';
+      driverAvatarMap[p.id] = p.avatar_url ?? null;
+    });
     const { data: workers } = await (supabase as any)
       .from('worker_profiles')
       .select('id, subtype')
@@ -483,8 +507,37 @@ export async function fetchViagens(): Promise<ViagemListItem[]> {
   }
 
   const bookingItems: ViagemListItem[] = (data as any[]).map((b: any) =>
-    listItemFromBookingJoin(b, profileMap, driverNameMap, driverPartnerMap),
+    listItemFromBookingJoin(b, profileMap, driverNameMap, driverPartnerMap, driverAvatarMap),
   );
+
+  // Nº de encomendas por viagem (a partir dos vínculos já buscados; até 500 shipments recentes).
+  const shipmentCountByTrip = new Map<string, number>();
+  for (const row of shipLinkRows || []) {
+    const tid = String((row as any).scheduled_trip_id ?? '').trim();
+    if (tid) shipmentCountByTrip.set(tid, (shipmentCountByTrip.get(tid) ?? 0) + 1);
+  }
+
+  // Agrupa por VIAGEM (`scheduled_trip`): uma viagem pode ter várias reservas (vários passageiros
+  // compraram assento na mesma rota). Mostra 1 linha por viagem, com o total de passageiros.
+  // Representante = 1ª reserva não-cancelada (ordem = mais recente primeiro); só fica «cancelado»
+  // se todas as reservas da viagem estiverem canceladas.
+  const tripGroups = new Map<string, { rep: ViagemListItem; paxSum: number; repCancelled: boolean }>();
+  for (const item of bookingItems) {
+    const tid = String(item.tripId || item.bookingId);
+    const isCancelled = item.bookingDbStatus === 'cancelled';
+    const g = tripGroups.get(tid);
+    if (!g) {
+      tripGroups.set(tid, { rep: item, paxSum: isCancelled ? 0 : item.passengerCount, repCancelled: isCancelled });
+    } else {
+      if (!isCancelled) g.paxSum += item.passengerCount;
+      if (g.repCancelled && !isCancelled) { g.rep = item; g.repCancelled = false; }
+    }
+  }
+  const groupedItems: ViagemListItem[] = [...tripGroups.values()].map(({ rep, paxSum }) => ({
+    ...rep,
+    tripPassengerCount: paxSum,
+    tripShipmentCount: shipmentCountByTrip.get(String(rep.tripId)) ?? 0,
+  }));
 
   const orphanItems: ViagemListItem[] = [];
   for (const tid of orphanTripIds) {
@@ -492,10 +545,15 @@ export async function fetchViagens(): Promise<ViagemListItem[]> {
     if (!trip) continue;
     const ship = firstShipByTrip.get(tid) ?? null;
     const row = syntheticJoinRowFromTripShipment(trip, ship);
-    orphanItems.push(listItemFromBookingJoin(row, profileMap, driverNameMap, driverPartnerMap));
+    const item = listItemFromBookingJoin(row, profileMap, driverNameMap, driverPartnerMap, driverAvatarMap);
+    orphanItems.push({
+      ...item,
+      tripPassengerCount: 0,
+      tripShipmentCount: shipmentCountByTrip.get(tid) ?? 0,
+    });
   }
 
-  const merged = [...bookingItems, ...orphanItems];
+  const merged = [...groupedItems, ...orphanItems];
   merged.sort((a, b) => {
     const ta = new Date(a.departureAtIso).getTime();
     const tb = new Date(b.departureAtIso).getTime();
@@ -553,6 +611,7 @@ function listItemFromBookingJoin(
   profileMap: Record<string, string>,
   driverNameMap: Record<string, string>,
   driverPartnerMap: Record<string, boolean>,
+  driverAvatarMap: Record<string, string | null> = {},
 ): ViagemListItem {
   const trip = b.scheduled_trips;
   const dep = trip?.departure_at ?? b.created_at;
@@ -562,8 +621,8 @@ function listItemFromBookingJoin(
   return {
     bookingId: String(b.id ?? ''),
     passageiro: profileMap[b.user_id] ?? 'Sem nome',
-    origem: shortAddr(b.origin_address),
-    destino: shortAddr(b.destination_address),
+    origem: cityFromAddr(b.origin_address),
+    destino: cityFromAddr(b.destination_address),
     data: fmtDate(dep),
     embarque: fmtTime(dep),
     chegada: fmtTime(trip?.arrival_at ?? b.created_at),
@@ -572,6 +631,7 @@ function listItemFromBookingJoin(
     driverId,
     departureAtIso: dep ? new Date(dep).toISOString() : new Date(b.created_at).toISOString(),
     motoristaNome: driverId ? (driverNameMap[driverId] ?? '—') : '—',
+    motoristaAvatarUrl: driverId ? (driverAvatarMap[driverId] ?? null) : null,
     motoristaCategoria: (isPartner ? 'motorista' : 'take_me') as 'take_me' | 'motorista',
     bookingDbStatus: String(b.status ?? ''),
     passengerCount: Number(b.passenger_count ?? 1),
@@ -1061,6 +1121,247 @@ export async function updateBookingFields(
   if (fields.passenger_data != null) upd.passenger_data = fields.passenger_data;
   const { error } = await (supabase.from('bookings') as any).update(upd).eq('id', bookingId);
   return { error: error ? (error as Error).message : null };
+}
+
+/**
+ * Cria uma NOVA reserva (booking) para outro passageiro numa viagem já existente
+ * — feature "Adicionar passageiro" do admin. Usa a rota (origem/destino/coords) e
+ * o preço/pessoa da própria viagem. O trigger de capacidade do banco dá baixa em
+ * seats_available e barra overbooking (lança erro se não houver assento).
+ * Requer a policy RLS "Admin can insert bookings" (is_admin()).
+ */
+export async function createBookingForTripAsAdmin(input: {
+  scheduledTripId: string;
+  userId: string;
+  passengerName: string;
+  passengerCpf?: string;
+  passengerCount: number;
+  bagsCount: number;
+  paymentMethod: 'cash' | 'pix';
+}): Promise<{ error: string | null; bookingId?: string; amountCents?: number }> {
+  if (!isSupabaseConfigured) return { error: 'Supabase não configurado' };
+
+  const pax = Math.max(1, Math.floor(input.passengerCount || 1));
+  const bags = Math.max(0, Math.floor(input.bagsCount || 0));
+
+  const { data: trip, error: tripErr } = await (supabase as any)
+    .from('scheduled_trips')
+    .select('id, status, seats_available, price_per_person_cents, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng')
+    .eq('id', input.scheduledTripId)
+    .maybeSingle();
+  if (tripErr || !trip) return { error: tripErr?.message || 'Viagem não encontrada' };
+
+  const tripStatus = String(trip.status ?? '').toLowerCase();
+  if (tripStatus !== 'active') return { error: 'A viagem não está ativa (concluída/cancelada) — não é possível adicionar passageiros.' };
+  if (Number(trip.seats_available ?? 0) < pax) {
+    return { error: `Assentos insuficientes: restam ${Number(trip.seats_available ?? 0)} e você pediu ${pax}.` };
+  }
+  if (
+    trip.origin_lat == null || trip.origin_lng == null ||
+    trip.destination_lat == null || trip.destination_lng == null
+  ) {
+    return { error: 'A viagem está sem coordenadas de origem/destino.' };
+  }
+
+  const perPerson = Number(trip.price_per_person_cents ?? 0);
+  const amountCents = Math.max(0, Math.round((Number.isFinite(perPerson) ? perPerson : 0) * pax));
+
+  const passengerData = [{
+    name: input.passengerName.trim(),
+    cpf: (input.passengerCpf ?? '').trim(),
+    bags,
+  }];
+
+  const { data, error } = await (supabase.from('bookings') as any)
+    .insert({
+      user_id: input.userId,
+      scheduled_trip_id: input.scheduledTripId,
+      origin_address: trip.origin_address ?? '—',
+      origin_lat: trip.origin_lat,
+      origin_lng: trip.origin_lng,
+      destination_address: trip.destination_address ?? '—',
+      destination_lat: trip.destination_lat,
+      destination_lng: trip.destination_lng,
+      passenger_count: pax,
+      bags_count: bags,
+      passenger_data: passengerData,
+      amount_cents: amountCents,
+      // Reserva simples (sem sobretaxas/descontos): base = subtotal = total.
+      price_route_base_cents: amountCents,
+      pricing_surcharges_cents: 0,
+      promo_discount_cents: 0,
+      pricing_subtotal_cents: amountCents,
+      platform_fee_cents: 0,
+      status: 'confirmed',
+      payment_method: input.paymentMethod,
+      platform_fee_extra_debit_cents: 0,
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    const msg = (error as Error).message || '';
+    if (/capacidade insuficiente|indispon/i.test(msg)) {
+      return { error: 'Sem assentos disponíveis nesta viagem.' };
+    }
+    return { error: msg || 'Não foi possível criar a reserva.' };
+  }
+
+  // Notifica o passageiro adicionado (push via trigger notifications_push → dispatch-notification-fcm).
+  // Não bloqueia a criação da reserva caso a notificação falhe.
+  try {
+    await createNotificationForUser(
+      input.userId,
+      'Você foi adicionado a uma viagem',
+      'A TakeMe criou uma reserva para você. Confira os detalhes no app.',
+      'travel_updates',
+      'cliente',
+    );
+  } catch {
+    /* silencioso: a reserva já foi criada */
+  }
+
+  return { error: null, bookingId: (data as any)?.id, amountCents };
+}
+
+/**
+ * Cancela uma reserva pelo admin via edge `admin-cancel-booking`.
+ * Cartão: aplica a política de janela e estorna via Stripe quando cabível.
+ * Pix/Dinheiro: apenas cancela (estorno é manual/presencial). A notificação ao
+ * cliente é disparada pelo trigger do banco ao status virar 'cancelled'.
+ */
+export async function cancelBookingAsAdmin(bookingId: string): Promise<{
+  error: string | null;
+  refunded?: boolean;
+  refundAmountCents?: number;
+  paymentMethod?: string;
+  insideWindow?: boolean;
+  manualRefundPending?: boolean;
+}> {
+  const { data, error } = await invokeEdgeFunction<{
+    cancelled: boolean;
+    refunded: boolean;
+    refund_amount_cents: number;
+    payment_method: string;
+    inside_window: boolean;
+    manual_refund_pending: boolean;
+  }>('admin-cancel-booking', 'POST', undefined, { booking_id: bookingId });
+  if (error || !data?.cancelled) {
+    return { error: error || 'Não foi possível cancelar a reserva.' };
+  }
+  return {
+    error: null,
+    refunded: data.refunded,
+    refundAmountCents: data.refund_amount_cents,
+    paymentMethod: data.payment_method,
+    insideWindow: data.inside_window,
+    manualRefundPending: data.manual_refund_pending,
+  };
+}
+
+/**
+ * Agrega os passageiros de TODAS as reservas ativas de uma viagem (`scheduled_trip_id`).
+ * Uma viagem pode ter várias reservas (várias pessoas compraram assento na mesma rota).
+ * Cada passageiro carrega a `bookingId` de origem para ações por-reserva.
+ * Espelha a lógica de dedup do detalhe: titular (1º) + acompanhantes de `passenger_data`
+ * sem repetir nome, limitado a (`passenger_count` − 1) por reserva.
+ */
+export async function fetchTripPassengers(scheduledTripId: string): Promise<TripPassengerRow[]> {
+  if (!isSupabaseConfigured || !scheduledTripId) return [];
+  const { data: rows } = await supabase
+    .from('bookings')
+    .select('id, user_id, passenger_count, bags_count, passenger_data, amount_cents, status, pickup_code, payment_method, created_at')
+    .eq('scheduled_trip_id', scheduledTripId)
+    .in('status', ['pending', 'paid', 'confirmed'])
+    .order('created_at', { ascending: true });
+  const bookings = (rows || []) as any[];
+  if (!bookings.length) return [];
+
+  // Nome + avatar do titular de cada reserva (profiles por id).
+  const userIds = [...new Set(bookings.map((b) => b.user_id).filter(Boolean))] as string[];
+  const nameById: Record<string, string> = {};
+  const avatarById: Record<string, string | null> = {};
+  if (userIds.length) {
+    const { data: profs } = await supabase.from('profiles').select('id, full_name, avatar_url').in('id', userIds);
+    (profs || []).forEach((p: any) => {
+      nameById[p.id] = p.full_name || 'Sem nome';
+      avatarById[p.id] = p.avatar_url ?? null;
+    });
+  }
+
+  // Avatar dos acompanhantes por CPF (só dígitos) cadastrado em profiles.
+  const cpfDigits = (c: unknown) => String(c ?? '').replace(/\D/g, '');
+  const allCpfDigits = [...new Set(
+    bookings.flatMap((b) => (Array.isArray(b.passenger_data) ? b.passenger_data.map((p: any) => cpfDigits(p?.cpf)) : []))
+      .filter((d: string) => d.length >= 11),
+  )] as string[];
+  const cpfVariants = [...new Set(
+    allCpfDigits.flatMap((d) => [d, `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`]),
+  )];
+  const avatarByCpf: Record<string, string | null> = {};
+  if (cpfVariants.length) {
+    const { data: cpfProfs } = await supabase.from('profiles').select('cpf, avatar_url').in('cpf', cpfVariants);
+    (cpfProfs || []).forEach((p: any) => {
+      const k = cpfDigits(p.cpf);
+      if (k) avatarByCpf[k] = p.avatar_url ?? null;
+    });
+  }
+
+  const out: TripPassengerRow[] = [];
+  for (const b of bookings) {
+    const count = Math.max(1, Number(b.passenger_count ?? 1));
+    const totalCents = Number(b.amount_cents ?? 0);
+    const unitCents = count > 0 ? Math.round(totalCents / count) : totalCents;
+    const titularName = nameById[b.user_id] || 'Sem nome';
+    const pin = b.pickup_code != null && String(b.pickup_code).trim() ? String(b.pickup_code).trim() : null;
+    const status = String(b.status || '');
+    const payment = b.payment_method ?? null;
+
+    out.push({
+      bookingId: b.id,
+      name: titularName,
+      cpf: null,
+      bagsRaw: b.bags_count != null ? Number(b.bags_count) : null,
+      unitCents,
+      avatarUrl: avatarById[b.user_id] ?? null,
+      isPrimary: true,
+      historicoUserId: b.user_id || null,
+      passengerDataIndex: null,
+      pickupCode: pin,
+      status,
+      paymentMethod: payment,
+    });
+
+    const pd = Array.isArray(b.passenger_data) ? b.passenger_data : [];
+    const seen = new Set<string>([titularName.trim().toLowerCase()]);
+    const maxExtras = Math.max(0, count - 1);
+    let added = 0;
+    pd.forEach((p: any, i: number) => {
+      if (added >= maxExtras) return;
+      const n = String(p?.name || '').trim();
+      if (!n) return;
+      const k = n.toLowerCase();
+      if (seen.has(k)) return;
+      seen.add(k);
+      added += 1;
+      const bagsVal = p?.bags != null && p.bags !== '' ? Number(p.bags) : null;
+      out.push({
+        bookingId: b.id,
+        name: n,
+        cpf: p?.cpf ? String(p.cpf) : null,
+        bagsRaw: Number.isFinite(bagsVal as number) ? (bagsVal as number) : null,
+        unitCents,
+        avatarUrl: avatarByCpf[cpfDigits(p?.cpf)] ?? null,
+        isPrimary: false,
+        historicoUserId: null,
+        passengerDataIndex: i,
+        pickupCode: pin,
+        status,
+        paymentMethod: payment,
+      });
+    });
+  }
+  return out;
 }
 
 export async function updateScheduledTripFields(
