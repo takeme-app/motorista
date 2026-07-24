@@ -30,7 +30,13 @@ export function formatTripFareBrl(cents: number | null | undefined): string {
  * Lista Atividades / resumos: `bookings.amount_cents` (e equivalentes) é o total pago pelo cliente.
  * Evita confusão com preço de rota, repasse ao motorista ou subtotais internos.
  */
-export function formatActivityTotalPaidLine(cents: number | null | undefined): string {
+export function formatActivityTotalPaidLine(
+  cents: number | null | undefined,
+  paymentMethod?: string | null,
+): string {
   if (cents == null || cents < 0) return '—';
-  return `Total pago · ${formatTripFareBrl(cents)}`;
+  // Pix/dinheiro são pagos no fim da corrida — não estão "pagos" na reserva.
+  const pm = (paymentMethod ?? '').toLowerCase();
+  const label = pm === 'pix' || pm === 'cash' ? 'Total a pagar' : 'Total pago';
+  return `${label} · ${formatTripFareBrl(cents)}`;
 }
