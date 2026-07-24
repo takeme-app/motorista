@@ -1825,7 +1825,7 @@ export default function ViagemEditScreen() {
             React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6, width: '100%' } },
               React.createElement('label', { style: labelStyle }, 'Forma de pagamento'),
               React.createElement('div', { style: { display: 'flex', gap: 8 } },
-                ...([['cash', 'Dinheiro']] as const).map(([v, l]) =>
+                ...([['cash', 'Dinheiro'], ['pix', 'Pix']] as const).map(([v, l]) =>
                   React.createElement('button', {
                     key: v, type: 'button', onClick: () => setAddPaxPagamento(v),
                     style: { height: 40, padding: '0 18px', borderRadius: 999, border: addPaxPagamento === v ? 'none' : '1px solid #e2e2e2', background: addPaxPagamento === v ? '#0d0d0d' : '#fff', color: addPaxPagamento === v ? '#fff' : '#0d0d0d', fontSize: 14, fontWeight: 500, cursor: 'pointer', ...font },
