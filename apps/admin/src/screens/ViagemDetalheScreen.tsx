@@ -38,6 +38,7 @@ import {
 import type { SpedyInvoiceLookupItem } from '../data/types';
 import { supabase } from '../lib/supabase';
 import { resolveStorageDisplayUrl } from '../lib/storageDisplayUrl';
+import { fetchRouteDistanceDuration, formatKmLabel } from '../lib/routeDistance';
 import type { BookingDetailForAdmin, TripShipmentListItem, TripPassengerRow } from '../data/types';
 import type { MotoristaListItem } from '../data/types';
 import MapView from '../components/MapView';
@@ -201,6 +202,7 @@ export default function ViagemDetalheScreen() {
   const [acompanharTempoReal, setAcompanharTempoReal] = useState(false);
   const [linkedShipments, setLinkedShipments] = useState<TripShipmentListItem[]>([]);
   const [tripPassengers, setTripPassengers] = useState<TripPassengerRow[]>([]);
+  const [routeDistanceLabel, setRouteDistanceLabel] = useState<string | null>(null);
   const [supportCreateBusyKey, setSupportCreateBusyKey] = useState<string | null>(null);
   const [tripCoords] = useTripMapCoords(detail);
 
@@ -473,6 +475,20 @@ export default function ViagemDetalheScreen() {
       void supabase.removeChannel(channel);
     };
   }, [id, resolvedScheduledTripId, preferShipmentIdForTripDetail]);
+
+  // Distância real de direção (Mapbox), para o "Km da viagem"/"Distância percorrida".
+  useEffect(() => {
+    const oLat = detail?.originLat, oLng = detail?.originLng;
+    const dLat = detail?.destinationLat, dLng = detail?.destinationLng;
+    if (oLat == null || oLng == null || dLat == null || dLng == null) {
+      setRouteDistanceLabel(null);
+      return;
+    }
+    const controller = new AbortController();
+    fetchRouteDistanceDuration({ lat: oLat, lng: oLng }, { lat: dLat, lng: dLng }, controller.signal)
+      .then((r) => { if (r) setRouteDistanceLabel(formatKmLabel(r.distanceMeters)); });
+    return () => controller.abort();
+  }, [detail?.originLat, detail?.originLng, detail?.destinationLat, detail?.destinationLng]);
 
   useEffect(() => {
     if (!isMotoristas) return;
@@ -1115,7 +1131,7 @@ export default function ViagemDetalheScreen() {
         new Date(new Date(v.departureAtIso).getTime() + 3600000).toISOString(),
       )
       : (isMockTrip ? '50 minutos' : '—');
-  const distKmLabel = isMockTrip ? '18,4 km' : '—';
+  const distKmLabel = isMockTrip ? '18,4 km' : (routeDistanceLabel ?? '—');
 
   const resumoSection = React.createElement('div', {
     style: { borderBottom: '1px solid #e2e2e2', paddingBottom: 32, display: 'flex', flexDirection: 'column' as const, gap: 16, width: '100%' },

@@ -33,7 +33,7 @@ import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackT
 import { supabase } from '../../lib/supabase';
 import { tryOpenSupportTicket } from '../../lib/supportTickets';
 import { useAppAlert } from '../../contexts/AppAlertContext';
-import { getRouteWithDuration, formatDuration, type RoutePoint } from '../../lib/route';
+import { getRouteWithDuration, formatDuration, formatDistanceKmLabel, type RoutePoint } from '../../lib/route';
 import { LiveDriverMapMarker } from '../../components/LiveDriverMapMarker';
 import { useScheduledTripLiveLocation } from '../../lib/useScheduledTripLiveLocation';
 import { StatusBadge, clientViagemStatusBadge } from '../../components/StatusBadge';
@@ -163,6 +163,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(true);
   const [routeCoords, setRouteCoords] = useState<RoutePoint[] | null>(null);
   const [routeDuration, setRouteDuration] = useState<string | null>(null);
+  const [routeDistance, setRouteDistance] = useState<string | null>(null);
   const [showCancelTripModal, setShowCancelTripModal] = useState(false);
   const [cancelLoading, setCancelLoading] = useState(false);
   const [showRescheduleConsentModal, setShowRescheduleConsentModal] = useState(false);
@@ -528,6 +529,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
       if (!cancelled && result) {
         setRouteCoords(result.coordinates);
         if (result.durationSeconds > 0) setRouteDuration(formatDuration(result.durationSeconds));
+        if (result.distanceMeters && result.distanceMeters > 0) setRouteDistance(formatDistanceKmLabel(result.distanceMeters));
       }
     });
     return () => {
@@ -1058,8 +1060,8 @@ export function TripDetailScreen({ navigation, route }: Props) {
               <Text style={styles.resumoLabel}>Total pago pelo passageiro</Text>
               <Text style={styles.resumoValue}>{formatTripFareBrl(detail.amount_cents)}</Text>
             </View>
-            <Text style={styles.resumoMeta}>Duração: —</Text>
-            <Text style={styles.resumoMeta}>Distância: —</Text>
+            <Text style={styles.resumoMeta}>Duração: {routeDuration ?? '—'}</Text>
+            <Text style={styles.resumoMeta}>Distância: {routeDistance ?? '—'}</Text>
           </View>
         )}
 
