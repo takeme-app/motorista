@@ -5,7 +5,7 @@
     "slug": "take-me-motorista",
     "owner": "viniciusbsilva",
     "scheme": "take-me-motorista",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "icon": "./assets/logo.png",
     "splash": {
       "image": "./assets/logo.png",
@@ -16,12 +16,12 @@
     "userInterfaceStyle": "light",
     "ios": {
       "bundleIdentifier": "com.takeme.motorista",
-      "buildNumber": "7",
+      "buildNumber": "8",
       "googleServicesFile": "./GoogleService-Info-motorista.plist",
       "supportsTablet": true
     },
     "android": {
-      "package": "com.takeme.motorista",
+      "package": "com.takemeapp.motorista",
       "softwareKeyboardLayoutMode": "pan",
       "googleServicesFile": "./google-services-motorista.json",
       "adaptiveIcon": {
