@@ -23,6 +23,63 @@
           "other_platform_oauth_client": []
         }
       }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:426272900403:android:06fc7118fcb71ea46aea46",
+        "android_client_info": {
+          "package_name": "com.takeme.motorista"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDO2OOm5dKjmOL7PFow3aEmAM0hx57LmPU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:426272900403:android:be293787c0c5c8e56aea46",
+        "android_client_info": {
+          "package_name": "com.takemeapp.cliente"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDO2OOm5dKjmOL7PFow3aEmAM0hx57LmPU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:426272900403:android:2db27f873222570a6aea46",
+        "android_client_info": {
+          "package_name": "com.takemeapp.motorista"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDO2OOm5dKjmOL7PFow3aEmAM0hx57LmPU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
     }
   ],
   "configuration_version": "1"
