@@ -124,15 +124,32 @@ export function computeFirstIncompleteStopIndex(stops: TripStop[]): number {
 // Hook
 // ---------------------------------------------------------------------------
 
+/**
+ * Reservas pagas/pendentes que ainda aguardam o aceite do motorista.
+ * Elas são removidas da rota por `filterStopsExcludedUntilDriverAccepted`; sem essa
+ * contagem a tela desenharia só o trajeto até o destino, dando a impressão errada de
+ * que não há passageiro a buscar.
+ */
+async function countBookingsAwaitingDriverAcceptance(tripId: string): Promise<number> {
+  const { count } = await supabase
+    .from('bookings')
+    .select('id', { count: 'exact', head: true })
+    .eq('scheduled_trip_id', tripId)
+    .in('status', ['pending', 'paid']);
+  return Math.max(0, count ?? 0);
+}
+
 export function useTripStops(tripId: string | null) {
   const [stops, setStops] = useState<TripStop[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingAcceptanceCount, setPendingAcceptanceCount] = useState(0);
 
   const load = useCallback(async (opts?: { silent?: boolean }): Promise<TripStop[]> => {
     const silent = opts?.silent === true;
     if (!tripId) {
       setStops([]);
+      setPendingAcceptanceCount(0);
       return [];
     }
     if (!silent) {
@@ -169,11 +186,18 @@ export function useTripStops(tripId: string | null) {
       }
 
       setStops(out);
+      // Não bloqueia a lista de paradas: a contagem só alimenta o aviso na tela.
+      try {
+        setPendingAcceptanceCount(await countBookingsAwaitingDriverAcceptance(tripId));
+      } catch {
+        setPendingAcceptanceCount(0);
+      }
       return out;
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Erro ao carregar paradas';
       setError(msg);
       setStops([]);
+      setPendingAcceptanceCount(0);
       return [];
     } finally {
       if (!silent) setLoading(false);
@@ -257,7 +281,7 @@ export function useTripStops(tripId: string | null) {
     };
   }, [tripId, load]);
 
-  return { stops, loading, error, reload: load };
+  return { stops, loading, error, reload: load, pendingAcceptanceCount };
 }
 
 // ---------------------------------------------------------------------------
