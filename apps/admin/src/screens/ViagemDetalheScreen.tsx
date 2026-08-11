@@ -107,6 +107,14 @@ function tripDurationMin(depIso: string, arrIso: string): string {
   return `${m} minutos`;
 }
 
+/** "HH:MM" de um ISO — usado para os horários REAIS (início/chegada da viagem). */
+function fmtHoraCurta(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return null;
+  return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
 function fmtHandoffValidated(iso: string | null | undefined): string {
   if (!iso) return '';
   try {
@@ -721,12 +729,28 @@ export default function ViagemDetalheScreen() {
     : (detail ? `${Math.min(100, (detail.bagsCount ?? 1) * 15)}%` : '80%');
   const seatsHint = v?.driverId ? 'Ver viagem' : '—';
 
+  // Horários REAIS quando existirem (saída = jornada iniciada; chegada = última
+  // parada concluída). Enquanto não houver, mostra o planejado marcado como tal —
+  // antes os dois apareciam iguais, sem o operador saber que era só previsão.
+  const inicioRealHora = fmtHoraCurta(detail?.tripStartedAtRealIso);
+  const chegadaRealHora = fmtHoraCurta(detail?.tripArrivalAtRealIso);
+
   const getDetailTimelineItems = (row: ViagemRow): DetailTimelineItem[] => [
-    { id: 'inicio', icon: 'clock', label: 'Início', value: row.embarque },
+    {
+      id: 'inicio',
+      icon: 'clock',
+      label: inicioRealHora ? 'Início (real)' : 'Início (previsto)',
+      value: inicioRealHora ?? row.embarque,
+    },
     { id: 'origem', icon: 'origin', label: 'Origem', value: detail?.originFull || row.origem, showConnectorAfter: true },
     { id: 'destino', icon: 'destination', label: 'Destino', value: detail?.destinationFull || row.destino },
     { id: 'ocupacao', icon: 'inventory', label: 'Ocupação bagageiro', value: bagPct },
-    { id: 'chegada', icon: 'clock', label: 'Horário de chegada', value: row.chegada },
+    {
+      id: 'chegada',
+      icon: 'clock',
+      label: chegadaRealHora ? 'Chegada (real)' : 'Chegada (prevista)',
+      value: chegadaRealHora ?? row.chegada,
+    },
   ];
   const timelineItems = getDetailTimelineItems(t);
   const detailSectionBorder = { borderBottom: '1px solid #e2e2e2', paddingBottom: 32 };
@@ -1123,14 +1147,20 @@ export default function ViagemDetalheScreen() {
   const totalCents = isMockTrip ? 15430 : (detail ? moneyResumo.displayTotal : 0);
   const unitCents = isMockTrip ? 8000 : (detail ? moneyResumo.displayUnit : 0);
   const resumoUnitLabel = isMockTrip ? 'Valor unitário' : moneyResumo.resumoUnitLabel;
-  const dur = detail?.tripDepartureAtIso && detail?.tripArrivalAtIso
-    ? tripDurationMin(detail.tripDepartureAtIso, detail.tripArrivalAtIso)
-    : v
-      ? tripDurationMin(
-        v.departureAtIso,
-        new Date(new Date(v.departureAtIso).getTime() + 3600000).toISOString(),
-      )
-      : (isMockTrip ? '50 minutos' : '—');
+  // Duração REAL (jornada iniciada → última parada concluída) quando os dois
+  // horários existirem; senão a prevista, rotulada como tal.
+  const temDuracaoReal = Boolean(detail?.tripStartedAtRealIso && detail?.tripArrivalAtRealIso);
+  const dur = temDuracaoReal
+    ? tripDurationMin(detail!.tripStartedAtRealIso!, detail!.tripArrivalAtRealIso!)
+    : detail?.tripDepartureAtIso && detail?.tripArrivalAtIso
+      ? tripDurationMin(detail.tripDepartureAtIso, detail.tripArrivalAtIso)
+      : v
+        ? tripDurationMin(
+          v.departureAtIso,
+          new Date(new Date(v.departureAtIso).getTime() + 3600000).toISOString(),
+        )
+        : (isMockTrip ? '50 minutos' : '—');
+  const durLabel = temDuracaoReal ? 'Duração (real)' : 'Duração (prevista)';
   const distKmLabel = isMockTrip ? '18,4 km' : (routeDistanceLabel ?? '—');
 
   const resumoSection = React.createElement('div', {
@@ -1142,12 +1172,12 @@ export default function ViagemDetalheScreen() {
       resumoCell(iconMoney, 'Preço total', fmtBRL(totalCents)),
       resumoCell(iconCalendar, 'Data', t.data)),
     resumoRow(
-      resumoCell(iconClock, 'Duração', dur),
+      resumoCell(iconClock, durLabel, dur),
       resumoCell(iconBag, resumoUnitLabel, fmtBRL(unitCents)),
       resumoCell(iconPeople, 'Total de passageiros', `${isShipmentOnlyTrip ? 0 : (detail?.passengerCount ?? 1)} pessoa(s)`)),
     resumoRow(
       resumoCell(iconBag, 'Despesas', '—'),
-      resumoCell(iconChart, 'Km da viagem', distKmLabel),
+      resumoCell(iconChart, 'Km da viagem (previsto)', distKmLabel),
       resumoCell(iconPeople, '', '', true)),
     detail && String(detail.listItem?.bookingId ?? '').trim()
       ? resumoRow(
@@ -1179,7 +1209,7 @@ export default function ViagemDetalheScreen() {
         React.createElement('span', { style: webStyles.detailPerfCardValue }, bagPct)),
       React.createElement('div', { style: webStyles.detailPerfCard },
         React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
-          React.createElement('span', { style: webStyles.detailPerfCardTitle }, 'Tempo total de viagem'),
+          React.createElement('span', { style: webStyles.detailPerfCardTitle }, temDuracaoReal ? 'Tempo total (real)' : 'Tempo total (previsto)'),
           React.createElement('div', { style: { width: 44, height: 44, borderRadius: '50%', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
             React.createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none' },
               React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#0d0d0d', strokeWidth: 2 }),
@@ -1187,7 +1217,7 @@ export default function ViagemDetalheScreen() {
         React.createElement('span', { style: webStyles.detailPerfCardValue }, isMockTrip ? '50 min' : dur)),
       React.createElement('div', { style: webStyles.detailPerfCard },
         React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
-          React.createElement('span', { style: webStyles.detailPerfCardTitle }, 'Distância percorrida'),
+          React.createElement('span', { style: webStyles.detailPerfCardTitle }, 'Distância prevista'),
           React.createElement('div', { style: { width: 44, height: 44, borderRadius: '50%', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' } }, chartLineSvg)),
         React.createElement('span', { style: webStyles.detailPerfCardValue }, distKmLabel))));
 

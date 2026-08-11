@@ -696,7 +696,7 @@ export async function fetchBookingDetailForAdmin(
     passenger_count, bags_count, passenger_data, amount_cents, scheduled_trip_id, pickup_code,
     stripe_payment_intent_id,
     payment_method, platform_fee_extra_debit_cents, admin_earning_cents,
-    scheduled_trips ( id, departure_at, arrival_at, driver_id, status, seats_available, bags_available, trunk_occupancy_pct )
+    scheduled_trips ( id, departure_at, arrival_at, driver_id, status, seats_available, bags_available, trunk_occupancy_pct, driver_journey_started_at )
   `;
   let { data: b, error } = await supabase.from('bookings').select(sel).eq('id', bookingOrTripId).maybeSingle();
   if (error || !b) {
@@ -777,6 +777,24 @@ export async function fetchBookingDetailForAdmin(
     bagsTripRaw != null && Number.isFinite(Number(bagsTripRaw)) ? Math.round(Number(bagsTripRaw)) : null;
   const createdRaw = row.created_at as string | undefined;
 
+  // Horários REAIS (≠ planejados): saída = início da jornada do motorista;
+  // chegada = última parada efetivamente concluída.
+  const startedRealRaw = trip?.driver_journey_started_at as string | null | undefined;
+  let arrivalRealIso: string | null = null;
+  const tripIdForStops = trip?.id ?? row.scheduled_trip_id;
+  if (tripIdForStops) {
+    const { data: lastStop } = await (supabase as any)
+      .from('trip_stops')
+      .select('actual_arrival_at')
+      .eq('scheduled_trip_id', tripIdForStops)
+      .not('actual_arrival_at', 'is', null)
+      .order('actual_arrival_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const v = (lastStop as { actual_arrival_at?: string } | null)?.actual_arrival_at;
+    if (v) arrivalRealIso = new Date(v).toISOString();
+  }
+
   let supportConversationId: string | null = null;
   if (row.id) {
     const { data: bookConvRows } = await (supabase as any)
@@ -812,6 +830,8 @@ export async function fetchBookingDetailForAdmin(
     trunkOccupancyPct: Number.isFinite(trunk) ? trunk : 0,
     tripDepartureAtIso: depAt ? new Date(depAt as string).toISOString() : null,
     tripArrivalAtIso: arrAt ? new Date(arrAt as string).toISOString() : null,
+    tripStartedAtRealIso: startedRealRaw ? new Date(startedRealRaw).toISOString() : null,
+    tripArrivalAtRealIso: arrivalRealIso,
     seatsAvailable,
     bagsAvailable,
     bookingCreatedAtIso: createdRaw ? new Date(createdRaw).toISOString() : null,

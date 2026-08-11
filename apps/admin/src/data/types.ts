@@ -157,6 +157,10 @@ export interface BookingDetailForAdmin {
   tripDepartureAtIso: string | null;
   /** `scheduled_trips.arrival_at` em ISO (duração no resumo). */
   tripArrivalAtIso: string | null;
+  /** Saída REAL: `scheduled_trips.driver_journey_started_at` (null se não iniciou). */
+  tripStartedAtRealIso: string | null;
+  /** Chegada REAL: maior `trip_stops.actual_arrival_at` da viagem (null se não concluiu). */
+  tripArrivalAtRealIso: string | null;
   /** Lugares disponíveis na viagem agendada (`scheduled_trips.seats_available`). */
   seatsAvailable: number | null;
   /** Bagagens disponíveis na viagem (`scheduled_trips.bags_available`). */
