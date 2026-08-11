@@ -5,6 +5,7 @@
 -- Resultado: 112 paradas concluídas e ZERO com horário real — o painel não tinha
 -- de onde tirar a chegada real e caía no horário planejado.
 --
+-- APLICADO EM PRODUÇÃO via MCP (trigger + backfill de 112 paradas).
 -- Correção por TRIGGER (em vez de reescrever a função de ~250 linhas, que tem toda
 -- a validação de PIN): carimba na transição para 'completed', independente do
 -- caminho que concluiu a parada (RPC, admin, correção manual).
@@ -16,6 +17,7 @@
 CREATE OR REPLACE FUNCTION public.trip_stops_stamp_actual_arrival()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path TO 'public'   -- advisor `function_search_path_mutable`
 AS $$
 BEGIN
   IF lower(trim(NEW.status)) = 'completed'
