@@ -41,7 +41,11 @@ import { getRouteWithDuration } from '../lib/route';
 import { getMapboxAccessToken, getGoogleMapsApiKey } from '../lib/googleMapsConfig';
 import { getCachedRoute, setCachedRoute, hashWaypoints } from '../lib/routeCache';
 import * as DocumentPicker from 'expo-document-picker';
-import { formatTripCode as formatSharedTripCode } from '@take-me/shared';
+import {
+  formatTripCode as formatSharedTripCode,
+  SUPPORT_PHONE_TEL_URL,
+  SUPPORT_WHATSAPP_URL,
+} from '@take-me/shared';
 import { AppConfirmModal } from '../components/AppConfirmModal';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'TripDetail'>;
@@ -433,9 +437,9 @@ function SupportModal({ visible, onClose }: { visible: boolean; onClose: () => v
         <Text style={styles.sheetTitle}>Como podemos ajudar?</Text>
 
         {([
-          { label: 'Ligar', icon: 'phone', action: () => {} },
+          { label: 'Ligar', icon: 'phone', action: () => { onClose(); void Linking.openURL(SUPPORT_PHONE_TEL_URL); } },
           { label: 'Chat', icon: 'headset-mic', action: () => {} },
-          { label: 'WhatsApp', icon: 'chat', action: () => {} },
+          { label: 'WhatsApp', icon: 'chat', action: () => { onClose(); void Linking.openURL(SUPPORT_WHATSAPP_URL); } },
         ] as { label: string; icon: string; action: () => void }[]).map((opt) => (
           <TouchableOpacity
             key={opt.label}
