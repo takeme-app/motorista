@@ -2,6 +2,29 @@ import { Platform, PermissionsAndroid } from 'react-native';
 import { supabase } from './supabase';
 
 /**
+ * iOS: o token APNs chega de forma assíncrona depois de `registerDeviceForRemoteMessages()`.
+ * Chamar `getToken()` antes disso lança "No APNS token specified before fetching FCM Token"
+ * e o registro falha silenciosamente — o aparelho nunca recebe push. Aguarda alguns
+ * ciclos curtos antes de desistir.
+ */
+async function waitForApnsToken(
+  messagingInstance: { getAPNSToken: () => Promise<string | null> },
+  attempts = 10,
+  delayMs = 500,
+): Promise<string | null> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const apns = await messagingInstance.getAPNSToken();
+      if (apns) return apns;
+    } catch {
+      /* tenta de novo */
+    }
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return null;
+}
+
+/**
  * FCM + Supabase RPC `upsert_profile_fcm_token` com app_slug motorista.
  * Android: pede POST_NOTIFICATIONS no Android 13+. iOS: pede autorização e
  * registra para remote messages antes de getToken().
@@ -24,6 +47,16 @@ export async function syncMotoristaProfileFcmToken(): Promise<void> {
         auth === messaging.AuthorizationStatus.PROVISIONAL;
       if (!ok) return;
       await messaging().registerDeviceForRemoteMessages();
+      const apns = await waitForApnsToken(messaging());
+      if (!apns) {
+        // Quase sempre significa APNs Auth Key ausente no projeto Firebase (ou
+        // perfil de provisionamento sem Push). Sem APNs não existe token FCM no iOS.
+        console.warn(
+          '[motoristaFcm] APNs token indisponível — push iOS não será registrado. ' +
+            'Verifique a APNs Auth Key (.p8) no Firebase e a capability Push Notifications.',
+        );
+        return;
+      }
     }
     const {
       data: { session },
