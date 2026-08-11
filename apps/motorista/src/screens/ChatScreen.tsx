@@ -31,7 +31,7 @@ import { uploadChatLocalFile } from '../utils/chatAttachments';
 import { fetchChatMessages, insertChatMessage } from '../utils/chatMessagesDb';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { getUserErrorMessage } from '../utils/errorMessage';
-import { loadExpoAv } from '../utils/expoAvOptional';
+import { loadExpoAv, configureAudioForPlayback } from '../utils/expoAvOptional';
 import {
   ChatAttachmentImage,
   ChatAttachmentAudio,
@@ -386,6 +386,9 @@ export function ChatScreen({ navigation, route }: Props) {
       if (!rec) return;
       try {
         await rec.stopAndUnloadAsync();
+        // iOS: encerra o modo gravação. Sem isto a sessão continua em
+        // PlayAndRecord e os áudios do chat tocam pelo alto-falante do ouvido.
+        void configureAudioForPlayback();
         const uri = rec.getURI();
         if (uri) {
           const caption = inputText.trim();

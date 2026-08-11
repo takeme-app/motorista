@@ -10,7 +10,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { Text } from '../Text';
 import { chatAttachmentSignedUrl } from '../../utils/storageUrl';
-import { loadExpoAv } from '../../utils/expoAvOptional';
+import { loadExpoAv, configureAudioForPlayback } from '../../utils/expoAvOptional';
 
 function formatMs(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return '0:00';
@@ -106,11 +106,14 @@ export function ChatAttachmentAudio({ attachmentPath, isOutgoing, outgoingPalett
         if (st.isLoaded && st.isPlaying) {
           await existing.pauseAsync();
         } else {
+          // A sessão pode ter mudado (ex.: gravação no meio) — reconfigura antes de tocar.
+          await configureAudioForPlayback();
           await existing.playAsync();
         }
         return;
       }
       setLoading(true);
+      await configureAudioForPlayback();
       const av = await loadExpoAv();
       if (!av) {
         await Linking.openURL(uri);
