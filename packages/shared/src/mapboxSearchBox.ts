@@ -20,6 +20,8 @@ export type MapboxSuggestItem = {
   address: string;
   /** cidade quando disponível */
   city?: string;
+  /** UF do resultado (ex.: `MA`) — usada para priorizar o estado do usuário */
+  regionCode?: string;
   /** linha secundária: rua, bairro, cidade, UF (sem o nome do POI, país ou CEP) */
   secondary?: string;
   /** distância em metros a partir do ponto de `proximity` (quando informado) */
@@ -157,6 +159,7 @@ export async function mapboxSearchBoxSuggest(
       const placeFormatted = s.place_formatted ?? '';
       const secondary = buildSecondary(s.context, placeFormatted, s.full_address, s.name);
       const city = s.context?.place?.name?.trim() || s.context?.locality?.name?.trim();
+      const regionCode = s.context?.region?.region_code?.trim().toUpperCase();
       const distanceMeters =
         typeof s.distance === 'number' && Number.isFinite(s.distance) ? s.distance : undefined;
       out.push({
@@ -164,6 +167,7 @@ export async function mapboxSearchBoxSuggest(
         name: s.name,
         address: secondary ? `${s.name}, ${secondary}` : s.name,
         ...(city ? { city } : {}),
+        ...(regionCode ? { regionCode } : {}),
         ...(secondary ? { secondary } : {}),
         ...(distanceMeters != null ? { distanceMeters } : {}),
         ...(s.feature_type ? { featureType: s.feature_type } : {}),

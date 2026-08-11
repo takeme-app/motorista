@@ -18,6 +18,7 @@ import {
   searchAddress,
   retrieveAddressCoords,
   formatDistanceKm,
+  regionCodeFromAddress,
   type AddressSuggestion,
   type AddressSearchResult,
 } from '../lib/location';
@@ -79,6 +80,8 @@ export function AddressAutocomplete({
       const list = await searchAddress(query, {
         proximity: currentPlace,
         sessionToken: sessionTokenRef.current,
+        // Viagens intermunicipais: prioriza o estado de onde a pessoa está buscando.
+        preferRegionCode: regionCodeFromAddress(currentPlace?.address),
       });
       setSuggestions(list);
       setShowList(list.length > 0);

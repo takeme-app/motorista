@@ -173,7 +173,8 @@ export type AddressSuggestion = {
 const BR_STATE_UF: Record<string, string> = {
   'acre': 'AC', 'alagoas': 'AL', 'amapá': 'AP', 'amazonas': 'AM', 'bahia': 'BA', 'ceará': 'CE',
   'distrito federal': 'DF', 'espírito santo': 'ES', 'goiás': 'GO', 'maranhão': 'MA', 'mato grosso': 'MT',
-  'mato grosso do sul': 'MS', 'minas gerais': 'MG', 'pará': 'PA', 'paraíba': 'PB', 'pernambuco': 'PE',
+  'mato grosso do sul': 'MS', 'minas gerais': 'MG', 'pará': 'PA', 'paraíba': 'PB', 'paraná': 'PR',
+  'pernambuco': 'PE',
   'piauí': 'PI', 'rio de janeiro': 'RJ', 'rio grande do norte': 'RN', 'rio grande do sul': 'RS',
   'rondônia': 'RO', 'roraima': 'RR', 'santa catarina': 'SC', 'são paulo': 'SP', 'sergipe': 'SE',
   'tocantins': 'TO',
@@ -216,6 +217,11 @@ export type SearchAddressOptions = {
   proximity?: { latitude: number; longitude: number } | null;
   /** Token de sessão Mapbox (agrupa suggest+retrieve para billing). */
   sessionToken?: string;
+  /**
+   * UF a priorizar na ordenação (ex.: `MA`). As viagens são intermunicipais, então
+   * sugestões do estado do usuário sobem para o topo. Não filtra outros estados.
+   */
+  preferRegionCode?: string | null;
 };
 
 /**
@@ -233,6 +239,8 @@ export type AddressSearchResult = {
   /** linha secundária: rua, bairro, cidade, UF */
   secondary?: string;
   city?: string;
+  /** UF do resultado (ex.: `MA`) — usada para priorizar o estado do usuário */
+  regionCode?: string;
   /** presente para resultados Search Box; usar em `retrieveAddressCoords` */
   mapboxId?: string;
   /** distância em metros a partir da localização atual (quando disponível) */
@@ -295,6 +303,63 @@ async function fetchCustomPlaceMatches(query: string): Promise<AddressSearchResu
   }
 }
 
+function stripAccents(s: string): string {
+  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+/** Mesma lista de `BR_STATE_UF`, com as chaves sem acento para casar com texto livre. */
+const UF_BY_STATE_NAME: Record<string, string> = Object.fromEntries(
+  Object.entries(BR_STATE_UF).map(([name, uf]) => [stripAccents(name), uf]),
+);
+const UF_CODES = new Set(Object.values(BR_STATE_UF));
+
+/**
+ * Extrai a UF de um endereço livre (ex.: "Viana, Maranhão" → MA;
+ * "Barreirinhas - MA, Brasil" → MA). Retorna null quando não identifica.
+ */
+export function regionCodeFromAddress(address: string | null | undefined): string | null {
+  const raw = String(address ?? '').trim();
+  if (!raw) return null;
+  const norm = stripAccents(raw).toLowerCase();
+
+  // Nome do estado por extenso (mais longos primeiro: "mato grosso do sul" antes de "mato grosso").
+  const names = Object.keys(UF_BY_STATE_NAME).sort((a, b) => b.length - a.length);
+  for (const name of names) {
+    if (new RegExp(`(^|[\\s,\\-])${name}([\\s,\\-]|$)`).test(norm)) return UF_BY_STATE_NAME[name]!;
+  }
+
+  // Sigla isolada (", MA," / " - MA").
+  const m = stripAccents(raw).toUpperCase().match(/(?:^|[\s,\-])([A-Z]{2})(?:[\s,\-]|$)/g);
+  if (m) {
+    for (const piece of m.reverse()) {
+      const uf = piece.replace(/[^A-Z]/g, '');
+      if (UF_CODES.has(uf)) return uf;
+    }
+  }
+  return null;
+}
+
+/**
+ * Sobe as sugestões do estado do usuário. Sort estável: dentro de cada grupo a ordem
+ * de relevância do Mapbox é preservada. Não remove nada de outros estados — só desce.
+ */
+function prioritizeRegion(
+  list: AddressSearchResult[],
+  preferRegionCode: string | null | undefined,
+): AddressSearchResult[] {
+  const uf = preferRegionCode?.trim().toUpperCase();
+  if (!uf) return list;
+  const rank = (r: AddressSearchResult): number => {
+    const own = r.regionCode?.trim().toUpperCase() || regionCodeFromAddress(r.secondary || r.address);
+    if (!own) return 1; // UF desconhecida fica no meio, antes de outros estados
+    return own === uf ? 0 : 2;
+  };
+  return list
+    .map((item, i) => ({ item, i, r: rank(item) }))
+    .sort((a, b) => (a.r !== b.r ? a.r - b.r : a.i - b.i))
+    .map((x) => x.item);
+}
+
 export async function searchAddress(
   query: string,
   opts?: SearchAddressOptions,
@@ -323,10 +388,13 @@ export async function searchAddress(
           mapboxId: s.mapboxId,
           ...(s.secondary ? { secondary: s.secondary } : {}),
           ...(s.city ? { city: s.city } : {}),
+          ...(s.regionCode ? { regionCode: s.regionCode } : {}),
           ...(s.distanceMeters != null ? { distanceMeters: s.distanceMeters } : {}),
         }));
   }
-  return dedupeResults([...custom, ...base]);
+  // Viagens são intermunicipais: sugestões do estado do usuário vêm primeiro.
+  // Pontos nomeados (custom_places) seguem no topo, antes da lista do Mapbox.
+  return prioritizeRegion(dedupeResults([...custom, ...base]), opts?.preferRegionCode);
 }
 
 /**
