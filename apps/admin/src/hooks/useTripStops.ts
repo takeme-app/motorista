@@ -85,13 +85,13 @@ function formatShipmentStopLabel(
 
 type BookingMapRow = {
   id: string;
+  user_id?: string | null;
   origin_address?: string | null;
   destination_address?: string | null;
   origin_lat?: unknown;
   origin_lng?: unknown;
   destination_lat?: unknown;
   destination_lng?: unknown;
-  profiles?: { full_name?: string | null } | null;
 };
 
 /** Espelha `buildStopsManually` / entidades em `trip_stops` (`entity_id` = booking.id). */
@@ -218,18 +218,36 @@ async function fetchSupplementalWaypointsForTrip(tripId: string, stops: TripStop
   const nextOrphan = () => orphanSeq++;
   const tasks: Promise<MapWaypoint | null>[] = [];
 
+  // `bookings.user_id` referencia `auth.users`, NÃO `profiles` — embutir
+  // `profiles(full_name)` fazia o PostgREST responder 400 (PGRST200) e, como o erro
+  // era ignorado, os marcadores de embarque/desembarque sumiam do mapa em silêncio.
+  // O nome vem de uma consulta separada, como no restante do painel.
   const { data: bookingRows, error: bookErr } = await supabase
     .from('bookings')
     .select(
-      'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, profiles(full_name)',
+      'id, user_id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng',
     )
     .eq('scheduled_trip_id', tripId)
     .not('status', 'eq', 'cancelled');
 
+  const nameByUserId: Record<string, string> = {};
+  if (!bookErr && bookingRows?.length) {
+    const userIds = [
+      ...new Set((bookingRows as BookingMapRow[]).map((b) => b.user_id).filter(Boolean)),
+    ] as string[];
+    if (userIds.length) {
+      const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', userIds);
+      (profs ?? []).forEach((p) => {
+        const row = p as { id?: string; full_name?: string | null };
+        if (row.id) nameByUserId[row.id] = (row.full_name ?? '').trim();
+      });
+    }
+  }
+
   if (!bookErr && bookingRows?.length) {
     for (const b of bookingRows as BookingMapRow[]) {
       const bid = b.id;
-      const name = b.profiles?.full_name?.trim() || 'Passageiro';
+      const name = (b.user_id ? nameByUserId[b.user_id] : '') || 'Passageiro';
       if (!passengerLegRenderableInStops(stops, bid, 'pickup')) {
         const sortP = sequenceOrderForBookingLeg(stops, bid, 'pickup') ?? nextOrphan();
         tasks.push(
