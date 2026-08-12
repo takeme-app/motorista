@@ -696,6 +696,8 @@ export async function fetchBookingDetailForAdmin(
     passenger_count, bags_count, passenger_data, amount_cents, scheduled_trip_id, pickup_code,
     stripe_payment_intent_id,
     payment_method, platform_fee_extra_debit_cents, admin_earning_cents,
+    cancelled_at, cancelled_by, cancellation_reason, cancellation_policy_applied,
+    refund_amount_cents, refunded_at,
     scheduled_trips ( id, departure_at, arrival_at, driver_id, status, seats_available, bags_available, trunk_occupancy_pct, driver_journey_started_at )
   `;
   let { data: b, error } = await supabase.from('bookings').select(sel).eq('id', bookingOrTripId).maybeSingle();
@@ -835,6 +837,22 @@ export async function fetchBookingDetailForAdmin(
     seatsAvailable,
     bagsAvailable,
     bookingCreatedAtIso: createdRaw ? new Date(createdRaw).toISOString() : null,
+    cancelledAtIso: row.cancelled_at ? new Date(row.cancelled_at as string).toISOString() : null,
+    cancelledBy: row.cancelled_by != null && String(row.cancelled_by).trim() ? String(row.cancelled_by) : null,
+    cancellationReason:
+      row.cancellation_reason != null && String(row.cancellation_reason).trim()
+        ? String(row.cancellation_reason)
+        : null,
+    refundAmountCents:
+      row.refund_amount_cents != null && Number.isFinite(Number(row.refund_amount_cents))
+        ? Math.round(Number(row.refund_amount_cents))
+        : null,
+    refundedAtIso: row.refunded_at ? new Date(row.refunded_at as string).toISOString() : null,
+    policyWillRefund: (() => {
+      const raw = (row.cancellation_policy_applied as { will_refund?: unknown } | null)?.will_refund;
+      if (raw == null) return null;
+      return raw === true || String(raw).toLowerCase() === 'true';
+    })(),
     supportConversationId,
     pickupCode:
       row.pickup_code != null && String(row.pickup_code).trim()
