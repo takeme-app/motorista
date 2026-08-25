@@ -1,5 +1,6 @@
 {
   "expo": {
+    "owner": "takemeapps-team",
     "name": "Take Me - Cliente",
     "slug": "take-me-cliente",
     "scheme": "take-me-cliente",
@@ -19,7 +20,7 @@
       "supportsTablet": true
     },
     "android": {
-      "package": "com.takeme.cliente",
+      "package": "com.takemeapp.cliente",
       "softwareKeyboardLayoutMode": "pan",
       "googleServicesFile": "./google-services-cliente.json",
       "adaptiveIcon": {
@@ -38,7 +39,9 @@
       "bundler": "metro"
     },
     "extra": {
-      "eas": {}
+      "eas": {
+        "projectId": "494a3ce5-d6e4-4cc6-b193-07f045fcd05d"
+      }
     },
     "experiments": {
       "autolinkingModuleResolution": true
@@ -90,6 +93,9 @@
       "@react-native-community/datetimepicker",
       "expo-apple-authentication"
     ],
-    "runtimeVersion": "1.0.0"
+    "runtimeVersion": "1.0.0",
+    "updates": {
+      "url": "https://u.expo.dev/494a3ce5-d6e4-4cc6-b193-07f045fcd05d"
+    }
   }
 }

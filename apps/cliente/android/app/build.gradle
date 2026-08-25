@@ -89,7 +89,7 @@ android {
 
     namespace 'com.takeme.cliente'
     defaultConfig {
-        applicationId 'com.takeme.cliente'
+        applicationId 'com.takemeapp.cliente'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 10

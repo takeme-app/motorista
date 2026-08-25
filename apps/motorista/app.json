@@ -1,5 +1,6 @@
 {
   "expo": {
+    "owner": "takemeapps-team",
     "name": "Take Me - Motorista",
     "newArchEnabled": true,
     "slug": "take-me-motorista",
@@ -20,7 +21,7 @@
       "supportsTablet": true
     },
     "android": {
-      "package": "com.takeme.motorista",
+      "package": "com.takemeapp.motorista",
       "softwareKeyboardLayoutMode": "pan",
       "googleServicesFile": "./google-services-motorista.json",
       "adaptiveIcon": {
@@ -39,7 +40,9 @@
       "bundler": "metro"
     },
     "extra": {
-      "eas": {}
+      "eas": {
+        "projectId": "2646751e-6908-4b9c-9bf8-5cf571e92ecf"
+      }
     },
     "plugins": [
       [
