@@ -92,6 +92,10 @@
         }
       ],
       "expo-apple-authentication"
-    ]
+    ],
+    "runtimeVersion": "1.0.0",
+    "updates": {
+      "url": "https://u.expo.dev/2646751e-6908-4b9c-9bf8-5cf571e92ecf"
+    }
   }
 }
