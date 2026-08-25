@@ -2,7 +2,6 @@
   "expo": {
     "name": "Take Me - Cliente",
     "slug": "take-me-cliente",
-    "owner": "fraktal-softwares",
     "scheme": "take-me-cliente",
     "version": "1.0.2",
     "icon": "./assets/logo.png",
@@ -20,7 +19,7 @@
       "supportsTablet": true
     },
     "android": {
-      "package": "com.takemeapp.cliente",
+      "package": "com.takeme.cliente",
       "softwareKeyboardLayoutMode": "pan",
       "googleServicesFile": "./google-services-cliente.json",
       "adaptiveIcon": {
@@ -39,9 +38,7 @@
       "bundler": "metro"
     },
     "extra": {
-      "eas": {
-        "projectId": "d68908f6-df27-457e-86f0-fa952777a0b6"
-      }
+      "eas": {}
     },
     "experiments": {
       "autolinkingModuleResolution": true
@@ -93,9 +90,6 @@
       "@react-native-community/datetimepicker",
       "expo-apple-authentication"
     ],
-    "runtimeVersion": "1.0.0",
-    "updates": {
-      "url": "https://u.expo.dev/d68908f6-df27-457e-86f0-fa952777a0b6"
-    }
+    "runtimeVersion": "1.0.0"
   }
 }

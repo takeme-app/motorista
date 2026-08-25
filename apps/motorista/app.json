@@ -3,7 +3,6 @@
     "name": "Take Me - Motorista",
     "newArchEnabled": true,
     "slug": "take-me-motorista",
-    "owner": "viniciusbsilva",
     "scheme": "take-me-motorista",
     "version": "1.0.2",
     "icon": "./assets/logo.png",
@@ -21,7 +20,7 @@
       "supportsTablet": true
     },
     "android": {
-      "package": "com.takemeapp.motorista",
+      "package": "com.takeme.motorista",
       "softwareKeyboardLayoutMode": "pan",
       "googleServicesFile": "./google-services-motorista.json",
       "adaptiveIcon": {
@@ -40,9 +39,7 @@
       "bundler": "metro"
     },
     "extra": {
-      "eas": {
-        "projectId": "6cd990d2-9b66-4dd6-88d7-54eb5dffa103"
-      }
+      "eas": {}
     },
     "plugins": [
       [

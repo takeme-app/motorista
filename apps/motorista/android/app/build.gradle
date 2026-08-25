@@ -89,7 +89,7 @@ android {
 
     namespace 'com.takeme.motorista'
     defaultConfig {
-        applicationId 'com.takemeapp.motorista'
+        applicationId 'com.takeme.motorista'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 10
