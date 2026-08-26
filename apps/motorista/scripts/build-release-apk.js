@@ -10,6 +10,10 @@ const path = require('path');
 const fs = require('fs');
 const { spawnSync } = require('child_process');
 const { trySetJavaHomeFromAndroidStudio, candidateJavaHomes } = require('./resolve-java-home');
+const { loadEnv } = require('./load-env');
+
+// Carrega variáveis do .env da raiz (ex: MAPBOX_DOWNLOADS_TOKEN)
+loadEnv();
 
 const appDir = path.resolve(__dirname, '..');
 const androidDir = path.join(appDir, 'android');
