@@ -3,6 +3,7 @@ import { NavigationContainer, type NavigationContainerRef } from '@react-navigat
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AuthRecoveryHandler } from './AuthRecoveryHandler';
 import { NotificationDeeplinkHandler } from './NotificationDeeplinkHandler';
+import { usePendingPixChargeResume } from '../hooks/usePendingPixChargeResume';
 import { RootNavigationProvider } from './RootNavigationContext';
 import { SplashScreen } from '../screens/SplashScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
@@ -35,6 +36,10 @@ type RootNavigatorProps = {
 
 export function RootNavigator({ initialRouteName }: RootNavigatorProps) {
   const navigationRef = useRef<NavigationContainerRef<RootStackParamList>>(null);
+
+  // Retomada de cobrança Pix real pendente (cold start + foreground) —
+  // montado junto ao NotificationDeeplinkHandler, mesma referência de navegação.
+  usePendingPixChargeResume(navigationRef);
 
   return (
     <NavigationContainer ref={navigationRef}>

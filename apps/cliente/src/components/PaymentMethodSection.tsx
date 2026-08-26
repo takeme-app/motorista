@@ -45,6 +45,11 @@ export type PaymentMethodSectionProps = {
   connectCashOnlyContext?: 'trip' | 'dependent_shipment';
   /** Instrução do bloco "Dinheiro" por fluxo (default: viagem). */
   cashInstructionVariant?: 'trip' | 'shipment' | 'dependent_shipment' | 'excursion';
+  /**
+   * Pix real (provedor exige CPF) e o perfil não tem um válido: exibe campo de
+   * CPF inline no bloco Pix e envia `holderCpfDigits` no confirm.
+   */
+  pixCpfRequired?: boolean;
 };
 
 type SavedCardRow = {
@@ -116,6 +121,7 @@ export function PaymentMethodSection({
   allowedMethods,
   connectCashOnlyContext = 'trip',
   cashInstructionVariant = 'trip',
+  pixCpfRequired = false,
 }: PaymentMethodSectionProps) {
   const isFocused = useIsFocused();
   const { createPaymentMethod } = useStripe();
@@ -281,8 +287,17 @@ export function PaymentMethodSection({
   }, [selectedMethod, cardName, cardComplete, cpfCnpj, createPaymentMethod, onConfirmPayment, showAlert]);
 
   const handleConfirmPix = useCallback(() => {
+    if (pixCpfRequired) {
+      const cpfDigits = onlyDigits(cpfCnpj);
+      if (!validateCpf(cpfDigits)) {
+        showAlert('CPF inválido', 'O CPF informado não é válido. Verifique e tente novamente.');
+        return;
+      }
+      onConfirmPayment({ method: 'pix', holderCpfDigits: cpfDigits });
+      return;
+    }
     onConfirmPayment({ method: 'pix' });
-  }, [onConfirmPayment]);
+  }, [onConfirmPayment, pixCpfRequired, cpfCnpj, showAlert]);
 
   const handleConfirmDinheiro = useCallback(() => {
     onConfirmPayment({ method: 'dinheiro' });
@@ -496,10 +511,28 @@ export function PaymentMethodSection({
               <Text style={styles.pixIntro}>
                 Ao confirmar, abriremos a tela do Pix Take Me com o QR e o código para você pagar no app do seu banco.
               </Text>
+              {pixCpfRequired ? (
+                <>
+                  <Text style={styles.formLabelSmall}>CPF do pagador (obrigatório para gerar o Pix)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="000.000.000-00"
+                    placeholderTextColor={COLORS.neutral700}
+                    value={cpfCnpj}
+                    onChangeText={handleCpfChange}
+                    keyboardType="number-pad"
+                    maxLength={14}
+                  />
+                </>
+              ) : null}
               <TouchableOpacity
-                style={[styles.confirmButton, loading && styles.confirmButtonDisabled]}
+                style={[
+                  styles.confirmButton,
+                  (loading || (pixCpfRequired && !validateCpf(onlyDigits(cpfCnpj)))) &&
+                    styles.confirmButtonDisabled,
+                ]}
                 onPress={handleConfirmPix}
-                disabled={loading}
+                disabled={loading || (pixCpfRequired && !validateCpf(onlyDigits(cpfCnpj)))}
                 activeOpacity={0.8}
               >
                 <Text style={styles.confirmButtonText}>{confirmLabel}</Text>
