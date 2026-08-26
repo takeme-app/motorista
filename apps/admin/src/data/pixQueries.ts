@@ -351,13 +351,28 @@ export async function fetchProfileNames(ids: string[]): Promise<Record<string, s
  * (barato). Com `ping`: chamada real de credencial no provedor.
  */
 export async function fetchPixProviderHealth(ping?: boolean): Promise<PixProviderHealthResult> {
-  const { data, error } = await invokeEdgeFunction<{ providers?: Record<string, PixProviderHealthEntry> }>(
+  type RawEntry = {
+    configured?: boolean;
+    ok?: boolean;
+    detail?: string;
+    // A edge function aninha o resultado do ping: { ping: { ok, detail } }.
+    ping?: { ok?: boolean; detail?: string };
+  };
+  const { data, error } = await invokeEdgeFunction<{ providers?: Record<string, RawEntry> }>(
     'pix-provider-health',
     'GET',
     ping ? { ping: '1' } : undefined,
   );
   if (error || !data) return { providers: {}, error: error || 'Sem resposta' };
-  return { providers: data.providers || {}, error: null };
+  const providers: Record<string, PixProviderHealthEntry> = {};
+  for (const [name, raw] of Object.entries(data.providers || {})) {
+    providers[name] = {
+      configured: Boolean(raw?.configured),
+      ok: raw?.ping ? raw.ping.ok : raw?.ok,
+      detail: raw?.ping ? raw.ping.detail : raw?.detail,
+    };
+  }
+  return { providers, error: null };
 }
 
 // ── pix_charges ──────────────────────────────────────────────────────────
