@@ -43,6 +43,8 @@ export type PaymentMethodSectionProps = {
   allowedMethods?: PaymentMethodType[];
   /** Texto do aviso quando só dinheiro por falta de Stripe Connect (default: viagem). */
   connectCashOnlyContext?: 'trip' | 'dependent_shipment';
+  /** Instrução do bloco "Dinheiro" por fluxo (default: viagem). */
+  cashInstructionVariant?: 'trip' | 'shipment' | 'dependent_shipment' | 'excursion';
 };
 
 type SavedCardRow = {
@@ -59,6 +61,21 @@ const PAYMENT_OPTIONS: { type: PaymentMethodType; label: string; icon: keyof typ
   { type: 'pix', label: 'Pix', icon: 'qr-code-2' },
   { type: 'dinheiro', label: 'Dinheiro', icon: 'payments' },
 ];
+
+/** Instrução do pagamento em dinheiro, adequada a cada fluxo. */
+function getCashInstruction(variant: NonNullable<PaymentMethodSectionProps['cashInstructionVariant']>): string {
+  switch (variant) {
+    case 'shipment':
+      return 'O pagamento em dinheiro deve ser feito ao motorista na coleta ou na entrega da encomenda, conforme combinado — o valor total abaixo (incluindo taxa da plataforma) é o que você entrega em mãos.';
+    case 'dependent_shipment':
+      return 'O pagamento em dinheiro deve ser feito ao motorista no embarque do passageiro — o valor total abaixo (incluindo taxa da plataforma) é o que você entrega em mãos.';
+    case 'excursion':
+      return 'O pagamento em dinheiro deve ser feito em mãos ao motorista responsável pela excursão — o valor total abaixo (incluindo taxa da plataforma) é o que você entrega.';
+    case 'trip':
+    default:
+      return 'O pagamento em dinheiro deve ser feito ao motorista quando você chegar ao destino final — o valor total abaixo (incluindo taxa da plataforma) é o que você entrega em mãos.';
+  }
+}
 
 function getCancellationPolicyLines(
   variant: CancellationPolicyVariant,
@@ -98,6 +115,7 @@ export function PaymentMethodSection({
   loading = false,
   allowedMethods,
   connectCashOnlyContext = 'trip',
+  cashInstructionVariant = 'trip',
 }: PaymentMethodSectionProps) {
   const isFocused = useIsFocused();
   const { createPaymentMethod } = useStripe();
@@ -491,10 +509,7 @@ export function PaymentMethodSection({
 
           {selectedMethod === opt.type && opt.type === 'dinheiro' && (
             <View style={styles.expanded}>
-              <Text style={styles.dinheiroText}>
-                O pagamento em dinheiro deve ser feito ao motorista quando você chegar ao destino final — o valor
-                total abaixo (incluindo taxa da plataforma) é o que você entrega em mãos.
-              </Text>
+              <Text style={styles.dinheiroText}>{getCashInstruction(cashInstructionVariant)}</Text>
               <Text style={styles.dinheiroText}>
                 Você receberá o comprovante digital assim que o pagamento for registrado no sistema.
               </Text>

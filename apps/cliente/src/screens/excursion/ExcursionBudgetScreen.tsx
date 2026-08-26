@@ -616,7 +616,8 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
             confirmLabel="Pagar orçamento"
             cancellationPolicyVariant="trip"
             loading={savingPayment}
-            allowedMethods={['credito', 'debito', 'pix']}
+            allowedMethods={['credito', 'debito', 'pix', 'dinheiro']}
+            cashInstructionVariant="excursion"
           />
         ) : null}
       </ScrollView>
