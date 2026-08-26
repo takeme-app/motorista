@@ -1,21 +1,29 @@
 {
-  "cli": { "version": ">= 12.0.0" },
+  "cli": {
+    "version": ">= 12.0.0"
+  },
   "build": {
     "development": {
       "developmentClient": true,
       "distribution": "internal",
       "environment": "development",
-      "android": { "buildType": "apk" }
+      "android": {
+        "buildType": "apk"
+      }
     },
     "preview": {
       "distribution": "internal",
       "environment": "preview",
-      "android": { "buildType": "apk" },
+      "android": {
+        "buildType": "apk"
+      },
       "channel": "preview"
     },
     "production": {
       "environment": "production",
-      "android": { "buildType": "app-bundle" },
+      "android": {
+        "buildType": "app-bundle"
+      },
       "channel": "production"
     }
   },
@@ -26,7 +34,9 @@
         "ascApiKeyId": "U49SM04QHFOL",
         "ascApiKeyIssuerId": "e0e07eb6-dbbb-4cd2-8068-0a79da299bdb"
       },
-      "android": { "serviceAccountKeyPath": "./google-service-account.json" }
+      "android": {
+        "serviceAccountKeyPath": "./google-service-account.json"
+      }
     }
   }
 }
