@@ -382,8 +382,11 @@ Deno.serve(async (req) => {
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       console.error("[create-pix-charge] provedor falhou:", reason);
-      await markChargeCreateFailed(admin, chargeId, reason);
-      // Cancela o booking (vaga devolvida pelo trigger de capacidade).
+      // ORDEM IMPORTA: cancela o booking ANTES de marcar a charge como
+      // create_failed. Se a function morrer/falhar entre os dois writes, a
+      // charge continua 'pending' e o cron expire-pix-charges resgata (cancela
+      // o booking e devolve a vaga). Na ordem inversa, um crash deixaria o
+      // booking 'pending' segurando assento com a charge já fora da varredura.
       // cancellation_reason 'pix_create_failed' é gateado: zero notificações.
       const cancelIso = new Date().toISOString();
       const { error: cancelErr } = await admin
@@ -398,6 +401,7 @@ Deno.serve(async (req) => {
         .eq("id", bookingId)
         .eq("status", "pending");
       if (cancelErr) console.error("[create-pix-charge] cancel booking:", cancelErr.message);
+      await markChargeCreateFailed(admin, chargeId, reason);
       return jsonRes({ error: "Provedor Pix indisponível no momento. Tente novamente." }, 502);
     }
 

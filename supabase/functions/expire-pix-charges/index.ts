@@ -136,8 +136,39 @@ Deno.serve(async (req) => {
       });
     }
 
-    const result = { settled_last_second: 0, expired: 0 };
+    const result = { settled_last_second: 0, expired: 0, create_failed_rescued: 0 };
     const errors: string[] = [];
+
+    // Resgate: charge 'create_failed' cujo booking ficou 'pending' (o cancel do
+    // create-pix-charge falhou transitoriamente). Sem esta varredura, o assento
+    // ficaria retido até a viagem — a charge não entra na query principal
+    // (status != 'pending') nem no reconcile (sem provider_charge_id).
+    try {
+      const { data: failedRows } = await admin
+        .from("pix_charges")
+        .select("id, entity_type, entity_id")
+        .eq("status", "create_failed")
+        .eq("entity_type", "booking")
+        .gt("created_at", new Date(Date.now() - 48 * 3600_000).toISOString())
+        .limit(50);
+      for (const fr of (failedRows ?? []) as { id: string; entity_type: string; entity_id: string }[]) {
+        const { data: cancelled } = await admin
+          .from("bookings")
+          .update({
+            status: "cancelled",
+            cancelled_by: "system",
+            cancelled_at: nowIso,
+            cancellation_reason: "pix_create_failed",
+            updated_at: nowIso,
+          } as never)
+          .eq("id", fr.entity_id)
+          .eq("status", "pending")
+          .select("id");
+        if (Array.isArray(cancelled) && cancelled.length > 0) result.create_failed_rescued++;
+      }
+    } catch (e) {
+      errors.push(`create_failed sweep: ${e instanceof Error ? e.message : String(e)}`);
+    }
 
     for (const row of (data ?? []) as unknown as PixChargeRow[]) {
       try {

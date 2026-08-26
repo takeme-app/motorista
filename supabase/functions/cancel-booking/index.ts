@@ -248,43 +248,49 @@ Deno.serve(async (req) => {
 
     // Pix real pago + dentro da janela: enfileira devolução manual.
     // (Fora da janela segue a regra de sempre: cancela sem devolução.)
-    let pixRefundQueued = false;
-    if (insideWindow && wasPixPaid) {
-      const amountCents = Math.max(0, Math.floor(Number(booking.amount_cents ?? 0)));
+    const queuePixRefundManual = async (b: {
+      pix_charge_id: string | null;
+      user_id: string;
+      amount_cents: number | null;
+    }): Promise<boolean> => {
+      const amountCents = Math.max(0, Math.floor(Number(b.amount_cents ?? 0)));
       try {
         // Dedup: não duplica pendência da mesma cobrança+motivo.
         let alreadyQueued = false;
-        if (booking.pix_charge_id) {
+        if (b.pix_charge_id) {
           const { data: existing } = await admin
             .from("pix_refunds_pending")
             .select("id")
-            .eq("pix_charge_id", booking.pix_charge_id)
+            .eq("pix_charge_id", b.pix_charge_id)
             .eq("reason", "user_cancelled_in_window")
             .eq("status", "pending")
             .limit(1);
           alreadyQueued = Array.isArray(existing) && existing.length > 0;
         }
-        if (!alreadyQueued) {
-          const { error: queueErr } = await admin.from("pix_refunds_pending").insert({
-            pix_charge_id: booking.pix_charge_id ?? null,
-            entity_type: "booking",
-            entity_id: bookingId,
-            user_id: booking.user_id,
-            amount_cents: amountCents,
-            reason: "user_cancelled_in_window",
-            notes: "passageiro cancelou dentro da janela gratuita (pagamento Pix real)",
-          } as never);
-          if (queueErr) {
-            console.error("[cancel-booking] fila de devolução pix:", queueErr.message);
-          } else {
-            pixRefundQueued = true;
-          }
-        } else {
-          pixRefundQueued = true;
+        if (alreadyQueued) return true;
+        const { error: queueErr } = await admin.from("pix_refunds_pending").insert({
+          pix_charge_id: b.pix_charge_id ?? null,
+          entity_type: "booking",
+          entity_id: bookingId,
+          user_id: b.user_id,
+          amount_cents: amountCents,
+          reason: "user_cancelled_in_window",
+          notes: "passageiro cancelou dentro da janela gratuita (pagamento Pix real)",
+        } as never);
+        if (queueErr) {
+          console.error("[cancel-booking] fila de devolução pix:", queueErr.message);
+          return false;
         }
+        return true;
       } catch (e) {
         console.error("[cancel-booking] fila de devolução pix:", e);
+        return false;
       }
+    };
+
+    let pixRefundQueued = false;
+    if (insideWindow && wasPixPaid) {
+      pixRefundQueued = await queuePixRefundManual(booking);
       (policySnapshot as Record<string, unknown>).pix_refund_queued = pixRefundQueued;
     }
 
@@ -299,13 +305,63 @@ Deno.serve(async (req) => {
       updated_at: nowIso,
     };
 
-    const { error: updErr } = await admin
+    // Guard de corrida: o status pode ter mudado desde a leitura lá em cima
+    // (ex.: o webhook Pix liquidando pending→paid enquanto o usuário cancela).
+    // Só cancela sobre o status que fundamentou a decisão; 0 linhas ⇒ re-lê e
+    // re-decide — sem isso, um paid→cancelled forçado deixaria dinheiro retido
+    // sem linha na fila de devolução. Quando process-refund já rodou, ele
+    // próprio setou 'cancelled', então é esse o status esperado aqui.
+    const expectedStatus = refunded ? "cancelled" : booking.status;
+    const { data: updRows, error: updErr } = await admin
       .from("bookings")
       .update(updatePayload as never)
-      .eq("id", bookingId);
+      .eq("id", bookingId)
+      .eq("status", expectedStatus)
+      .select("id");
 
     if (updErr) {
       console.error("[cancel-booking] update booking error:", updErr.message);
+    } else if (!updRows || updRows.length === 0) {
+      const { data: freshRaw } = await admin
+        .from("bookings")
+        .select("id, user_id, status, amount_cents, stripe_payment_intent_id, pix_charge_id, pix_paid_at")
+        .eq("id", bookingId)
+        .maybeSingle();
+      const fresh = freshRaw as unknown as {
+        user_id: string;
+        status: string;
+        amount_cents: number | null;
+        stripe_payment_intent_id: string | null;
+        pix_charge_id: string | null;
+        pix_paid_at: string | null;
+      } | null;
+      const freshPixPaid =
+        fresh != null &&
+        (fresh.status === "paid" || fresh.status === "confirmed") &&
+        !fresh.stripe_payment_intent_id &&
+        Boolean(fresh.pix_paid_at) &&
+        Math.floor(Number(fresh.amount_cents ?? 0)) > 0;
+      if (fresh && freshPixPaid) {
+        // Pagamento Pix liquidou no meio do cancelamento: enfileira a devolução
+        // (na janela) ANTES de cancelar de novo, agora sobre o status real.
+        if (insideWindow) {
+          pixRefundQueued = await queuePixRefundManual(fresh);
+          (policySnapshot as Record<string, unknown>).pix_refund_queued = pixRefundQueued;
+          (updatePayload as Record<string, unknown>).cancellation_policy_applied = policySnapshot;
+        }
+        const { error: retryErr } = await admin
+          .from("bookings")
+          .update(updatePayload as never)
+          .eq("id", bookingId)
+          .eq("status", fresh.status);
+        if (retryErr) {
+          console.error("[cancel-booking] update booking (retry pós-corrida):", retryErr.message);
+        }
+      } else if (fresh && fresh.status !== "cancelled" && fresh.status !== booking.status) {
+        console.error(
+          `[cancel-booking] status mudou durante o cancelamento (${booking.status} → ${fresh.status}); cancelamento não aplicado`,
+        );
+      }
     }
 
     // Cancela payout pendente (caso não-Stripe tenha sido criado e refund não rodou).

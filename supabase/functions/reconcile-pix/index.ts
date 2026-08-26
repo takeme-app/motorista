@@ -7,6 +7,7 @@ import {
   type PixChargeRow,
   queuePixRefund,
   refreshAndSettlePixCharge,
+  settlePixCharge,
 } from "../_shared/pixProviders/settle.ts";
 
 const corsHeaders = {
@@ -116,6 +117,7 @@ Deno.serve(async (req) => {
       corrected: 0,
       mismatches: 0,
       orphans_found: 0,
+      divergences: 0,
       skipped_env: 0,
     };
     const errors: string[] = [];
@@ -160,21 +162,37 @@ Deno.serve(async (req) => {
         }
         for (const payment of payments) {
           try {
-            const { data: byPid } = await admin
-              .from("pix_charges")
-              .select("id")
-              .eq("provider", "asaas")
-              .eq("provider_charge_id", payment.providerChargeId)
-              .maybeSingle();
-            if (byPid) continue;
-
-            if (payment.externalReference) {
+            // Casou com uma charge nossa (por pid ou por externalReference)?
+            // NÃO basta `continue`: a direção 1 só varre charges 'pending' com
+            // provider_charge_id — um pagamento de charge já expirada (webhook
+            // perdido + provedor fora do ar na hora do expire) ou de charge sem
+            // pid gravado (falha no UPDATE do QR) ficaria invisível para sempre.
+            // Liquida pelo MESMO settlePixCharge: pending vira paid; terminal
+            // vira paid_orphan + fila paid_after_expiry.
+            let matched: PixChargeRow | null = null;
+            {
+              const { data: byPid } = await admin
+                .from("pix_charges")
+                .select(PIX_CHARGE_ROW_COLUMNS)
+                .eq("provider", "asaas")
+                .eq("provider_charge_id", payment.providerChargeId)
+                .maybeSingle();
+              matched = (byPid as PixChargeRow | null) ?? null;
+            }
+            if (!matched && payment.externalReference) {
               const { data: byRef } = await admin
                 .from("pix_charges")
-                .select("id")
+                .select(PIX_CHARGE_ROW_COLUMNS)
                 .eq("id", payment.externalReference)
                 .maybeSingle();
-              if (byRef) continue;
+              matched = (byRef as PixChargeRow | null) ?? null;
+            }
+            if (matched) {
+              if (matched.status !== "paid" && matched.status !== "amount_mismatch" && matched.status !== "paid_orphan") {
+                const settleResult = await settlePixCharge(admin, matched, payment);
+                if (settleResult !== "duplicate") result.divergences++;
+              }
+              continue;
             }
 
             // Sem par no banco: fila de devolução (dedup pelo marcador no notes).
@@ -205,7 +223,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    const divergences = result.corrected + result.mismatches + result.orphans_found;
+    const divergences = result.corrected + result.mismatches + result.orphans_found + result.divergences;
     if (divergences > 0) {
       await notifyAdmins(
         admin,

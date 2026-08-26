@@ -59,7 +59,7 @@ import { displayCpf, onlyDigits, validateCpf } from '../../utils/formatCpf';
 import { bookingTotalPassengers, maxBagsForTrip } from '../../lib/tripCapacityLimits';
 import { fetchDriverStripeChargesEnabled } from '../../lib/driverStripeConnect';
 import { fetchPlatformFeePctForService } from '../../lib/platformFees';
-import { fetchPixProviderMode, type PixProviderMode } from '../../lib/pixProviderConfig';
+import { fetchPixProviderMode, invalidatePixProviderModeCache, type PixProviderMode } from '../../lib/pixProviderConfig';
 
 const supabasePublicUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 
@@ -686,6 +686,11 @@ export function CheckoutScreen({ navigation, route }: Props) {
           // INALTERADO; provedor real navega para a PixPaymentScreen SEM inserir
           // booking (o create-pix-charge insere pending no servidor e segura a vaga).
           const pixMode = await fetchPixProviderMode();
+          // Sincroniza o estado da tela: se a montagem leu 'palliative' (timeout/
+          // flag trocada depois) e agora o modo real vale, o campo de CPF do
+          // bloco Pix passa a ser exibido — sem isso o usuário ficava num loop
+          // sem saída: confirmar → 422 cpf_required → voltar → campo ainda oculto.
+          setPixProviderMode(pixMode);
           if (pixMode !== 'palliative') {
             const collectedCpf = onlyDigits(params.holderCpfDigits ?? '');
             const profileCpf = onlyDigits(primaryPassenger?.cpf ?? '');
@@ -694,6 +699,16 @@ export function CheckoutScreen({ navigation, route }: Props) {
               : validateCpf(profileCpf)
                 ? profileCpf
                 : undefined;
+            if (!cpfForCharge) {
+              // Não navega sem CPF: o create-pix-charge devolveria 422 e o
+              // usuário voltaria para cá de qualquer forma. Com o estado já
+              // sincronizado acima, o campo de CPF agora está visível.
+              showAlert(
+                'CPF necessário',
+                'O pagamento por Pix exige CPF. Informe seu CPF no campo que apareceu na opção Pix e confirme novamente.',
+              );
+              return;
+            }
             if (validateCpf(collectedCpf) && collectedCpf !== profileCpf) {
               // Persiste o CPF novo no perfil (mesmo update do EditCpfScreen) —
               // best-effort: o CPF também segue no corpo da criação da cobrança.
@@ -777,7 +792,15 @@ export function CheckoutScreen({ navigation, route }: Props) {
                 .insert(pixInsertRow)
                 .select('id')
                 .single();
-              if (pixErr) throw pixErr;
+              if (pixErr) {
+                // Guard do servidor: o provedor real foi ativado (ex.: chegamos
+                // aqui por timeout na leitura da flag). Invalida o cache para o
+                // próximo confirmar reler a flag e seguir pelo fluxo real.
+                if (String(pixErr.message ?? '').includes('pix_provider_not_active')) {
+                  invalidatePixProviderModeCache();
+                }
+                throw pixErr;
+              }
               pixBookingId =
                 pixRow && typeof pixRow === 'object' && 'id' in pixRow
                   ? String((pixRow as { id: string }).id)

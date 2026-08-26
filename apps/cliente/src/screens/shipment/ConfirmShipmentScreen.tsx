@@ -412,13 +412,21 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
           if (chargeFnError) {
             const raw = await describeInvokeFailure(chargeData, chargeFnError);
             const chargeErrMsg = getUserErrorMessage({ message: raw }, raw);
-            await supabase
+            // Guard: timeout de rede pode chegar aqui DEPOIS de a edge ter
+            // confirmado o PaymentIntent. Só cancela sem pagamento registrado —
+            // senão cancelaríamos um pedido JÁ COBRADO sem disparar estorno.
+            const { data: cancelledRows } = await supabase
               .from('shipments')
               .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
-              .eq('id', shipmentId);
+              .eq('id', shipmentId)
+              .is('stripe_payment_intent_id', null)
+              .select('id');
+            const wasCancelled = Array.isArray(cancelledRows) && cancelledRows.length > 0;
             showAlert(
               'Pagamento',
-              chargeErrMsg || 'Não foi possível confirmar o pagamento; o pedido foi cancelado.',
+              wasCancelled
+                ? chargeErrMsg || 'Não foi possível confirmar o pagamento; o pedido foi cancelado.'
+                : 'Não foi possível confirmar o resultado do pagamento, mas ele pode ter sido aprovado. Verifique em Atividades ou fale com o suporte antes de tentar de novo.',
             );
             return;
           }

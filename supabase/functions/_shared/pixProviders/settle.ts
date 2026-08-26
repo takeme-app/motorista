@@ -79,6 +79,22 @@ export async function queuePixRefund(
       .eq("status", "pending")
       .limit(1);
     if (Array.isArray(existing) && existing.length > 0) return;
+  } else {
+    // Órfão (sem pix_charge_id): dedup pelo marcador "<provider> payment <id>"
+    // que os chamadores gravam no notes — sem isso, PAYMENT_CONFIRMED e
+    // PAYMENT_RECEIVED do MESMO pagamento (event_ids distintos, ambos 'paid')
+    // gerariam duas pendências e o admin poderia devolver em dobro.
+    const marker = /\b\w+ payment \S+/.exec(row.notes ?? "")?.[0] ?? null;
+    if (marker) {
+      const { data: existing } = await admin
+        .from("pix_refunds_pending")
+        .select("id")
+        .like("notes", `%${marker}%`)
+        .eq("reason", row.reason)
+        .eq("status", "pending")
+        .limit(1);
+      if (Array.isArray(existing) && existing.length > 0) return;
+    }
   }
   const { error } = await admin.from("pix_refunds_pending").insert({
     pix_charge_id: row.pix_charge_id,
