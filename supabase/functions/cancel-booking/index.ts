@@ -90,6 +90,8 @@ Deno.serve(async (req) => {
       status: string;
       amount_cents: number | null;
       stripe_payment_intent_id: string | null;
+      pix_charge_id: string | null;
+      pix_paid_at: string | null;
       scheduled_trip_id: string;
       scheduled_trips:
         | { departure_at: string | null; status: string | null }
@@ -99,7 +101,7 @@ Deno.serve(async (req) => {
     const { data: bookingRaw, error: bookingErr } = await admin
       .from("bookings")
       .select(
-        "id, user_id, status, amount_cents, stripe_payment_intent_id, scheduled_trip_id, scheduled_trips:scheduled_trip_id(departure_at, status)"
+        "id, user_id, status, amount_cents, stripe_payment_intent_id, pix_charge_id, pix_paid_at, scheduled_trip_id, scheduled_trips:scheduled_trip_id(departure_at, status)"
       )
       .eq("id", bookingId)
       .maybeSingle();
@@ -182,6 +184,15 @@ Deno.serve(async (req) => {
       Boolean(booking.stripe_payment_intent_id) &&
       Math.floor(Number(booking.amount_cents ?? 0)) > 0;
 
+    // Pix real: pago via pix_charges (sem PaymentIntent). Estorno automático
+    // está fora do escopo — dentro da janela, o cancelamento entra na fila de
+    // devolução MANUAL (pix_refunds_pending) para o admin devolver por fora.
+    const wasPixPaid =
+      (booking.status === "paid" || booking.status === "confirmed") &&
+      !booking.stripe_payment_intent_id &&
+      Boolean(booking.pix_paid_at) &&
+      Math.floor(Number(booking.amount_cents ?? 0)) > 0;
+
     const nowIso = new Date().toISOString();
     const policySnapshot = {
       threshold_hours: thresholdHours,
@@ -233,6 +244,48 @@ Deno.serve(async (req) => {
       policySnapshot.will_refund = true;
       (policySnapshot as Record<string, unknown>).refund_amount_cents =
         refundAmountCents;
+    }
+
+    // Pix real pago + dentro da janela: enfileira devolução manual.
+    // (Fora da janela segue a regra de sempre: cancela sem devolução.)
+    let pixRefundQueued = false;
+    if (insideWindow && wasPixPaid) {
+      const amountCents = Math.max(0, Math.floor(Number(booking.amount_cents ?? 0)));
+      try {
+        // Dedup: não duplica pendência da mesma cobrança+motivo.
+        let alreadyQueued = false;
+        if (booking.pix_charge_id) {
+          const { data: existing } = await admin
+            .from("pix_refunds_pending")
+            .select("id")
+            .eq("pix_charge_id", booking.pix_charge_id)
+            .eq("reason", "user_cancelled_in_window")
+            .eq("status", "pending")
+            .limit(1);
+          alreadyQueued = Array.isArray(existing) && existing.length > 0;
+        }
+        if (!alreadyQueued) {
+          const { error: queueErr } = await admin.from("pix_refunds_pending").insert({
+            pix_charge_id: booking.pix_charge_id ?? null,
+            entity_type: "booking",
+            entity_id: bookingId,
+            user_id: booking.user_id,
+            amount_cents: amountCents,
+            reason: "user_cancelled_in_window",
+            notes: "passageiro cancelou dentro da janela gratuita (pagamento Pix real)",
+          } as never);
+          if (queueErr) {
+            console.error("[cancel-booking] fila de devolução pix:", queueErr.message);
+          } else {
+            pixRefundQueued = true;
+          }
+        } else {
+          pixRefundQueued = true;
+        }
+      } catch (e) {
+        console.error("[cancel-booking] fila de devolução pix:", e);
+      }
+      (policySnapshot as Record<string, unknown>).pix_refund_queued = pixRefundQueued;
     }
 
     // Aplica metadados do cancelamento. Se process-refund já setou status,
@@ -289,10 +342,12 @@ Deno.serve(async (req) => {
     try {
       await admin.from("notifications").insert({
         user_id: booking.user_id,
-        title: refunded ? "Reserva cancelada com estorno" : "Reserva cancelada",
+        title: refunded || pixRefundQueued ? "Reserva cancelada com estorno" : "Reserva cancelada",
         message: refunded
           ? "Sua reserva foi cancelada e o reembolso integral foi iniciado no cartão. Pode levar de 5 a 10 dias para aparecer."
-          : "Sua reserva foi cancelada. Como faltava menos tempo até a partida, não há reembolso.",
+          : pixRefundQueued
+            ? "Sua reserva foi cancelada. A devolução do Pix será processada pela nossa equipe em até 5 dias úteis."
+            : "Sua reserva foi cancelada. Como faltava menos tempo até a partida, não há reembolso.",
         category: "booking",
       } as never);
     } catch (e) {
@@ -304,6 +359,7 @@ Deno.serve(async (req) => {
         cancelled: true,
         refunded,
         refund_amount_cents: refundAmountCents,
+        pix_refund_queued: pixRefundQueued,
         inside_window: insideWindow,
         threshold_hours: thresholdHours,
         hours_until_departure: hoursUntilDeparture,
