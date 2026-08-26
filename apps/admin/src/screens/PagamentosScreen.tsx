@@ -19,6 +19,7 @@ import {
 } from '../data/queries';
 import type { ProcessPayoutsResult } from '../data/queries';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { fetchPixRefundsPendingCount } from '../data/pixQueries';
 import type { PagamentoListItem, PagamentoCounts } from '../data/types';
 import { exportPayoutsReport } from '../utils/exportCsv';
 
@@ -217,6 +218,14 @@ export default function PagamentosScreen() {
     orphanCount: 0,
     orphanSamples: [],
   });
+  // Fila manual de devoluções Pix pendentes — badge dourada no botão "Pix".
+  const [pixRefundsPending, setPixRefundsPending] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchPixRefundsPendingCount().then((n) => { if (!cancelled) setPixRefundsPending(n); });
+    return () => { cancelled = true; };
+  }, []);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -695,6 +704,29 @@ export default function PagamentosScreen() {
           fontSize: 14, fontWeight: 500, color: '#0d0d0d', cursor: 'pointer', ...font,
         },
       }, filterIconSvg, 'Filtro'),
+      React.createElement('button', {
+        type: 'button',
+        onClick: () => navigate('/pagamentos/pix'),
+        'data-testid': 'pagamentos-open-pix',
+        style: {
+          position: 'relative' as const,
+          display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 24px',
+          background: '#fff', color: '#0d0d0d', border: '1px solid #0d0d0d', borderRadius: 999,
+          fontSize: 14, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' as const, ...font,
+        },
+      },
+        'Pix',
+        pixRefundsPending > 0
+          ? React.createElement('span', {
+              title: `${pixRefundsPending} devolução(ões) Pix pendente(s)`,
+              style: {
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                minWidth: 20, height: 20, padding: '0 6px', borderRadius: 999,
+                background: '#cba04b', color: '#fff', fontSize: 12, fontWeight: 700,
+                lineHeight: 1, ...font,
+              },
+            }, String(pixRefundsPending))
+          : null),
       React.createElement('button', {
         type: 'button',
         onClick: () => navigate(PAGAMENTOS_GESTAO_PREPARADORES_HREF),

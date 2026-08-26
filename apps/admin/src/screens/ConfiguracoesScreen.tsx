@@ -8,6 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { fetchAdminUsers, createAdminUser, updateAdminUser, deleteAdminUser, invokeEdgeFunction } from '../data/queries';
 import type { AdminUserListItem } from '../data/types';
 import { usePlatformSettings } from '../hooks/usePlatformSettings';
+import PixConfigTab from '../components/PixConfigTab';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import {
   formatBRLCents,
@@ -73,7 +74,7 @@ function readOnlyField(label: string, value: string) {
 export default function ConfiguracoesScreen() {
   const navigate = useNavigate();
   const { session } = useAuth();
-  const [aba, setAba] = useState<'perfil' | 'usuarios' | 'plataforma' | 'pagamentos'>('perfil');
+  const [aba, setAba] = useState<'perfil' | 'usuarios' | 'plataforma' | 'pagamentos' | 'pix'>('perfil');
   const [novoUsuarioOpen, setNovoUsuarioOpen] = useState(false);
   const [nuNome, setNuNome] = useState('');
   const [nuEmail, setNuEmail] = useState('');
@@ -168,6 +169,17 @@ export default function ConfiguracoesScreen() {
         onClick: () => setAba('pagamentos'),
       }, 'Pagamentos',
         aba === 'pagamentos' ? React.createElement('span', {
+          style: {
+            position: 'absolute' as const, left: 0, right: 0, bottom: 0, height: 2,
+            background: '#0d0d0d', borderRadius: 100,
+          },
+        }) : null),
+      React.createElement('button', {
+        type: 'button',
+        style: tabStyle(aba === 'pix'),
+        onClick: () => setAba('pix'),
+      }, 'Pix',
+        aba === 'pix' ? React.createElement('span', {
           style: {
             position: 'absolute' as const, left: 0, right: 0, bottom: 0, height: 2,
             background: '#0d0d0d', borderRadius: 100,
@@ -1080,7 +1092,7 @@ export default function ConfiguracoesScreen() {
       React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 24, width: '100%' } },
         React.createElement('h1', { style: { ...webStyles.homeTitle, margin: 0, width: '100%' } }, 'Configurações'),
         tabsRow),
-      aba === 'perfil' ? perfilContent : aba === 'usuarios' ? usuariosContent : aba === 'plataforma' ? plataformaContent : pagamentosContent),
+      aba === 'perfil' ? perfilContent : aba === 'usuarios' ? usuariosContent : aba === 'plataforma' ? plataformaContent : aba === 'pagamentos' ? pagamentosContent : React.createElement(PixConfigTab)),
     novoUsuarioModal,
     viewUserModal,
     editUserModal);
