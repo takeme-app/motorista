@@ -15,7 +15,19 @@ type BookingRow = {
   worker_earning_cents?: number | null;
   status: string;
   paid_at: string | null;
+  payment_method?: string | null;
 };
+
+/**
+ * Pix é o único método em que a PLATAFORMA retém o dinheiro: o passageiro paga
+ * para a conta da Take Me e o repasse ao motorista é feito por fora. Enquanto o
+ * payout não estiver 'paid', esse valor NÃO é "recebido" — aparece em "A receber
+ * da plataforma". (No cartão o split cai direto na conta do motorista; no
+ * dinheiro ele recebe em mãos — nos dois casos o ganho sintético está correto.)
+ */
+function platformHoldsMoney(paymentMethod: string | null | undefined): boolean {
+  return String(paymentMethod ?? '').trim().toLowerCase() === 'pix';
+}
 
 type CompletedTripRow = {
   id: string;
@@ -79,7 +91,7 @@ export async function fetchDriverPaymentTransfers(
 
   const { data: paidBookings } = await supabase
     .from('bookings')
-    .select('id, amount_cents, worker_earning_cents, paid_at, status, scheduled_trips!inner(driver_id)')
+    .select('id, amount_cents, worker_earning_cents, paid_at, status, payment_method, scheduled_trips!inner(driver_id)')
     .eq('scheduled_trips.driver_id', userId)
     .eq('status', 'paid')
     .gte('paid_at', startIso)
@@ -87,7 +99,7 @@ export async function fetchDriverPaymentTransfers(
     .order('paid_at', { ascending: false });
 
   const bookingTransfers: DriverPaymentTransfer[] = (paidBookings ?? [])
-    .filter((b: BookingRow) => !paidKeys.has(`booking:${b.id}`))
+    .filter((b: BookingRow) => !paidKeys.has(`booking:${b.id}`) && !platformHoldsMoney(b.payment_method))
     .map((b: BookingRow) => ({
       id: b.id,
       amount_cents: workerCents(b),
@@ -99,7 +111,7 @@ export async function fetchDriverPaymentTransfers(
 
   const { data: completedTrips } = await supabase
     .from('scheduled_trips')
-    .select('id, updated_at, bookings(id, amount_cents, worker_earning_cents, status, paid_at)')
+    .select('id, updated_at, bookings(id, amount_cents, worker_earning_cents, status, paid_at, payment_method)')
     .eq('driver_id', userId)
     .eq('status', 'completed')
     .gte('updated_at', startIso)
@@ -114,6 +126,7 @@ export async function fetchDriverPaymentTransfers(
       if (b.status !== 'confirmed' && b.status !== 'paid') continue;
       if (listedPaidBookingIds.has(b.id)) continue;
       if (paidKeys.has(`booking:${b.id}`)) continue; // já contabilizada como payout pago
+      if (platformHoldsMoney(b.payment_method)) continue; // Pix: só entra quando o repasse for pago
       extra += workerCents(b);
     }
     if (extra > 0) {
@@ -131,7 +144,7 @@ export async function fetchDriverPaymentTransfers(
   // aparecendo só como payout — sem dupla contagem.
   const { data: deliveredShipments } = await supabase
     .from('shipments')
-    .select('id, amount_cents, worker_earning_cents, delivered_at')
+    .select('id, amount_cents, worker_earning_cents, delivered_at, payment_method')
     .eq('driver_id', userId)
     .eq('status', 'delivered')
     .gte('delivered_at', startIso)
@@ -139,9 +152,9 @@ export async function fetchDriverPaymentTransfers(
     .order('delivered_at', { ascending: false });
 
   const shipmentTransfers: DriverPaymentTransfer[] = ((deliveredShipments ?? []) as Array<{
-    id: string; amount_cents: number; worker_earning_cents?: number | null; delivered_at: string | null;
+    id: string; amount_cents: number; worker_earning_cents?: number | null; delivered_at: string | null; payment_method?: string | null;
   }>)
-    .filter((s) => s.delivered_at && !paidKeys.has(`shipment:${s.id}`))
+    .filter((s) => s.delivered_at && !paidKeys.has(`shipment:${s.id}`) && !platformHoldsMoney(s.payment_method))
     .map((s) => ({
       id: `sh-${s.id}`,
       amount_cents: workerCents(s),
@@ -152,7 +165,7 @@ export async function fetchDriverPaymentTransfers(
   // Encomendas de dependentes entregues via a viagem do motorista (driver vem de scheduled_trips).
   const { data: deliveredDepShipments } = await supabase
     .from('dependent_shipments')
-    .select('id, amount_cents, worker_earning_cents, delivered_at, scheduled_trips!inner(driver_id)')
+    .select('id, amount_cents, worker_earning_cents, delivered_at, payment_method, scheduled_trips!inner(driver_id)')
     .eq('scheduled_trips.driver_id', userId)
     .eq('status', 'delivered')
     .gte('delivered_at', startIso)
@@ -160,9 +173,9 @@ export async function fetchDriverPaymentTransfers(
     .order('delivered_at', { ascending: false });
 
   const depShipmentTransfers: DriverPaymentTransfer[] = ((deliveredDepShipments ?? []) as Array<{
-    id: string; amount_cents: number; worker_earning_cents?: number | null; delivered_at: string | null;
+    id: string; amount_cents: number; worker_earning_cents?: number | null; delivered_at: string | null; payment_method?: string | null;
   }>)
-    .filter((s) => s.delivered_at)
+    .filter((s) => s.delivered_at && !platformHoldsMoney(s.payment_method))
     .map((s) => ({
       id: `dsh-${s.id}`,
       amount_cents: workerCents(s),
