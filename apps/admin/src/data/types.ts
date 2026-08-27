@@ -157,12 +157,28 @@ export interface BookingDetailForAdmin {
   tripDepartureAtIso: string | null;
   /** `scheduled_trips.arrival_at` em ISO (duração no resumo). */
   tripArrivalAtIso: string | null;
+  /** Saída REAL: `scheduled_trips.driver_journey_started_at` (null se não iniciou). */
+  tripStartedAtRealIso: string | null;
+  /** Chegada REAL: maior `trip_stops.actual_arrival_at` da viagem (null se não concluiu). */
+  tripArrivalAtRealIso: string | null;
   /** Lugares disponíveis na viagem agendada (`scheduled_trips.seats_available`). */
   seatsAvailable: number | null;
   /** Bagagens disponíveis na viagem (`scheduled_trips.bags_available`). */
   bagsAvailable: number | null;
   /** `bookings.created_at` em ISO (histórico mínimo no painel). */
   bookingCreatedAtIso: string | null;
+  /** Cancelamento (`bookings.cancelled_at`) em ISO; null se não cancelada. */
+  cancelledAtIso: string | null;
+  /** Quem cancelou: `passenger` | `driver` | `admin` | `system` (ou null em cancelamentos automáticos antigos). */
+  cancelledBy: string | null;
+  /** `bookings.cancellation_reason` (ex.: `passenger_cancellation`, `expired_not_realized`). */
+  cancellationReason: string | null;
+  /** Estorno efetivamente realizado (`bookings.refund_amount_cents`); null = não houve. */
+  refundAmountCents: number | null;
+  /** `bookings.refunded_at` em ISO; null = estorno não realizado. */
+  refundedAtIso: string | null;
+  /** Política no momento do cancelamento previa estorno? (`cancellation_policy_applied.will_refund`) */
+  policyWillRefund: boolean | null;
   /** Conversa de atendimento ativa (`support_backoffice`) ligada a esta reserva, se existir. */
   supportConversationId: string | null;
   /** `bookings.pickup_code` — PIN de embarque passageiro → motorista (viagem comum). */

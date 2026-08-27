@@ -41,7 +41,12 @@ import { getRouteWithDuration } from '../lib/route';
 import { getMapboxAccessToken, getGoogleMapsApiKey } from '../lib/googleMapsConfig';
 import { getCachedRoute, setCachedRoute, hashWaypoints } from '../lib/routeCache';
 import * as DocumentPicker from 'expo-document-picker';
-import { formatTripCode as formatSharedTripCode } from '@take-me/shared';
+import {
+  formatTripCode as formatSharedTripCode,
+  getOrCreateActiveSupportConversationId,
+  SUPPORT_PHONE_TEL_URL,
+  SUPPORT_WHATSAPP_URL,
+} from '@take-me/shared';
 import { AppConfirmModal } from '../components/AppConfirmModal';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'TripDetail'>;
@@ -426,16 +431,25 @@ function RescheduleModal({
 
 // ─── Support Modal ─────────────────────────────────────────────────────────────
 
-function SupportModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+function SupportModal({
+  visible,
+  onClose,
+  onOpenChat,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  /** Abre o chat de suporte (a tela mãe tem navegação/supabase). */
+  onOpenChat: () => void;
+}) {
   return (
     <BottomSheet visible={visible} onClose={onClose}>
       <View style={styles.sheetContent}>
         <Text style={styles.sheetTitle}>Como podemos ajudar?</Text>
 
         {([
-          { label: 'Ligar', icon: 'phone', action: () => {} },
-          { label: 'Chat', icon: 'headset-mic', action: () => {} },
-          { label: 'WhatsApp', icon: 'chat', action: () => {} },
+          { label: 'Ligar', icon: 'phone', action: () => { onClose(); void Linking.openURL(SUPPORT_PHONE_TEL_URL); } },
+          { label: 'Chat', icon: 'headset-mic', action: () => { onClose(); onOpenChat(); } },
+          { label: 'WhatsApp', icon: 'chat', action: () => { onClose(); void Linking.openURL(SUPPORT_WHATSAPP_URL); } },
         ] as { label: string; icon: string; action: () => void }[]).map((opt) => (
           <TouchableOpacity
             key={opt.label}
@@ -1556,7 +1570,27 @@ export function TripDetailScreen({ route, navigation }: Props) {
         loading={rescheduleLoading}
         currentDeparture={trip.departure_at}
       />
-      <SupportModal visible={supportVisible} onClose={() => setSupportVisible(false)} />
+      <SupportModal
+        visible={supportVisible}
+        onClose={() => setSupportVisible(false)}
+        onOpenChat={() => {
+          void (async () => {
+            const { conversationId, error } = await getOrCreateActiveSupportConversationId(supabase);
+            if (error || !conversationId) {
+              showAlert('Suporte', error ?? 'Não foi possível abrir o chat.');
+              return;
+            }
+            // TripDetail vive na pilha raiz: o chat de suporte fica na aba Perfil.
+            navigation.navigate('Main', {
+              screen: 'Profile',
+              params: {
+                screen: 'Chat',
+                params: { conversationId, participantName: 'Suporte Take Me' },
+              },
+            });
+          })();
+        }}
+      />
       <AppConfirmModal
         visible={startConfirmVisible}
         title="Iniciar viagem?"

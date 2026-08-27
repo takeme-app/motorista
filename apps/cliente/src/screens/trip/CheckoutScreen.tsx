@@ -55,10 +55,11 @@ import { PaymentMethodSection, type PaymentMethodType, type CardPaymentConfirmPa
 import { calendarDayKeySaoPaulo, getDuplicateDestinationSameDayMessage } from '../../lib/sameDestinationSameDayGuard';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { waitForShipmentStripePaymentIntentId } from '../../lib/waitForShipmentStripePaymentIntentId';
-import { displayCpf } from '../../utils/formatCpf';
+import { displayCpf, onlyDigits, validateCpf } from '../../utils/formatCpf';
 import { bookingTotalPassengers, maxBagsForTrip } from '../../lib/tripCapacityLimits';
 import { fetchDriverStripeChargesEnabled } from '../../lib/driverStripeConnect';
 import { fetchPlatformFeePctForService } from '../../lib/platformFees';
+import { fetchPixProviderMode, invalidatePixProviderModeCache, type PixProviderMode } from '../../lib/pixProviderConfig';
 
 const supabasePublicUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 
@@ -248,12 +249,18 @@ export function CheckoutScreen({ navigation, route }: Props) {
   const [driverAvatarFailed, setDriverAvatarFailed] = useState(false);
   /** Titular da reserva (lista completa na UI = você + extras). */
   const [primaryPassenger, setPrimaryPassenger] = useState<{ name: string; cpf: string } | null>(null);
+  /**
+   * Modo do Pix (gestor de provedores): 'palliative' mantém o fluxo atual byte a
+   * byte; provedor real navega para a PixPaymentScreen (cobrança no servidor).
+   * Fallback de leitura = 'palliative' (fail-safe).
+   */
+  const [pixProviderMode, setPixProviderMode] = useState<PixProviderMode>('palliative');
 
   const allowedPaymentMethods = useMemo((): PaymentMethodType[] => {
-    // Dinheiro ocultado de todos os checkouts. Pix paliativo não depende do Stripe Connect.
-    if (connectStatusLoading) return ['pix'];
-    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix'];
-    return ['pix'];
+    // Pix paliativo não depende do Stripe Connect do motorista — fica disponível como o dinheiro.
+    if (connectStatusLoading) return ['pix', 'dinheiro'];
+    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix', 'dinheiro'];
+    return ['pix', 'dinheiro'];
   }, [connectChargesEnabled, connectStatusLoading]);
 
   useEffect(() => {
@@ -275,7 +282,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (selectedPaymentMethod == null) return;
     if (!allowedPaymentMethods.includes(selectedPaymentMethod)) {
-      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'pix');
+      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'dinheiro');
     }
   }, [allowedPaymentMethods, selectedPaymentMethod]);
 
@@ -295,6 +302,22 @@ export function CheckoutScreen({ navigation, route }: Props) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchPixProviderMode().then((mode) => {
+      if (!cancelled) setPixProviderMode(mode);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** Pix real exige CPF (provedor); só pede quando o perfil não tem um válido. */
+  const pixCpfRequired =
+    pixProviderMode !== 'palliative' &&
+    primaryPassenger != null &&
+    !validateCpf(primaryPassenger.cpf);
 
   useEffect(() => {
     setDriverAvatarFailed(false);
@@ -659,6 +682,86 @@ export function CheckoutScreen({ navigation, route }: Props) {
             chargedAmountCents = Math.floor(ac);
           }
         } else if (params.method === 'pix') {
+          // Modo do Pix relido aqui (cache 30s): 'palliative' segue o bloco atual
+          // INALTERADO; provedor real navega para a PixPaymentScreen SEM inserir
+          // booking (o create-pix-charge insere pending no servidor e segura a vaga).
+          const pixMode = await fetchPixProviderMode();
+          // Sincroniza o estado da tela: se a montagem leu 'palliative' (timeout/
+          // flag trocada depois) e agora o modo real vale, o campo de CPF do
+          // bloco Pix passa a ser exibido — sem isso o usuário ficava num loop
+          // sem saída: confirmar → 422 cpf_required → voltar → campo ainda oculto.
+          setPixProviderMode(pixMode);
+          if (pixMode !== 'palliative') {
+            const collectedCpf = onlyDigits(params.holderCpfDigits ?? '');
+            const profileCpf = onlyDigits(primaryPassenger?.cpf ?? '');
+            const cpfForCharge = validateCpf(collectedCpf)
+              ? collectedCpf
+              : validateCpf(profileCpf)
+                ? profileCpf
+                : undefined;
+            if (!cpfForCharge) {
+              // Não navega sem CPF: o create-pix-charge devolveria 422 e o
+              // usuário voltaria para cá de qualquer forma. Com o estado já
+              // sincronizado acima, o campo de CPF agora está visível.
+              showAlert(
+                'CPF necessário',
+                'O pagamento por Pix exige CPF. Informe seu CPF no campo que apareceu na opção Pix e confirme novamente.',
+              );
+              return;
+            }
+            if (validateCpf(collectedCpf) && collectedCpf !== profileCpf) {
+              // Persiste o CPF novo no perfil (mesmo update do EditCpfScreen) —
+              // best-effort: o CPF também segue no corpo da criação da cobrança.
+              try {
+                await supabase
+                  .from('profiles')
+                  .update({ cpf: collectedCpf, updated_at: new Date().toISOString() })
+                  .eq('id', user.id);
+              } catch {
+                /* ignore */
+              }
+            }
+            navigation.navigate('PixPayment', {
+              service: 'booking',
+              draft: {
+                scheduled_trip_id: scheduledTripId,
+                origin_address: origin.address,
+                origin_lat: origin.latitude,
+                origin_lng: origin.longitude,
+                destination_address: destination.address,
+                destination_lat: destination.latitude,
+                destination_lng: destination.longitude,
+                passenger_count,
+                bags_count: bagsCount,
+                passenger_data,
+                promotion_id: appliedPromotionId || undefined,
+              },
+              cpf: cpfForCharge,
+              estimatedAmountCents: previewToUse.totalCents,
+              successNav: {
+                originAddress: origin.address,
+                destinationAddress: destination.address,
+                departure: driver.departure,
+                arrival: driver.arrival,
+                driverName: driver.name,
+                driverRating: driver.rating,
+                vehicleLabel: formatVehicleDescription(
+                  driver.vehicle_model,
+                  driver.vehicle_year,
+                  driver.vehicle_plate,
+                ),
+                scheduledTripId,
+                immediateTrip: route.params?.immediateTrip,
+                origin: { latitude: origin.latitude, longitude: origin.longitude, address: origin.address },
+                destination: {
+                  latitude: destination.latitude,
+                  longitude: destination.longitude,
+                  address: destination.address,
+                },
+              },
+            });
+            return;
+          }
           // Pix paliativo (Stripe Pix desabilitado): não cobra. Abre a tela de Pix; aos 40s a
           // reserva é efetivada (criada como pendente, igual ao dinheiro) e o motorista é
           // notificado — não antes ("sem pagar o pix"). O botão só navega para "Solicitação enviada".
@@ -689,7 +792,15 @@ export function CheckoutScreen({ navigation, route }: Props) {
                 .insert(pixInsertRow)
                 .select('id')
                 .single();
-              if (pixErr) throw pixErr;
+              if (pixErr) {
+                // Guard do servidor: o provedor real foi ativado (ex.: chegamos
+                // aqui por timeout na leitura da flag). Invalida o cache para o
+                // próximo confirmar reler a flag e seguir pelo fluxo real.
+                if (String(pixErr.message ?? '').includes('pix_provider_not_active')) {
+                  invalidatePixProviderModeCache();
+                }
+                throw pixErr;
+              }
               pixBookingId =
                 pixRow && typeof pixRow === 'object' && 'id' in pixRow
                   ? String((pixRow as { id: string }).id)
@@ -826,6 +937,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
       appliedPromotionId,
       appliedPromoWorkerRouteId,
       allowedPaymentMethods,
+      primaryPassenger,
     ]
   );
 
@@ -1018,6 +1130,8 @@ export function CheckoutScreen({ navigation, route }: Props) {
             loading={paymentSubmitting || fareLoading || awaitingFinalPrice}
             onConfirmPayment={handleConfirmPayment}
             allowedMethods={allowedPaymentMethods}
+            cashInstructionVariant="trip"
+            pixCpfRequired={pixCpfRequired}
           />
         </View>
       </ScrollView>

@@ -88,7 +88,8 @@ export type RootStackParamList = {
   MotoristaPendingApproval: undefined;
   /** Stripe Connect obrigatório antes de acessar o app. */
   StripeConnectSetup: { subtype?: string };
-  Main: undefined;
+  /** Abas principais. Aceita navegação aninhada (ex.: Perfil → Chat de suporte). */
+  Main: NavigatorScreenParams<MainTabParamList> | undefined;
   PendingRequests: undefined;
   TripHistory: undefined;
   TripDetail: { tripId: string };

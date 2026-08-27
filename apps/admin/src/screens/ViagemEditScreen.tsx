@@ -1291,19 +1291,76 @@ export default function ViagemEditScreen() {
     React.createElement('div', { style: { display: 'flex', gap: 16, width: '100%' } },
       ...metricas.map(metricCard)));
 
-  // ── 6. Histórico de alterações (sem auditoria completa — ao menos criação da reserva)
+  // ── 6. Histórico de alterações (sem auditoria completa — criação, cancelamento e estorno)
   const historico: { icon: React.ReactNode; action: string; name: string; date: string }[] = [];
-  if (detail.bookingCreatedAtIso) {
-    const dt = new Date(detail.bookingCreatedAtIso);
-    const dateStr = Number.isNaN(dt.getTime())
-      ? detail.bookingCreatedAtIso
+  const fmtHistDate = (iso: string) => {
+    const dt = new Date(iso);
+    return Number.isNaN(dt.getTime())
+      ? iso
       : dt.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+  };
+  if (detail.bookingCreatedAtIso) {
     historico.push({
       icon: clockSvg,
       action: 'Reserva registrada',
       name: detail.listItem.passageiro,
-      date: dateStr,
+      date: fmtHistDate(detail.bookingCreatedAtIso),
     });
+  }
+
+  // Cancelamento e situação do estorno: antes o histórico parava na criação, então
+  // uma reserva cancelada (e um estorno NÃO realizado) não deixavam rastro no painel.
+  if (detail.cancelledAtIso || detail.listItem.bookingDbStatus === 'cancelled') {
+    const quemLabel: Record<string, string> = {
+      passenger: 'Cancelada pelo passageiro',
+      driver: 'Cancelada pelo motorista',
+      admin: 'Cancelada pelo administrador',
+      system: 'Cancelada automaticamente',
+    };
+    const motivoLabel: Record<string, string> = {
+      passenger_cancellation: 'a pedido do passageiro',
+      admin_cancellation: 'pelo painel administrativo',
+      expired_not_realized: 'expirada sem realização',
+      driver_cancelled_scheduled_trip: 'viagem cancelada pelo motorista',
+      driver_pickup_cancelled: 'embarque cancelado pelo motorista',
+    };
+    const reason = detail.cancellationReason ?? '';
+    const acao =
+      quemLabel[String(detail.cancelledBy ?? '')] ??
+      (reason === 'expired_not_realized' ? 'Cancelada automaticamente' : 'Reserva cancelada');
+    const motivo = motivoLabel[reason] ?? (reason ? reason : '—');
+    historico.push({
+      icon: closeXSvg,
+      action: acao,
+      name: motivo,
+      date: detail.cancelledAtIso ? fmtHistDate(detail.cancelledAtIso) : '—',
+    });
+
+    // Situação do estorno — é aqui que "estorno não realizado" fica visível.
+    const pago = detail.listItem.paymentMethod;
+    const houveEstorno = detail.refundedAtIso != null || (detail.refundAmountCents ?? 0) > 0;
+    if (houveEstorno) {
+      historico.push({
+        icon: checkSvg,
+        action: 'Estorno realizado',
+        name: (detail.refundAmountCents ?? 0) > 0 ? fmtBRL(detail.refundAmountCents as number) : 'valor não informado',
+        date: detail.refundedAtIso ? fmtHistDate(detail.refundedAtIso) : '—',
+      });
+    } else if (pago === 'card') {
+      historico.push({
+        icon: closeXSvg,
+        action: 'Estorno NÃO realizado',
+        name: detail.policyWillRefund === false ? 'fora da janela de reembolso' : 'pendente de verificação',
+        date: '—',
+      });
+    } else {
+      historico.push({
+        icon: closeXSvg,
+        action: 'Estorno NÃO realizado',
+        name: pago === 'pix' ? 'devolução do Pix é manual' : 'pagamento em dinheiro — acerto presencial',
+        date: '—',
+      });
+    }
   }
 
   const historicoItem = (h: (typeof historico)[0], idx: number) =>

@@ -3,6 +3,10 @@ import { View, TouchableOpacity, StyleSheet, Linking } from 'react-native';
 import { Text } from './Text';
 import { MaterialIcons } from '@expo/vector-icons';
 import { AnimatedBottomSheet } from './AnimatedBottomSheet';
+import {
+  SUPPORT_PHONE_TEL_URL as SUPPORT_PHONE,
+  SUPPORT_WHATSAPP_URL as SUPPORT_WHATSAPP,
+} from '@take-me/shared';
 
 const COLORS = {
   background: '#FFFFFF',
@@ -19,9 +23,6 @@ type Props = {
   onOpenDriverChat?: () => void;
   showDriverChat?: boolean;
 };
-
-const SUPPORT_PHONE = 'tel:+5511999999999';
-const SUPPORT_WHATSAPP = 'https://wa.me/5511999999999';
 
 export function SupportSheet({ visible, onClose, onOpenSupportChat, onOpenDriverChat, showDriverChat }: Props) {
   const handleCall = () => {

@@ -43,6 +43,13 @@ export type PaymentMethodSectionProps = {
   allowedMethods?: PaymentMethodType[];
   /** Texto do aviso quando só dinheiro por falta de Stripe Connect (default: viagem). */
   connectCashOnlyContext?: 'trip' | 'dependent_shipment';
+  /** Instrução do bloco "Dinheiro" por fluxo (default: viagem). */
+  cashInstructionVariant?: 'trip' | 'shipment' | 'dependent_shipment' | 'excursion';
+  /**
+   * Pix real (provedor exige CPF) e o perfil não tem um válido: exibe campo de
+   * CPF inline no bloco Pix e envia `holderCpfDigits` no confirm.
+   */
+  pixCpfRequired?: boolean;
 };
 
 type SavedCardRow = {
@@ -59,6 +66,21 @@ const PAYMENT_OPTIONS: { type: PaymentMethodType; label: string; icon: keyof typ
   { type: 'pix', label: 'Pix', icon: 'qr-code-2' },
   { type: 'dinheiro', label: 'Dinheiro', icon: 'payments' },
 ];
+
+/** Instrução do pagamento em dinheiro, adequada a cada fluxo. */
+function getCashInstruction(variant: NonNullable<PaymentMethodSectionProps['cashInstructionVariant']>): string {
+  switch (variant) {
+    case 'shipment':
+      return 'O pagamento em dinheiro deve ser feito ao motorista na coleta ou na entrega da encomenda, conforme combinado — o valor total abaixo (incluindo taxa da plataforma) é o que você entrega em mãos.';
+    case 'dependent_shipment':
+      return 'O pagamento em dinheiro deve ser feito ao motorista no embarque do passageiro — o valor total abaixo (incluindo taxa da plataforma) é o que você entrega em mãos.';
+    case 'excursion':
+      return 'O pagamento em dinheiro deve ser feito em mãos ao motorista responsável pela excursão — o valor total abaixo (incluindo taxa da plataforma) é o que você entrega.';
+    case 'trip':
+    default:
+      return 'O pagamento em dinheiro deve ser feito ao motorista quando você chegar ao destino final — o valor total abaixo (incluindo taxa da plataforma) é o que você entrega em mãos.';
+  }
+}
 
 function getCancellationPolicyLines(
   variant: CancellationPolicyVariant,
@@ -98,6 +120,8 @@ export function PaymentMethodSection({
   loading = false,
   allowedMethods,
   connectCashOnlyContext = 'trip',
+  cashInstructionVariant = 'trip',
+  pixCpfRequired = false,
 }: PaymentMethodSectionProps) {
   const isFocused = useIsFocused();
   const { createPaymentMethod } = useStripe();
@@ -263,8 +287,17 @@ export function PaymentMethodSection({
   }, [selectedMethod, cardName, cardComplete, cpfCnpj, createPaymentMethod, onConfirmPayment, showAlert]);
 
   const handleConfirmPix = useCallback(() => {
+    if (pixCpfRequired) {
+      const cpfDigits = onlyDigits(cpfCnpj);
+      if (!validateCpf(cpfDigits)) {
+        showAlert('CPF inválido', 'O CPF informado não é válido. Verifique e tente novamente.');
+        return;
+      }
+      onConfirmPayment({ method: 'pix', holderCpfDigits: cpfDigits });
+      return;
+    }
     onConfirmPayment({ method: 'pix' });
-  }, [onConfirmPayment]);
+  }, [onConfirmPayment, pixCpfRequired, cpfCnpj, showAlert]);
 
   const handleConfirmDinheiro = useCallback(() => {
     onConfirmPayment({ method: 'dinheiro' });
@@ -478,10 +511,28 @@ export function PaymentMethodSection({
               <Text style={styles.pixIntro}>
                 Ao confirmar, abriremos a tela do Pix Take Me com o QR e o código para você pagar no app do seu banco.
               </Text>
+              {pixCpfRequired ? (
+                <>
+                  <Text style={styles.formLabelSmall}>CPF do pagador (obrigatório para gerar o Pix)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="000.000.000-00"
+                    placeholderTextColor={COLORS.neutral700}
+                    value={cpfCnpj}
+                    onChangeText={handleCpfChange}
+                    keyboardType="number-pad"
+                    maxLength={14}
+                  />
+                </>
+              ) : null}
               <TouchableOpacity
-                style={[styles.confirmButton, loading && styles.confirmButtonDisabled]}
+                style={[
+                  styles.confirmButton,
+                  (loading || (pixCpfRequired && !validateCpf(onlyDigits(cpfCnpj)))) &&
+                    styles.confirmButtonDisabled,
+                ]}
                 onPress={handleConfirmPix}
-                disabled={loading}
+                disabled={loading || (pixCpfRequired && !validateCpf(onlyDigits(cpfCnpj)))}
                 activeOpacity={0.8}
               >
                 <Text style={styles.confirmButtonText}>{confirmLabel}</Text>
@@ -491,10 +542,7 @@ export function PaymentMethodSection({
 
           {selectedMethod === opt.type && opt.type === 'dinheiro' && (
             <View style={styles.expanded}>
-              <Text style={styles.dinheiroText}>
-                O pagamento em dinheiro deve ser feito ao motorista quando você chegar ao destino final — o valor
-                total abaixo (incluindo taxa da plataforma) é o que você entrega em mãos.
-              </Text>
+              <Text style={styles.dinheiroText}>{getCashInstruction(cashInstructionVariant)}</Text>
               <Text style={styles.dinheiroText}>
                 Você receberá o comprovante digital assim que o pagamento for registrado no sistema.
               </Text>

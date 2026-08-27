@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 
 function loadEnv() {
-  const rootEnvPath = path.resolve(__dirname, '../../../../.env');
+  const rootEnvPath = path.resolve(__dirname, '../../../.env');
   if (!fs.existsSync(rootEnvPath)) {
     console.log('Aviso: Arquivo .env não encontrado na raiz do repositório.');
     return;

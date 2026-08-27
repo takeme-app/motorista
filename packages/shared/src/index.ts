@@ -7,6 +7,13 @@ export { createSupabaseClient } from './supabase';
 export type { Database, FiscalDocumentRow } from './types';
 export { mapboxForwardGeocode, mapboxGeocodeSuggest } from './mapboxForwardGeocode';
 export type { MapboxGeocodeResult } from './mapboxForwardGeocode';
+export {
+  SUPPORT_PHONE_E164_DIGITS,
+  SUPPORT_PHONE_DISPLAY,
+  SUPPORT_PHONE_TEL_URL,
+  SUPPORT_WHATSAPP_URL,
+  supportWhatsAppUrl,
+} from './supportContact';
 export { mapboxSearchBoxSuggest, mapboxSearchBoxRetrieve } from './mapboxSearchBox';
 export type { MapboxSuggestItem, MapboxSuggestOptions } from './mapboxSearchBox';
 export {

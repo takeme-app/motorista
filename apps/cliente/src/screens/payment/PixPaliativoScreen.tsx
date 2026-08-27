@@ -64,10 +64,14 @@ export function PixPaliativoScreen() {
     try {
       await req.effectivate();
       setCanConfirm(true);
-    } catch {
-      // Permite tentar de novo: libera o relógio para reefetivar.
+    } catch (e) {
+      // Libera para nova tentativa (o botão vira "Tentar novamente").
       effectivatedRef.current = false;
-      setEffectivateError('Não foi possível concluir agora. Tente novamente em instantes.');
+      // Sem este log a causa real ficava invisível: o catch engolia o erro e só
+      // sobrava a mensagem genérica, impossível de diagnosticar em produção.
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn('[PixPaliativo] falha ao efetivar o pedido:', msg);
+      setEffectivateError('Não foi possível concluir agora. Toque em "Tentar novamente".');
     } finally {
       setEffectivating(false);
     }
@@ -117,6 +121,22 @@ export function PixPaliativoScreen() {
     // Defere para após o frame atual (consistência de navegação/sem travar UI).
     requestAnimationFrame(() => req.navigateSuccess());
   }, [canConfirm, req, requestId]);
+
+  /**
+   * A efetivação roda uma única vez (setTimeout). Se falhava, o botão continuava
+   * desabilitado e nada reagendava a tentativa — o cliente ficava preso no erro,
+   * sem caminho para prosseguir. Aqui o mesmo botão vira "Tentar novamente".
+   */
+  const canRetry = !canConfirm && !!effectivateError && !effectivating;
+
+  const onPressPrimary = useCallback(() => {
+    if (effectivating) return;
+    if (canConfirm) {
+      onConfirm();
+      return;
+    }
+    if (canRetry) void runEffectivate();
+  }, [effectivating, canConfirm, canRetry, onConfirm, runEffectivate]);
 
   if (!req) {
     return (
@@ -174,15 +194,17 @@ export function PixPaliativoScreen() {
         {effectivateError ? <Text style={styles.errorInline}>{effectivateError}</Text> : null}
 
         <TouchableOpacity
-          style={[styles.confirmBtn, !canConfirm && styles.confirmBtnDisabled]}
-          onPress={onConfirm}
-          disabled={!canConfirm}
+          style={[styles.confirmBtn, !canConfirm && !canRetry && styles.confirmBtnDisabled]}
+          onPress={onPressPrimary}
+          disabled={!canConfirm && !canRetry}
           activeOpacity={0.85}
         >
           {effectivating ? (
             <ActivityIndicator size="small" color="#FFFFFF" />
           ) : (
-            <Text style={styles.confirmBtnText}>Realizei o Pagamento</Text>
+            <Text style={styles.confirmBtnText}>
+              {canRetry ? 'Tentar novamente' : 'Realizei o Pagamento'}
+            </Text>
           )}
         </TouchableOpacity>
       </View>

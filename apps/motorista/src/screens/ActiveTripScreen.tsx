@@ -998,7 +998,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
   // Data
   const [trip, setTrip] = useState<TripRow | null>(null);
   const [tripLoading, setTripLoading] = useState(true);
-  const { stops, loading: stopsLoading, reload: reloadTripStops } = useTripStops(tripId);
+  const { stops, loading: stopsLoading, reload: reloadTripStops, pendingAcceptanceCount } = useTripStops(tripId);
   const loading = tripLoading || stopsLoading;
 
   // State machine — alinhado ao `trip_stops.status` no primeiro carregamento
@@ -2392,7 +2392,13 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           return;
         }
       }
-      const navDest = resolveNavigationDestination(stops, currentStopIndex, finalDestination);
+      // Sem paradas na rota E com reserva aguardando aceite: NÃO traça o trajeto até o
+      // destino. Ele daria a impressão de que não há passageiro a buscar, quando na
+      // verdade existe um pedido pendente (o aviso na tela cobre esse caso).
+      const hidePendingOnlyRoute = stopPts.length === 0 && pendingAcceptanceCount > 0;
+      const navDest = hidePendingOnlyRoute
+        ? null
+        : resolveNavigationDestination(stops, currentStopIndex, finalDestination);
       if (dp && isValidGlobeCoordinate(dp.latitude, dp.longitude) && navDest) {
         const r = await getRouteWithDuration(dp, navDest, routeOpts);
         if (!cancelled && r?.coordinates?.length) {
@@ -2409,7 +2415,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       controller.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, isOnline, stops, finalDestination, driverPositionKey, currentStopIndex, rerouteKey, tripId]);
+  }, [loading, isOnline, stops, finalDestination, driverPositionKey, currentStopIndex, rerouteKey, tripId, pendingAcceptanceCount]);
 
   // Trecho imediato: GPS → alvo geograficamente mais próximo (paradas restantes + destino da viagem).
   useEffect(() => {
@@ -2433,6 +2439,15 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       tripDestLL ?? null,
       trip?.destination_address,
     );
+    // Mesma proteção da rota principal: com reserva pendente e nenhuma parada aceita,
+    // o único alvo seria o destino da viagem — apontar para lá induz o motorista a erro.
+    const onlyTripDestTargets = targets.every((t) => t.kind === 'trip_dest');
+    if (pendingAcceptanceCount > 0 && onlyTripDestTargets) {
+      setNearestDashedCoords([]);
+      setNearestTargetCoord(null);
+      setEtaSeconds(null);
+      return;
+    }
     const nearest = pickGeographicNearestNavTarget(dp, targets);
     if (!nearest || !isValidGlobeCoordinate(nearest.coord.latitude, nearest.coord.longitude)) {
       setNearestDashedCoords([]);
@@ -2503,7 +2518,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
     // chegar (ficava "piscando" em direção ao destino). Agora só dispara em mudança
     // real de alvo (`nearestDashedTargetKey`/`currentStopIndex`), reroute (`rerouteKey`)
     // ou primeira aquisição de GPS (`hasGpsKey`).
-  }, [loading, nativeNavigationActive, hasGpsKey, nearestDashedTargetKey, currentStopIndex, stops, trip?.id, trip?.destination_address, tripDestLL, rerouteKey]);
+  }, [loading, nativeNavigationActive, hasGpsKey, nearestDashedTargetKey, currentStopIndex, stops, trip?.id, trip?.destination_address, tripDestLL, rerouteKey, pendingAcceptanceCount]);
 
   useEffect(() => {
     if (stopsRouteCoords.length >= 2) routeForSnapRef.current = stopsRouteCoords;
@@ -4114,6 +4129,22 @@ export function ActiveTripScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         )}
 
+        {/* Reserva paga aguardando aceite: a parada do passageiro fica fora da rota até o
+            motorista aceitar. Sem este aviso, o mapa parece indicar que não há quem buscar. */}
+        {pendingAcceptanceCount > 0 && !finalizeVisible && !completedVisible && !(allDone && noStopsAfterStart) && (
+          <View
+            style={[styles.pendingAcceptBanner, { bottom: effectiveBottomInset + 80 }]}
+            pointerEvents="none"
+          >
+            <MaterialIcons name="hourglass-empty" size={16} color="#1E40AF" />
+            <Text style={styles.pendingAcceptBannerText} numberOfLines={3}>
+              {pendingAcceptanceCount === 1
+                ? 'Você tem 1 reserva aguardando seu aceite. O embarque dela só entra na rota depois que você aceitar.'
+                : `Você tem ${pendingAcceptanceCount} reservas aguardando seu aceite. Os embarques só entram na rota depois que você aceitar.`}
+            </Text>
+          </View>
+        )}
+
         {/* All done float button — também aparece quando todas as paradas foram canceladas */}
         {allDone && !finalizeVisible && !completedVisible && (
           <>
@@ -5166,6 +5197,27 @@ const styles = StyleSheet.create({
   allCancelledBannerText: {
     flex: 1,
     color: '#92400E',
+    fontSize: 13,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+
+  // Reserva paga aguardando aceite: a parada do passageiro ainda não entra na rota.
+  pendingAcceptBanner: {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    backgroundColor: '#DBEAFE',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  pendingAcceptBannerText: {
+    flex: 1,
+    color: '#1E40AF',
     fontSize: 13,
     fontWeight: '600',
     lineHeight: 18,

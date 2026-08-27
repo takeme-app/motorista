@@ -26,6 +26,10 @@ import { invokeRefundJourneyStartNotAccepted } from '../lib/refundJourneyStartNo
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 import { useAppAlert } from '../contexts/AppAlertContext';
 import { AppConfirmModal } from '../components/AppConfirmModal';
+import {
+  SUPPORT_PHONE_TEL_URL as SUPPORT_PHONE,
+  SUPPORT_WHATSAPP_URL as SUPPORT_WHATSAPP,
+} from '@take-me/shared';
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Activities'>,
@@ -79,8 +83,6 @@ type TripRow = {
 
 type FilterCategory = 'Todas' | 'Viagens' | 'Envios' | 'Dependentes';
 
-const SUPPORT_PHONE = 'tel:+5583999999999';
-const SUPPORT_WHATSAPP = 'https://wa.me/5583999999999';
 
 function applyDateMask(text: string): string {
   const digits = text.replace(/\D/g, '').slice(0, 8);

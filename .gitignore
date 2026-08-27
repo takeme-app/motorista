@@ -83,3 +83,12 @@ apps/motorista/release/
 
 # Cache de build do Gradle (não versionar)
 **/.gradle_home/
+
+# Credenciais de assinatura (NUNCA versionar — contêm chaves e senhas)
+*.keystore
+*.jks
+credentials.json
+credentials.json.*
+credentials/
+google-service-account.json
+*.p8

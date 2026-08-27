@@ -93,3 +93,27 @@ verify_jwt = true
 
 [functions.lookup-spedy-invoice]
 verify_jwt = true
+
+# Pix real (gestor de provedores): gateway não repassa Authorization; as funções
+# validam o JWT com getClaims() (cliente) ou service_role/admin internamente.
+[functions.create-pix-charge]
+verify_jwt = false
+
+[functions.get-pix-charge-status]
+verify_jwt = false
+
+# Webhook do Asaas: autentica pelo header asaas-access-token (ASAAS_WEBHOOK_TOKEN,
+# comparação em tempo constante) + re-consulta GET /payments/{id}.
+[functions.asaas-webhook]
+verify_jwt = false
+
+# Crons Pix (service role via vault; ver migration 20260826000006).
+[functions.expire-pix-charges]
+verify_jwt = false
+
+[functions.reconcile-pix]
+verify_jwt = false
+
+# Saúde dos provedores Pix (aba do admin): exige app_metadata.role = admin; nunca expõe a chave.
+[functions.pix-provider-health]
+verify_jwt = false

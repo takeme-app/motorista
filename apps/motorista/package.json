@@ -1,6 +1,6 @@
 {
   "name": "motorista",
-  "version": "1.0.19",
+  "version": "1.0.23",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -10,6 +10,7 @@
     "motorista:android": "npm run motorista:android --prefix ../..",
     "build:apk": "node scripts/build-apk.js",
     "android:release": "node scripts/build-release-apk.js",
+    "android:bundle": "node scripts/build-release-bundle.js",
     "motorista:apk": "npm run motorista:apk --prefix ../..",
     "start": "expo start --port 8081",
     "start:lan": "node -e \"const fs=require('fs'),path=require('path');const r=path.resolve(__dirname,'../../.env');const d=path.resolve(__dirname,'.env');if(fs.existsSync(r))fs.copyFileSync(r,d);\" && expo start --port 8081 --host lan",
@@ -55,6 +56,7 @@
     "expo-sharing": "~14.0.8",
     "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
+    "expo-updates": "~29.0.20",
     "react": "19.1.0",
     "react-native": "0.81.5",
     "react-native-keyboard-controller": "1.18.5",

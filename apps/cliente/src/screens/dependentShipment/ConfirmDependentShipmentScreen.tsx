@@ -12,7 +12,7 @@ import { useBottomSafeInset } from '@take-me/shared';
 import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { DependentShipmentStackParamList } from '../../navigation/types';
-import { PaymentMethodSection, type PaymentMethodType } from '../../components/PaymentMethodSection';
+import { PaymentMethodSection, type PaymentMethodType, type CardPaymentConfirmParams } from '../../components/PaymentMethodSection';
 import { supabase } from '../../lib/supabase';
 import { registerPalliativePix } from '../../lib/palliativePixStore';
 import { useAppAlert } from '../../contexts/AppAlertContext';
@@ -29,6 +29,8 @@ import { snapshotFromPricingResult } from '../../lib/orderPricingSnapshot';
 import { dependentShipmentTotalPassengers, maxBagsForTrip } from '../../lib/tripCapacityLimits';
 import { fetchDriverStripeChargesEnabled } from '../../lib/driverStripeConnect';
 import { fetchPlatformFeePctForService } from '../../lib/platformFees';
+import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
+import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'ConfirmDependentShipment'>;
 
@@ -106,7 +108,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     photoUris,
   } = route.params;
   const driver = route.params.driver;
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('pix');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('dinheiro');
   const [submitting, setSubmitting] = useState(false);
   /** Stripe Connect (`charges_enabled`): só então cartão/Pix ficam disponíveis. */
   const [connectChargesEnabled, setConnectChargesEnabled] = useState<boolean | null>(null);
@@ -178,10 +180,10 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
   }, [amountCents, driver?.id]);
 
   const allowedPaymentMethods = useMemo((): PaymentMethodType[] => {
-    // Dinheiro ocultado de todos os checkouts. Pix paliativo não depende do Stripe Connect.
-    if (connectStatusLoading) return ['pix'];
-    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix'];
-    return ['pix'];
+    // Pix paliativo não depende do Stripe Connect do motorista — fica disponível como o dinheiro.
+    if (connectStatusLoading) return ['pix', 'dinheiro'];
+    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix', 'dinheiro'];
+    return ['pix', 'dinheiro'];
   }, [connectChargesEnabled, connectStatusLoading]);
 
   useEffect(() => {
@@ -203,7 +205,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (selectedPaymentMethod == null) return;
     if (!allowedPaymentMethods.includes(selectedPaymentMethod)) {
-      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'pix');
+      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'dinheiro');
     }
   }, [allowedPaymentMethods, selectedPaymentMethod]);
 
@@ -244,7 +246,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
   }, [pricingPreview, appliedPromotionId, appliedPromoWorkerRouteId]);
 
   const handleConfirmPayment = useCallback(
-    async (params: { method: PaymentMethodType; paymentMethodId?: string }) => {
+    async (params: CardPaymentConfirmParams) => {
       setSubmitting(true);
       try {
         if (!allowedPaymentMethods.includes(params.method)) {
@@ -423,12 +425,32 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         const shipmentId = row?.id;
         const orderId = shipmentId ? orderIdFromUuid(shipmentId) : '----';
 
-        if (shipmentId && (params.method === 'credito' || params.method === 'debito') && params.paymentMethodId) {
-          const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke('charge-shipment', {
+        const hasStripePm = Boolean(params.paymentMethodId?.trim());
+        const hasSavedPm = Boolean(params.savedPaymentMethodId?.trim());
+        if (shipmentId && (params.method === 'credito' || params.method === 'debito') && (hasStripePm || hasSavedPm)) {
+          // O slug correto é `charge-shipments` (EDGE_CHARGE_SHIPMENT_SLUG) e a função exige o
+          // Bearer do usuário — antes chamávamos 'charge-shipment' (inexistente) sem Authorization,
+          // então o cartão neste fluxo falhava sempre.
+          const stripeCtx = await ensureAccessTokenForStripeFunctions({
+            holderCpfDigits: params.holderCpfDigits,
+          });
+          if (!stripeCtx.ok) {
+            await supabase
+              .from('dependent_shipments')
+              .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
+              .eq('id', shipmentId);
+            showAlert('Pagamento', stripeCtx.message);
+            setSubmitting(false);
+            return;
+          }
+          const { data: chargeData, error: chargeFnError } = await supabase.functions.invoke(EDGE_CHARGE_SHIPMENT_SLUG, {
+            headers: { Authorization: `Bearer ${stripeCtx.accessToken}` },
             body: {
               dependent_shipment_id: shipmentId,
-              stripe_payment_method_id: params.paymentMethodId,
               card_intent: params.method === 'credito' ? 'credit' : 'debit',
+              ...(hasSavedPm
+                ? { payment_method_id: params.savedPaymentMethodId!.trim() }
+                : { stripe_payment_method_id: params.paymentMethodId!.trim() }),
             },
           });
           const chargeErrMsg =
@@ -437,13 +459,22 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
               ? String((chargeData as { error?: string }).error ?? '')
               : '');
           if (chargeErrMsg) {
-            await supabase
+            // Guard: um timeout de rede pode chegar aqui DEPOIS de a edge ter
+            // confirmado o PaymentIntent no servidor. Só cancela se nenhum
+            // pagamento foi registrado (stripe_payment_intent_id nulo) — senão
+            // cancelaríamos um pedido JÁ COBRADO sem disparar estorno.
+            const { data: cancelledRows } = await supabase
               .from('dependent_shipments')
               .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
-              .eq('id', shipmentId);
+              .eq('id', shipmentId)
+              .is('stripe_payment_intent_id', null)
+              .select('id');
+            const wasCancelled = Array.isArray(cancelledRows) && cancelledRows.length > 0;
             showAlert(
               'Pagamento',
-              chargeErrMsg || 'Não foi possível confirmar o pagamento; o pedido foi cancelado.',
+              wasCancelled
+                ? chargeErrMsg || 'Não foi possível confirmar o pagamento; o pedido foi cancelado.'
+                : 'Não foi possível confirmar o resultado do pagamento, mas ele pode ter sido aprovado. Verifique em Atividades ou fale com o suporte antes de tentar de novo.',
             );
             setSubmitting(false);
             return;
@@ -550,6 +581,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           cancellationPolicyVariant="shipment_debit"
           loading={submitting || connectStatusLoading}
           allowedMethods={allowedPaymentMethods}
+          cashInstructionVariant="dependent_shipment"
           connectCashOnlyContext="dependent_shipment"
         />
       </ScrollView>

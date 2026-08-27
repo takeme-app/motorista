@@ -1,10 +1,10 @@
 {
   "expo": {
+    "owner": "takemeapps-team",
     "name": "Take Me - Cliente",
     "slug": "take-me-cliente",
-    "owner": "fraktal-softwares",
     "scheme": "take-me-cliente",
-    "version": "1.0.1",
+    "version": "1.0.32",
     "icon": "./assets/logo.png",
     "splash": {
       "image": "./assets/logo.png",
@@ -20,7 +20,7 @@
       "supportsTablet": true
     },
     "android": {
-      "package": "com.takeme.cliente",
+      "package": "com.takemeapp.cliente",
       "softwareKeyboardLayoutMode": "pan",
       "googleServicesFile": "./google-services-cliente.json",
       "adaptiveIcon": {
@@ -40,7 +40,7 @@
     },
     "extra": {
       "eas": {
-        "projectId": "d68908f6-df27-457e-86f0-fa952777a0b6"
+        "projectId": "494a3ce5-d6e4-4cc6-b193-07f045fcd05d"
       }
     },
     "experiments": {
@@ -95,7 +95,7 @@
     ],
     "runtimeVersion": "1.0.0",
     "updates": {
-      "url": "https://u.expo.dev/d68908f6-df27-457e-86f0-fa952777a0b6"
+      "url": "https://u.expo.dev/494a3ce5-d6e4-4cc6-b193-07f045fcd05d"
     }
   }
 }

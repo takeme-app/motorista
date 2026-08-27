@@ -20,9 +20,11 @@ import { supabase } from '../../lib/supabase';
 import { fetchWorkerShipmentBaseId } from '../../lib/preparerEncomendasBase';
 import { formatShipmentCode, getOrCreateActiveSupportConversationId } from '@take-me/shared';
 import { useAppAlert } from '../../contexts/AppAlertContext';
+import {
+  SUPPORT_PHONE_TEL_URL as SUPPORT_PHONE,
+  SUPPORT_WHATSAPP_URL as SUPPORT_WHATSAPP,
+} from '@take-me/shared';
 
-const SUPPORT_PHONE = 'tel:+5583999999999';
-const SUPPORT_WHATSAPP = 'https://wa.me/5583999999999';
 
 type Props = NativeStackScreenProps<ColetasEncomendasStackParamList, 'ColetasMain'>;
 

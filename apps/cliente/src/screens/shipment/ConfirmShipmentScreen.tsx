@@ -108,16 +108,16 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
   }, [clientPreferredDriverId]);
 
   const allowedPaymentMethods = useMemo((): PaymentMethodType[] => {
-    // Dinheiro ocultado de todos os checkouts. Pix paliativo não depende do Stripe Connect.
-    if (connectStatusLoading) return ['pix'];
-    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix'];
-    return ['pix'];
+    // Pix paliativo não depende do Stripe Connect do motorista — fica disponível como o dinheiro.
+    if (connectStatusLoading) return ['pix', 'dinheiro'];
+    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix', 'dinheiro'];
+    return ['pix', 'dinheiro'];
   }, [connectChargesEnabled, connectStatusLoading]);
 
   useEffect(() => {
     if (selectedPaymentMethod == null) return;
     if (!allowedPaymentMethods.includes(selectedPaymentMethod)) {
-      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'pix');
+      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'dinheiro');
     }
   }, [allowedPaymentMethods, selectedPaymentMethod]);
 
@@ -412,13 +412,21 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
           if (chargeFnError) {
             const raw = await describeInvokeFailure(chargeData, chargeFnError);
             const chargeErrMsg = getUserErrorMessage({ message: raw }, raw);
-            await supabase
+            // Guard: timeout de rede pode chegar aqui DEPOIS de a edge ter
+            // confirmado o PaymentIntent. Só cancela sem pagamento registrado —
+            // senão cancelaríamos um pedido JÁ COBRADO sem disparar estorno.
+            const { data: cancelledRows } = await supabase
               .from('shipments')
               .update({ status: 'cancelled', updated_at: new Date().toISOString() } as never)
-              .eq('id', shipmentId);
+              .eq('id', shipmentId)
+              .is('stripe_payment_intent_id', null)
+              .select('id');
+            const wasCancelled = Array.isArray(cancelledRows) && cancelledRows.length > 0;
             showAlert(
               'Pagamento',
-              chargeErrMsg || 'Não foi possível confirmar o pagamento; o pedido foi cancelado.',
+              wasCancelled
+                ? chargeErrMsg || 'Não foi possível confirmar o pagamento; o pedido foi cancelado.'
+                : 'Não foi possível confirmar o resultado do pagamento, mas ele pode ter sido aprovado. Verifique em Atividades ou fale com o suporte antes de tentar de novo.',
             );
             return;
           }
@@ -689,6 +697,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
           confirmLabel="Confirmar envio"
           cancellationPolicyVariant={cancellationVariant}
           allowedMethods={allowedPaymentMethods}
+          cashInstructionVariant="shipment"
           loading={submitting}
         />
       </ScrollView>

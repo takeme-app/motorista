@@ -362,6 +362,26 @@ test.describe('listas, dados da API e filtros', () => {
     await expect(page.getByRole('heading', { name: 'Configurações', exact: true })).toBeVisible({ timeout: 25_000 });
   });
 
+  test('Configurações — aba Pix visível e option Bradesco desabilitada', async ({ page }) => {
+    await page.goto('/configuracoes');
+    await expect(page.getByRole('heading', { name: 'Configurações', exact: true })).toBeVisible({ timeout: 25_000 });
+    const pixTab = page.getByRole('button', { name: 'Pix', exact: true });
+    await expect(pixTab).toBeVisible();
+    // Trocar de aba é só estado de UI (nenhuma mutação) — seguro fora de E2E_ALLOW_MUTATIONS.
+    await pixTab.click();
+    await expect(page.getByTestId('pix-config-tab')).toBeVisible({ timeout: 25_000 });
+    await expect(
+      page.getByTestId('pix-provider-select').locator('option[value="bradesco"]'),
+    ).toBeDisabled();
+  });
+
+  test('Pagamentos — /pagamentos/pix renderiza (somente leitura)', async ({ page }) => {
+    await page.goto('/pagamentos/pix');
+    await expect(page.getByRole('heading', { name: 'Gestão Pix', exact: true })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole('button', { name: 'Cobranças', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Devoluções/ })).toBeVisible();
+  });
+
   test('CRUD leve — criar promoção (rota) e editar encomenda', async ({ page }) => {
     test.skip(process.env.E2E_ALLOW_MUTATIONS !== '1', 'Defina E2E_ALLOW_MUTATIONS=1 para navegar em criar/editar (evitar produção).');
     await page.goto('/promocoes/nova');

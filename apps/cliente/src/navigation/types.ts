@@ -259,8 +259,80 @@ export type TripLiveDriverDisplay = {
   bookingId?: string;
 };
 
+/**
+ * Draft serializável da reserva enviado ao `create-pix-charge` (Pix real).
+ * Mesma forma do `draft_booking` do charge-booking — o servidor recalcula o
+ * preço e insere o booking `pending` (a vaga é segurada pelo trigger).
+ */
+export type PixBookingDraftParam = {
+  scheduled_trip_id: string;
+  origin_address: string;
+  origin_lat: number;
+  origin_lng: number;
+  destination_address: string;
+  destination_lat: number;
+  destination_lng: number;
+  passenger_count: number;
+  bags_count: number;
+  passenger_data: { name: string; cpf: string; bags: string }[];
+  promotion_id?: string;
+};
+
+/**
+ * Dados serializáveis para montar a tela de sucesso (PaymentConfirmed) quando o
+ * Pix real for pago — nada de callbacks/Map em memória: sobrevive a cold start.
+ */
+export type TripPixSuccessNavParam = {
+  originAddress: string;
+  destinationAddress: string;
+  departure: string;
+  arrival: string;
+  driverName: string;
+  driverRating: number;
+  vehicleLabel: string;
+  scheduledTripId?: string;
+  immediateTrip?: boolean;
+  origin?: { latitude: number; longitude: number; address: string };
+  destination?: { latitude: number; longitude: number; address: string };
+};
+
+/**
+ * Cobrança Pix pendente persistida em AsyncStorage (1 por vez) para retomada
+ * após cold start/foreground (usePendingPixChargeResume). 100% serializável.
+ */
+export type PendingPixChargeParam = {
+  /** Dono da cobrança — guard anti-vazamento entre contas no mesmo device. */
+  userId: string;
+  service: 'booking';
+  pixChargeId: string;
+  /** Id do pedido criado pelo servidor (booking, na fase viagem). */
+  entityId: string;
+  /** Valor recalculado NO SERVIDOR (o que aparece na tela e no sucesso). */
+  amountCents: number;
+  qrPayload: string;
+  qrImageBase64: string | null;
+  expiresAt: string;
+  createdAt: string;
+  successNav: TripPixSuccessNavParam;
+};
+
+/** Params da PixPaymentScreen: criação (draft) OU retomada de cobrança pendente. */
+export type PixPaymentScreenParams =
+  | {
+      service: 'booking';
+      draft: PixBookingDraftParam;
+      /** CPF (11 dígitos) coletado no checkout quando o perfil não tem um válido. */
+      cpf?: string;
+      /** Valor estimado no app — exibido só enquanto o servidor não responde. */
+      estimatedAmountCents: number;
+      successNav: TripPixSuccessNavParam;
+      resume?: undefined;
+    }
+  | { resume: true; stored: PendingPixChargeParam };
+
 export type TripStackParamList = {
   PixPaliativo: { requestId: string };
+  PixPayment: PixPaymentScreenParams;
   WhenNeeded: undefined;
   PlanTrip: undefined;
   PlanRide: { origin?: TripPlaceParam; destination?: TripPlaceParam; scheduledDateId?: string; scheduledTimeSlot?: string };

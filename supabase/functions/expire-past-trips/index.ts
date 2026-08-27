@@ -52,6 +52,61 @@ function startOfTodaySaoPauloUtcIso(): string {
 
 type Admin = ReturnType<typeof createClient>;
 
+/**
+ * Pix real: pedido pago via pix_charges (pix_paid_at) NÃO tem
+ * stripe_payment_intent_id — cai no branch "sem pagamento" e seria cancelado
+ * ficando com o dinheiro do cliente. Antes de cancelar, enfileira a devolução
+ * manual (pix_refunds_pending, reason 'expired_not_realized'). Best-effort:
+ * falha aqui não bloqueia o cancelamento (o reconcile/admin ainda enxergam a
+ * charge paga com pedido cancelado).
+ */
+async function queuePixRefundIfPaid(
+  admin: Admin,
+  entityType: "shipment" | "dependent_shipment" | "booking",
+  table: string,
+  id: string,
+): Promise<void> {
+  try {
+    const { data } = await admin
+      .from(table)
+      .select("id, user_id, amount_cents, pix_charge_id, pix_paid_at")
+      .eq("id", id)
+      .maybeSingle();
+    const row = data as {
+      user_id?: string | null;
+      amount_cents?: number | null;
+      pix_charge_id?: string | null;
+      pix_paid_at?: string | null;
+    } | null;
+    if (!row?.pix_paid_at) return;
+
+    // Dedup: não duplica pendência da mesma cobrança+motivo.
+    if (row.pix_charge_id) {
+      const { data: existing } = await admin
+        .from("pix_refunds_pending")
+        .select("id")
+        .eq("pix_charge_id", row.pix_charge_id)
+        .eq("reason", "expired_not_realized")
+        .eq("status", "pending")
+        .limit(1);
+      if (Array.isArray(existing) && existing.length > 0) return;
+    }
+
+    const { error } = await admin.from("pix_refunds_pending").insert({
+      pix_charge_id: row.pix_charge_id ?? null,
+      entity_type: entityType,
+      entity_id: id,
+      user_id: row.user_id ?? null,
+      amount_cents: Math.max(0, Math.floor(Number(row.amount_cents ?? 0))),
+      reason: "expired_not_realized",
+      notes: "pedido pago via Pix expirou sem ser realizado (expire-past-trips)",
+    } as never);
+    if (error) console.error(`[expire-past-trips] fila pix ${entityType} ${id}:`, error.message);
+  } catch (e) {
+    console.error(`[expire-past-trips] fila pix ${entityType} ${id}:`, e);
+  }
+}
+
 async function refundOrCancel(
   admin: Admin,
   supabaseUrl: string,
@@ -87,10 +142,13 @@ async function refundOrCancel(
       // Erro real (ex.: Stripe falhou). NÃO cancela; tenta no próximo ciclo.
       return { done: false, error: msg || `process-refund ${res.status}` };
     }
-    // 2) Não pago via Stripe (dinheiro / sem cobrança) — cancela aqui mesmo.
+    // 2) Não pago via Stripe (dinheiro / Pix real / sem cobrança) — cancela aqui mesmo.
   } catch (e) {
     return { done: false, error: e instanceof Error ? e.message : String(e) };
   }
+
+  // Pix real pago (pix_paid_at): registra devolução manual ANTES de cancelar.
+  await queuePixRefundIfPaid(admin, entityType, table, id);
 
   const update: Record<string, unknown> = { status: "cancelled", updated_at: nowIso };
   if (entityType === "booking") {
