@@ -1,6 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { createPasswordResetToken } from "../_shared/passwordResetToken.ts";
 
 type RegistrationType = "take_me" | "parceiro" | "preparador_excursões" | "preparador_encomendas";
 
@@ -119,87 +118,6 @@ function getPasswordResetSecret(): string {
   throw new Error("Defina PASSWORD_RESET_TOKEN_SECRET ou SUPABASE_JWT_SECRET (mín. 16 caracteres)");
 }
 
-type RegistrationType = "take_me" | "parceiro" | "preparador_excursões" | "preparador_encomendas";
-
-function parseRegistrationType(raw: unknown): RegistrationType | null {
-  if (raw === "take_me" || raw === "parceiro" || raw === "preparador_excursões" || raw === "preparador_encomendas") {
-    return raw;
-  }
-  return null;
-}
-
-function mapDriverTypeToSubtype(t: RegistrationType): {
-  role: "driver" | "preparer";
-  subtype: "takeme" | "partner" | "excursions" | "shipments";
-} {
-  if (t === "take_me") return { role: "driver", subtype: "takeme" };
-  if (t === "parceiro") return { role: "driver", subtype: "partner" };
-  if (t === "preparador_excursões") return { role: "preparer", subtype: "excursions" };
-  return { role: "preparer", subtype: "shipments" };
-}
-
-type AuthUserLike = {
-  id: string;
-  email?: string | null;
-  new_email?: string | null;
-  user_metadata?: Record<string, unknown> | null;
-  app_metadata?: Record<string, unknown> | null;
-  identities?: Array<{ email?: string | null; identity_data?: Record<string, unknown> }>;
-};
-
-function metaEmail(meta: Record<string, unknown> | null | undefined): string | undefined {
-  const e = meta?.email;
-  return typeof e === "string" ? e : undefined;
-}
-
-function authUserMatchesEmailNorm(u: AuthUserLike, emailNorm: string): boolean {
-  const set = new Set<string>();
-  const add = (raw: string | null | undefined) => {
-    const t = (raw ?? "").trim().toLowerCase();
-    if (t) set.add(t);
-  };
-  add(u.email ?? undefined);
-  add(u.new_email ?? undefined);
-  add(metaEmail(u.user_metadata ?? undefined));
-  add(metaEmail(u.app_metadata ?? undefined));
-  for (const id of u.identities ?? []) {
-    if (typeof id.email === "string") add(id.email);
-    const em = id.identity_data?.email;
-    if (typeof em === "string") add(em);
-  }
-  return set.has(emailNorm);
-}
-
-async function findAuthUserIdByEmailNorm(
-  admin: ReturnType<typeof createClient>,
-  emailNorm: string,
-): Promise<string | null> {
-  const { data: rpcId, error: rpcErr } = await admin.rpc("lookup_auth_user_id_by_normalized_email", {
-    p_email: emailNorm,
-  });
-  if (!rpcErr && rpcId != null && String(rpcId).length > 0) {
-    return String(rpcId);
-  }
-  if (rpcErr) {
-    console.warn("[verify-email-code] rpc lookup_auth_user_id_by_normalized_email", rpcErr);
-  }
-
-  const perPage = 1000;
-  const maxPages = 500;
-  for (let page = 1; page <= maxPages; page++) {
-    const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
-    if (error) {
-      console.error("[verify-email-code] listUsers", { page, error });
-      return null;
-    }
-    const users = data?.users ?? [];
-    const hit = users.find((u) => authUserMatchesEmailNorm(u as AuthUserLike, emailNorm));
-    if (hit?.id) return hit.id;
-    if (users.length < perPage) return null;
-  }
-  return null;
-}
-// --- fim token ---
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
