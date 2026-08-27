@@ -201,19 +201,38 @@ export class AsaasProvider implements PixProvider {
     })) as AsaasPayment;
     if (!payment?.id) throw new Error("Asaas não devolveu o id do payment");
 
-    const qr = (await this.fetchJson(
-      "GET",
-      `/payments/${payment.id}/pixQrCode`,
-    )) as { encodedImage?: string; payload?: string };
-    if (!qr?.payload || !qr?.encodedImage) {
-      throw new Error("Asaas não devolveu o QR Code do payment");
-    }
+    // O payment JÁ existe no Asaas a partir daqui. Se o QR falhar (conta sem
+    // chave Pix, indisponibilidade), precisamos apagá-lo antes de propagar o
+    // erro — senão fica uma cobrança pendente órfã no painel do cliente a cada
+    // tentativa, que ninguém consegue liquidar e alguém pode pagar por engano
+    // pelo histórico (viraria paid_orphan + fila de devolução sem motivo).
+    try {
+      const qr = (await this.fetchJson(
+        "GET",
+        `/payments/${payment.id}/pixQrCode`,
+      )) as { encodedImage?: string; payload?: string };
+      if (!qr?.payload || !qr?.encodedImage) {
+        throw new Error("Asaas não devolveu o QR Code do payment");
+      }
 
-    return {
-      providerChargeId: payment.id,
-      qrPayload: qr.payload,
-      qrImageBase64: qr.encodedImage,
-    };
+      return {
+        providerChargeId: payment.id,
+        qrPayload: qr.payload,
+        qrImageBase64: qr.encodedImage,
+      };
+    } catch (e) {
+      // Best-effort: a falha do cancelamento não pode mascarar o erro original.
+      try {
+        await this.cancelCharge(payment.id);
+        console.warn(`[asaas] payment ${payment.id} cancelado após falha no QR`);
+      } catch (cancelErr) {
+        console.error(
+          `[asaas] payment ${payment.id} ficou ÓRFÃO — falha ao cancelar:`,
+          cancelErr instanceof Error ? cancelErr.message : cancelErr,
+        );
+      }
+      throw e;
+    }
   }
 
   async getChargeStatus(providerChargeId: string): Promise<ProviderChargeSnapshot> {
