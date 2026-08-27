@@ -19,6 +19,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { fetchDriverPaymentTransfers, type DriverPaymentTransfer } from '../lib/driverPaymentTransfers';
+import { fetchDriverPendingPayouts, type PendingPayoutsSummary } from '../lib/driverPendingPayouts';
 import {
   fetchDriverPlatformFeeSummary,
   platformFeeLedgerAmountLabel,
@@ -92,6 +93,9 @@ export function PaymentsScreen({ navigation }: Props) {
   const [tipsCents, setTipsCents] = useState(0);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pendingPayouts, setPendingPayouts] = useState<PendingPayoutsSummary>({
+    totalCents: 0, count: 0, pixKey: null, unavailable: false,
+  });
   const [stripeState, setStripeState] = useState<StripeConnectState>('none');
   const [stripePendingVerification, setStripePendingVerification] = useState(0);
   const [stripeAccountId, setStripeAccountId] = useState<string | null>(null);
@@ -121,6 +125,7 @@ export function PaymentsScreen({ navigation }: Props) {
     setStripePendingVerification(Number(wp?.stripe_connect_pending_verification_count ?? 0) || 0);
     const acct = (wp?.stripe_connect_account_id as string | null | undefined)?.trim() ?? '';
     setStripeAccountId(acct || null);
+    setPendingPayouts(await fetchDriverPendingPayouts(supabase, user.id));
     const feeSummary = await fetchDriverPlatformFeeSummary(supabase, 5).catch(() => ({
       ...EMPTY_PLATFORM_FEE_SUMMARY,
       unavailable: true,
@@ -293,6 +298,46 @@ export function PaymentsScreen({ navigation }: Props) {
             expressLoginLoading={expressLoginLoading}
             onPressExpress={handleStripeExpressLogin}
           />
+
+          <Text style={[styles.sectionTitle, { marginTop: 20 }]}>A receber da plataforma</Text>
+          <View style={styles.platformFeeCard}>
+            <View style={styles.platformFeeHeader}>
+              <View style={styles.platformFeeIcon}>
+                <MaterialIcons name="payments" size={20} color={GOLD} />
+              </View>
+              <View style={styles.platformFeeTitleCol}>
+                <Text style={styles.platformFeeLabel}>Repasses pendentes</Text>
+                <Text style={styles.platformFeeHint}>
+                  Corridas pagas por Pix são recebidas pela plataforma e repassadas para a sua chave Pix.
+                </Text>
+              </View>
+              <Text style={[styles.platformFeeAmount, styles.platformFeeAmountOk]}>
+                {formatCents(pendingPayouts.totalCents)}
+              </Text>
+            </View>
+
+            {pendingPayouts.unavailable ? (
+              <Text style={styles.platformFeeEmpty}>
+                Valor temporariamente indisponível. Tente atualizar novamente em alguns instantes.
+              </Text>
+            ) : pendingPayouts.count === 0 ? (
+              <Text style={styles.platformFeeEmpty}>Nenhum repasse pendente.</Text>
+            ) : (
+              <Text style={styles.platformFeeEmpty}>
+                {pendingPayouts.count === 1
+                  ? '1 corrida aguardando repasse.'
+                  : `${pendingPayouts.count} corridas aguardando repasse.`}
+              </Text>
+            )}
+
+            {pendingPayouts.pixKey ? (
+              <Text style={styles.platformFeeEmpty}>Chave Pix: {pendingPayouts.pixKey}</Text>
+            ) : pendingPayouts.count > 0 ? (
+              <Text style={[styles.platformFeeEmpty, { color: '#b53838' }]}>
+                Cadastre sua chave Pix no perfil para receber os repasses.
+              </Text>
+            ) : null}
+          </View>
 
           <Text style={[styles.sectionTitle, { marginTop: 20 }]}>Saldo devido à plataforma</Text>
           <View style={styles.platformFeeCard}>
