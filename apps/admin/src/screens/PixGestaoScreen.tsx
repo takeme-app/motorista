@@ -425,6 +425,8 @@ export default function PixGestaoScreen() {
     { label: 'Expira / paga em', flex: '0 0 120px', minWidth: 120 },
     { label: 'Detalhe', flex: '0 0 80px', minWidth: 80 },
   ];
+  // Largura mínima única de cabeçalho+linhas (soma das colunas + padding 0 16px).
+  const chargeTableMinWidth = chargeCols.reduce((sum, c) => sum + c.minWidth, 0) + 32;
   // boxSizing border-box: sem isto o padding lateral somava POR FORA do
   // minWidth e cada célula ficava 12px mais larga que o declarado — 84px
   // fantasma em 7 colunas, o bastante para a tabela estourar o container e
@@ -435,10 +437,9 @@ export default function PixGestaoScreen() {
   };
 
   const chargeHeader = React.createElement('div', {
-    // minWidth max-content: sem isto o header parava na largura do container
-    // (996px) enquanto as linhas iam a 1050px — a faixa cinza não cobria a área
-    // rolada e sobrava um vazio branco à direita.
-    style: { display: 'flex', height: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9', padding: '0 16px', alignItems: 'center', minWidth: 'max-content' as const },
+    // Largura mínima definida (igual às linhas): o fundo cinza cobre toda a
+    // área rolada, sem vazio branco à direita.
+    style: { display: 'flex', height: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9', padding: '0 16px', alignItems: 'center', minWidth: chargeTableMinWidth },
   }, ...chargeCols.map((c) => React.createElement('div', {
     key: c.label,
     // boxSizing igual ao das células: sem isto o cabeçalho fica 12px por
@@ -451,7 +452,7 @@ export default function PixGestaoScreen() {
     'data-testid': 'pix-charge-table-row',
     style: {
       display: 'flex', minHeight: 60, alignItems: 'center', padding: '8px 16px',
-      borderBottom: '1px solid #d9d9d9', background: '#f6f6f6', minWidth: 'max-content',
+      borderBottom: '1px solid #d9d9d9', background: '#f6f6f6', minWidth: chargeTableMinWidth,
     },
   },
     React.createElement('div', { style: { ...cellBase, flex: chargeCols[0].flex, minWidth: chargeCols[0].minWidth } }, fmtDateTime(row.created_at)),
@@ -563,12 +564,12 @@ export default function PixGestaoScreen() {
     { label: 'Status', flex: '0 0 95px', minWidth: 95 },
     { label: 'Ações', flex: '0 0 230px', minWidth: 230 },
   ];
+  const refundTableMinWidth = refundCols.reduce((sum, c) => sum + c.minWidth, 0) + 32;
 
   const refundHeader = React.createElement('div', {
-    // minWidth max-content: sem isto o header parava na largura do container
-    // (996px) enquanto as linhas iam a 1050px — a faixa cinza não cobria a área
-    // rolada e sobrava um vazio branco à direita.
-    style: { display: 'flex', height: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9', padding: '0 16px', alignItems: 'center', minWidth: 'max-content' as const },
+    // Largura mínima definida (igual às linhas): o fundo cinza cobre toda a
+    // área rolada, sem vazio branco à direita.
+    style: { display: 'flex', height: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9', padding: '0 16px', alignItems: 'center', minWidth: refundTableMinWidth },
   }, ...refundCols.map((c) => React.createElement('div', {
     key: c.label,
     // boxSizing igual ao das células: sem isto o cabeçalho fica 12px por
@@ -583,7 +584,7 @@ export default function PixGestaoScreen() {
       'data-testid': 'pix-refund-table-row',
       style: {
         display: 'flex', minHeight: 60, alignItems: 'center', padding: '8px 16px',
-        borderBottom: '1px solid #d9d9d9', background: '#f6f6f6', minWidth: 'max-content' as const,
+        borderBottom: '1px solid #d9d9d9', background: '#f6f6f6', minWidth: refundTableMinWidth,
       },
     },
       React.createElement('div', { style: { ...cellBase, flex: refundCols[0].flex, minWidth: refundCols[0].minWidth } }, fmtDateTime(row.created_at)),
