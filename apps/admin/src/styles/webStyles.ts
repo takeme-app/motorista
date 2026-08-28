@@ -498,7 +498,7 @@ export const webStyles = {
   detailPerfCardTitle: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' },
   detailPerfCardValue: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', fontFamily: "'Open Sans', Inter, sans-serif", lineHeight: 1.5 },
   detailMotoristaCard: { background: '#f6f6f6', borderRadius: 12, padding: '24px 16px', display: 'flex', flexWrap: 'wrap' as const, alignItems: 'center', gap: 16 },
-  detailMotoristaAvatar: { width: 56, height: 56, borderRadius: '50%', background: '#e2e2e2', flexShrink: 0 },
+  detailMotoristaAvatar: { width: 56, height: 56, borderRadius: '50%', background: '#e2e2e2', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' as const },
   detailMotoristaBadge: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', background: '#f1f1f1', borderRadius: 90, fontSize: 14, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' },
   detailMotoristaName: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', width: '100%' },
   detailMotoristaRating: { fontSize: 14, color: '#545454', fontFamily: 'Inter, sans-serif' },
