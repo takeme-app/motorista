@@ -319,7 +319,7 @@ Deno.serve(async (req) => {
     }
 
     // ── 5) Preço recalculado no servidor (bloco canônico compartilhado) ──
-    const priced = await computeBookingDraftPricing(admin, userId, sid);
+    const priced = await computeBookingDraftPricing(admin, userId, sid, pax);
     if ("error" in priced) {
       return jsonRes({ error: priced.error }, priced.status);
     }

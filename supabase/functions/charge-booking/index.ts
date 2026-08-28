@@ -243,6 +243,9 @@ function fundingMismatchMessage(intent: "credit" | "debit", funding: CardFunding
   return null;
 }
 
+/** 'per_person' multiplica pelo nº de passageiros; 'flat_trip' (legado) é fechado. */
+type TripPriceBasis = "per_person" | "flat_trip";
+
 function resolveTripPriceCents(
   trip: {
     route_id?: string | null;
@@ -250,33 +253,33 @@ function resolveTripPriceCents(
     amount_cents?: number | null;
   },
   routePriceById: Map<string, number | null>
-): number | null {
+): { cents: number | null; basis: TripPriceBasis | null } {
   const routeId = trip.route_id;
   if (routeId && routePriceById.has(routeId)) {
     const fromRoute = routePriceById.get(routeId);
-    if (fromRoute != null && fromRoute >= 0) return fromRoute;
+    if (fromRoute != null && fromRoute >= 0) return { cents: fromRoute, basis: "per_person" };
   }
   const tripPpp = trip.price_per_person_cents;
-  if (tripPpp != null && tripPpp >= 0) return tripPpp;
+  if (tripPpp != null && tripPpp >= 0) return { cents: tripPpp, basis: "per_person" };
   const legacy = trip.amount_cents;
-  if (legacy != null && legacy >= 0) return legacy;
-  return null;
+  if (legacy != null && legacy >= 0) return { cents: legacy, basis: "flat_trip" };
+  return { cents: null, basis: null };
 }
 
 async function resolvePriceCentsForScheduledTrip(
   admin: SupabaseClient,
   scheduledTripId: string
-): Promise<{ cents: number | null; error: string | null }> {
+): Promise<{ cents: number | null; basis: TripPriceBasis | null; error: string | null }> {
   const { data: trip, error: tripErr } = await admin
     .from("scheduled_trips")
     .select("route_id, price_per_person_cents, amount_cents")
     .eq("id", scheduledTripId)
     .maybeSingle();
   if (tripErr) {
-    return { cents: null, error: "Não foi possível obter os dados da viagem." };
+    return { cents: null, basis: null, error: "Não foi possível obter os dados da viagem." };
   }
   if (!trip) {
-    return { cents: null, error: "Viagem não encontrada." };
+    return { cents: null, basis: null, error: "Viagem não encontrada." };
   }
   const routeId = trip.route_id as string | null | undefined;
   const routePriceById = new Map<string, number | null>();
@@ -288,13 +291,13 @@ async function resolvePriceCentsForScheduledTrip(
       .eq("is_active", true)
       .maybeSingle();
     if (routeErr) {
-      return { cents: null, error: "Não foi possível obter o preço da rota." };
+      return { cents: null, basis: null, error: "Não foi possível obter o preço da rota." };
     }
     if (route) {
       routePriceById.set(route.id as string, (route.price_per_person_cents as number | null) ?? null);
     }
   }
-  const cents = resolveTripPriceCents(
+  const { cents, basis } = resolveTripPriceCents(
     {
       route_id: trip.route_id as string | null | undefined,
       price_per_person_cents: trip.price_per_person_cents as number | null | undefined,
@@ -302,7 +305,7 @@ async function resolvePriceCentsForScheduledTrip(
     },
     routePriceById
   );
-  return { cents, error: null };
+  return { cents, basis, error: null };
 }
 
 async function resolveStripePaymentMethodId(
@@ -528,14 +531,19 @@ Deno.serve(async (req) => {
         });
       }
 
-      const { cents: amountCentsResolved, error: priceErr } = await resolvePriceCentsForScheduledTrip(admin, sid);
+      const { cents: amountCentsResolved, basis, error: priceErr } = await resolvePriceCentsForScheduledTrip(admin, sid);
       if (priceErr) {
         return new Response(JSON.stringify({ error: priceErr }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      const amountCents = amountCentsResolved != null ? Number(amountCentsResolved) : NaN;
+      const unitCents = amountCentsResolved != null ? Number(amountCentsResolved) : NaN;
+      // price_per_person_cents é POR PESSOA: a base multiplica pelo nº de
+      // passageiros (mesma conta do checkout do app). Sem isto, reserva de 2
+      // passageiros era COBRADA pelo preço de 1 — o app mostrava o total certo
+      // e o PaymentIntent/Pix saía com metade. 'flat_trip' (legado) é fechado.
+      const amountCents = basis === "flat_trip" ? unitCents : Math.floor(unitCents * pax);
       if (!Number.isInteger(amountCents) || amountCents < 1) {
         return new Response(JSON.stringify({ error: "Valor da viagem inválido" }), {
           status: 400,
