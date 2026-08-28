@@ -298,6 +298,7 @@ function CancelModal({
   onConfirm,
   loading,
   paidBookingsCount,
+  pixPaidCount,
   estimatedPenaltyCents,
   penaltyEnabled,
 }: {
@@ -306,10 +307,20 @@ function CancelModal({
   onConfirm: () => void;
   loading: boolean;
   paidBookingsCount: number;
+  /** Quantos dos pagantes usaram Pix — devolução manual, não estorno no cartão. */
+  pixPaidCount: number;
   estimatedPenaltyCents: number;
   penaltyEnabled: boolean;
 }) {
   const penaltyBrl = `R$ ${(estimatedPenaltyCents / 100).toFixed(2).replace('.', ',')}`;
+  // Prometer "estorno no cartão" para quem pagou por Pix gera chamado de
+  // suporte: a devolução do Pix é feita à mão pela equipe, por fora do app.
+  const refundSentence =
+    pixPaidCount === 0
+      ? 'Ao cancelar, o valor será estornado integralmente no cartão de cada um.'
+      : pixPaidCount === paidBookingsCount
+        ? 'Ao cancelar, nossa equipe devolve o valor do Pix em até 5 dias úteis.'
+        : 'Ao cancelar, quem pagou no cartão recebe o estorno automático, e a devolução dos Pix é feita pela nossa equipe em até 5 dias úteis.';
   return (
     <BottomSheet visible={visible} onClose={onClose}>
       <View style={styles.sheetContent}>
@@ -319,7 +330,7 @@ function CancelModal({
             {paidBookingsCount === 1
               ? '1 passageiro já pagou por esta viagem.'
               : `${paidBookingsCount} passageiros já pagaram por esta viagem.`}{' '}
-            Ao cancelar, o valor será estornado integralmente no cartão de cada um.
+            {refundSentence}
             {penaltyEnabled && estimatedPenaltyCents > 0
               ? ` Uma multa estimada de ${penaltyBrl} será descontada dos seus próximos ganhos.`
               : ''}
@@ -495,7 +506,13 @@ export function TripDetailScreen({ route, navigation }: Props) {
   const [cancelPolicy, setCancelPolicy] = useState<{
     penaltyPct: number;
     penaltyEnabled: boolean;
-    paidBookings: { id: string; amount_cents: number; admin_earning_cents: number | null }[];
+    paidBookings: {
+      id: string;
+      amount_cents: number;
+      admin_earning_cents: number | null;
+      /** Pago por Pix real: devolução é manual, feita pela equipe — não é estorno no cartão. */
+      isPix: boolean;
+    }[];
   }>({ penaltyPct: 10, penaltyEnabled: true, paidBookings: [] });
 
   const [expenseDoc, setExpenseDoc] = useState<DocumentAsset | null>(null);
@@ -762,7 +779,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
           .maybeSingle(),
         supabase
           .from('bookings')
-          .select('id, amount_cents, admin_earning_cents')
+          .select('id, amount_cents, admin_earning_cents, pix_paid_at, stripe_payment_intent_id')
           .eq('scheduled_trip_id', trip.id)
           .in('status', ['paid', 'confirmed']),
       ]);
@@ -786,14 +803,17 @@ export function TripDetailScreen({ route, navigation }: Props) {
         if (typeof v === 'number') return v !== 0;
         return true;
       })();
-      const paid = ((bookingsRes.data ?? []) as Array<{
+      const paid = ((bookingsRes.data ?? []) as unknown as Array<{
         id: string;
         amount_cents: number | null;
         admin_earning_cents: number | null;
+        pix_paid_at: string | null;
+        stripe_payment_intent_id: string | null;
       }>).map((b) => ({
         id: String(b.id),
         amount_cents: Math.max(0, Math.floor(Number(b.amount_cents ?? 0))),
         admin_earning_cents: b.admin_earning_cents != null ? Number(b.admin_earning_cents) : null,
+        isPix: Boolean(b.pix_paid_at) && !b.stripe_payment_intent_id,
       }));
       setCancelPolicy({ penaltyPct: pct, penaltyEnabled: enabled, paidBookings: paid });
     } catch {
@@ -829,6 +849,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
       const payload = (data ?? {}) as {
         cancelled?: boolean;
         refunded_count?: number;
+        pix_refunds_queued?: number;
         penalty_cents?: number;
         error?: string;
       };
@@ -840,15 +861,29 @@ export function TripDetailScreen({ route, navigation }: Props) {
       setCancelVisible(false);
       setTrip((prev) => (prev ? { ...prev, status: 'cancelled' } : prev));
       const refunded = Number(payload.refunded_count ?? 0);
+      const pixQueued = Number(payload.pix_refunds_queued ?? 0);
       const penalty = Number(payload.penalty_cents ?? 0);
-      if (refunded > 0 || penalty > 0) {
+      // Antes o alerta só aparecia com estorno de cartão: cancelar uma viagem
+      // paga só por Pix cancelava em silêncio, sem o motorista ver a multa.
+      if (refunded > 0 || pixQueued > 0 || penalty > 0) {
         const penaltyBrl = `R$ ${(penalty / 100).toFixed(2).replace('.', ',')}`;
-        showAlert(
-          'Viagem cancelada',
-          `${refunded} ${refunded === 1 ? 'passageiro reembolsado' : 'passageiros reembolsados'} integralmente.${
-            penalty > 0 ? `\n\nMulta registrada: ${penaltyBrl} — será descontada dos próximos ganhos.` : ''
-          }`,
-        );
+        const lines: string[] = [];
+        if (refunded > 0) {
+          lines.push(
+            `${refunded} ${refunded === 1 ? 'passageiro reembolsado' : 'passageiros reembolsados'} integralmente.`,
+          );
+        }
+        if (pixQueued > 0) {
+          lines.push(
+            pixQueued === 1
+              ? 'A devolução do Pix de 1 passageiro será feita pela nossa equipe em até 5 dias úteis.'
+              : `A devolução do Pix de ${pixQueued} passageiros será feita pela nossa equipe em até 5 dias úteis.`,
+          );
+        }
+        if (penalty > 0) {
+          lines.push(`Multa registrada: ${penaltyBrl} — será descontada dos próximos ganhos.`);
+        }
+        showAlert('Viagem cancelada', lines.join('\n\n'));
       }
     } catch (e) {
       showAlert(
@@ -1560,6 +1595,7 @@ export function TripDetailScreen({ route, navigation }: Props) {
         onConfirm={handleCancelConfirm}
         loading={cancelLoading}
         paidBookingsCount={cancelPolicy.paidBookings.length}
+        pixPaidCount={cancelPolicy.paidBookings.filter((b) => b.isPix).length}
         estimatedPenaltyCents={estimatedPenaltyCents}
         penaltyEnabled={cancelPolicy.penaltyEnabled}
       />

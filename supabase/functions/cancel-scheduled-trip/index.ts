@@ -231,13 +231,15 @@ Deno.serve(async (req) => {
       amount_cents: number | null;
       admin_earning_cents: number | null;
       stripe_payment_intent_id: string | null;
+      pix_charge_id: string | null;
+      pix_paid_at: string | null;
       status: string;
     };
 
     const { data: paidRows, error: paidErr } = await admin
       .from("bookings")
       .select(
-        "id, user_id, amount_cents, admin_earning_cents, stripe_payment_intent_id, status"
+        "id, user_id, amount_cents, admin_earning_cents, stripe_payment_intent_id, pix_charge_id, pix_paid_at, status"
       )
       .eq("scheduled_trip_id", tripId)
       .in("status", ["paid", "confirmed"]);
@@ -262,12 +264,66 @@ Deno.serve(async (req) => {
       booking_id: string;
       ok: boolean;
       refund_amount_cents?: number;
+      /** Reserva paga por Pix: devolução MANUAL enfileirada (não estorno automático). */
+      pix_queued?: boolean;
       error?: string;
     }> = [];
+
+    // Reserva paga por Pix real não tem PaymentIntent — o process-refund não
+    // alcança. O dinheiro está na conta da plataforma e a devolução é feita por
+    // fora, então o cancelamento do motorista precisa DEIXAR RASTRO na fila:
+    // sem isso o passageiro fica sem viagem e sem dinheiro, e ninguém no admin
+    // fica sabendo que há uma devolução a fazer.
+    const queuePixRefundManual = async (b: PaidBooking): Promise<boolean> => {
+      const amountCents = Math.max(0, Math.floor(Number(b.amount_cents ?? 0)));
+      try {
+        // Dedup: não duplica pendência da mesma cobrança+motivo.
+        if (b.pix_charge_id) {
+          const { data: existing } = await admin
+            .from("pix_refunds_pending")
+            .select("id")
+            .eq("pix_charge_id", b.pix_charge_id)
+            .eq("reason", "driver_cancelled")
+            .eq("status", "pending")
+            .limit(1);
+          if (Array.isArray(existing) && existing.length > 0) return true;
+        }
+        const { error: queueErr } = await admin.from("pix_refunds_pending").insert({
+          pix_charge_id: b.pix_charge_id ?? null,
+          entity_type: "booking",
+          entity_id: b.id,
+          user_id: b.user_id,
+          amount_cents: amountCents,
+          reason: "driver_cancelled",
+          notes: "motorista cancelou a viagem inteira (pagamento Pix real)",
+        } as never);
+        if (queueErr) {
+          console.error("[cancel-scheduled-trip] fila de devolução pix:", queueErr.message);
+          return false;
+        }
+        return true;
+      } catch (e) {
+        console.error("[cancel-scheduled-trip] fila de devolução pix:", e);
+        return false;
+      }
+    };
 
     for (const b of paidBookings) {
       const pi = (b.stripe_payment_intent_id ?? "").trim();
       const cents = Math.max(0, Math.floor(Number(b.amount_cents ?? 0)));
+
+      if (!pi && b.pix_paid_at && cents > 0) {
+        const queued = await queuePixRefundManual(b);
+        refundResults.push({
+          booking_id: b.id,
+          ok: queued,
+          refund_amount_cents: 0,
+          pix_queued: queued,
+          ...(queued ? {} : { error: "falha ao enfileirar devolução Pix" }),
+        });
+        continue;
+      }
+
       if (!pi || cents <= 0) {
         refundResults.push({
           booking_id: b.id,
@@ -361,9 +417,14 @@ Deno.serve(async (req) => {
     const successfulRefunds = refundResults.filter(
       (r) => r.ok && Number(r.refund_amount_cents ?? 0) > 0,
     );
+    const pixQueuedRefunds = refundResults.filter((r) => r.pix_queued);
+    // O que gera multa é o motorista cancelar uma reserva JÁ PAGA — o meio de
+    // pagamento é irrelevante. Antes só entrava aqui quem tinha estorno Stripe,
+    // então cancelar uma viagem paga por Pix saía de graça.
+    const penalizableRefunds = [...successfulRefunds, ...pixQueuedRefunds];
 
-    if (penaltyEnabled && successfulRefunds.length > 0 && trip.driver_id) {
-      for (const rr of successfulRefunds) {
+    if (penaltyEnabled && penalizableRefunds.length > 0 && trip.driver_id) {
+      for (const rr of penalizableRefunds) {
         const matching = paidBookings.find((b) => b.id === rr.booking_id);
         if (!matching) continue;
         const total = Math.max(0, Math.floor(Number(matching.amount_cents ?? 0)));
@@ -487,6 +548,7 @@ Deno.serve(async (req) => {
       JSON.stringify({
         cancelled: true,
         refunded_count: successfulRefunds.length,
+        pix_refunds_queued: pixQueuedRefunds.length,
         total_paid_bookings: paidBookings.length,
         penalty_cents: penaltyCents,
         penalty_enabled: penaltyEnabled,

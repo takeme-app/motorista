@@ -118,6 +118,7 @@ export type PixRefundReason =
   | 'amount_mismatch'
   | 'expired_not_realized'
   | 'user_cancelled_in_window'
+  | 'driver_cancelled'
   | 'admin_cancelled'
   | 'orphan_payment';
 

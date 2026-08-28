@@ -55,6 +55,7 @@ const REASON_LABELS: Record<PixRefundReason, string> = {
   amount_mismatch: 'Valor divergente',
   expired_not_realized: 'Expirou sem se realizar',
   user_cancelled_in_window: 'Cancelado na janela',
+  driver_cancelled: 'Motorista cancelou',
   admin_cancelled: 'Cancelado pelo admin',
   orphan_payment: 'Pagamento órfão',
 };
