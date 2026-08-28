@@ -3232,13 +3232,21 @@ export interface ProcessPayoutsResult {
   below_threshold_skipped?: number;
 }
 
+/**
+ * Prévia da liberação. `markPaid` PRECISA espelhar o modo real que vai ser
+ * executado: a edge filtra por status='pending' quando não é mark_paid, então
+ * uma prévia sem a flag não enxerga os payouts em 'processing' (os que estão
+ * justamente esperando confirmação de Pix manual) e devolve tudo zerado.
+ */
 export async function runProcessPayoutsDryRun(
   payoutIds: string[],
+  opts?: { mark_paid?: boolean },
 ): Promise<{ data: { processed: ProcessPayoutsResult } | null; error: string | null }> {
   if (!isSupabaseConfigured) return { data: null, error: 'Supabase não configurado' };
   return invokeEdgeFunction<{ processed: ProcessPayoutsResult }>('process-payouts', 'POST', undefined, {
     payout_ids: payoutIds,
     dry_run: true,
+    mark_paid: opts?.mark_paid,
   });
 }
 
