@@ -416,22 +416,34 @@ export default function PixGestaoScreen() {
 
   // ── Cobranças: tabela ───────────────────────────────────────────────
   const chargeCols = [
-    { label: 'Criada em', flex: '0 0 120px', minWidth: 120 },
-    { label: 'Usuário', flex: '1 1 18%', minWidth: 140 },
-    { label: 'Tipo', flex: '0 0 110px', minWidth: 110 },
-    { label: 'Provedor', flex: '0 0 110px', minWidth: 110 },
-    { label: 'Valor', flex: '0 0 120px', minWidth: 120 },
-    { label: 'Status', flex: '0 0 140px', minWidth: 140 },
-    { label: 'Expira / paga em', flex: '0 0 130px', minWidth: 130 },
-    { label: 'Detalhe', flex: '0 0 70px', minWidth: 70 },
+    { label: 'Criada em', flex: '0 0 105px', minWidth: 105 },
+    { label: 'Usuário', flex: '1 1 130px', minWidth: 130 },
+    { label: 'Tipo', flex: '0 0 85px', minWidth: 85 },
+    { label: 'Provedor', flex: '0 0 95px', minWidth: 95 },
+    { label: 'Valor', flex: '0 0 95px', minWidth: 95 },
+    { label: 'Status', flex: '0 0 125px', minWidth: 125 },
+    { label: 'Expira / paga em', flex: '0 0 120px', minWidth: 120 },
+    { label: 'Detalhe', flex: '0 0 80px', minWidth: 80 },
   ];
-  const cellBase: React.CSSProperties = { display: 'flex', alignItems: 'center', fontSize: 13, color: '#0d0d0d', ...font, padding: '0 6px' };
+  // boxSizing border-box: sem isto o padding lateral somava POR FORA do
+  // minWidth e cada célula ficava 12px mais larga que o declarado — 84px
+  // fantasma em 7 colunas, o bastante para a tabela estourar o container e
+  // jogar o botão "Detalhes" para fora da área visível.
+  const cellBase: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', fontSize: 13, color: '#0d0d0d',
+    ...font, padding: '0 6px', boxSizing: 'border-box',
+  };
 
   const chargeHeader = React.createElement('div', {
-    style: { display: 'flex', height: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9', padding: '0 16px', alignItems: 'center' },
+    // minWidth max-content: sem isto o header parava na largura do container
+    // (996px) enquanto as linhas iam a 1050px — a faixa cinza não cobria a área
+    // rolada e sobrava um vazio branco à direita.
+    style: { display: 'flex', height: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9', padding: '0 16px', alignItems: 'center', minWidth: 'max-content' as const },
   }, ...chargeCols.map((c) => React.createElement('div', {
     key: c.label,
-    style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 6px', display: 'flex', alignItems: 'center', height: '100%' },
+    // boxSizing igual ao das células: sem isto o cabeçalho fica 12px por
+    // coluna mais largo que as linhas e os rótulos desalinham dos dados.
+    style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 6px', display: 'flex', alignItems: 'center', height: '100%', boxSizing: 'border-box' as const },
   }, c.label)));
 
   const chargeRowEls = charges.map((row) => React.createElement('div', {
@@ -439,7 +451,7 @@ export default function PixGestaoScreen() {
     'data-testid': 'pix-charge-table-row',
     style: {
       display: 'flex', minHeight: 60, alignItems: 'center', padding: '8px 16px',
-      borderBottom: '1px solid #d9d9d9', background: '#f6f6f6',
+      borderBottom: '1px solid #d9d9d9', background: '#f6f6f6', minWidth: 'max-content',
     },
   },
     React.createElement('div', { style: { ...cellBase, flex: chargeCols[0].flex, minWidth: chargeCols[0].minWidth } }, fmtDateTime(row.created_at)),
@@ -537,21 +549,31 @@ export default function PixGestaoScreen() {
       })),
     React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', ...font } }, 'Mostrar resolvidas'));
 
+  // Somatório enxuto para a tabela caber sem scroll horizontal em tela de
+  // notebook (~1000px de conteúdo): antes dava 1151px e o botão "Detalhes"
+  // ficava fora da área visível, exigindo rolar para alcançar uma ação.
+  // Ações comporta os dois botões inteiros — com 190px o flex comprimia o
+  // primeiro a ~101px e o rótulo quebrava em 3 linhas, cortadas pela altura.
   const refundCols = [
-    { label: 'Criada em', flex: '0 0 120px', minWidth: 120 },
-    { label: 'Usuário', flex: '1 1 18%', minWidth: 140 },
-    { label: 'Tipo', flex: '0 0 110px', minWidth: 110 },
-    { label: 'Motivo', flex: '0 0 170px', minWidth: 170 },
-    { label: 'Valor', flex: '0 0 110px', minWidth: 110 },
-    { label: 'Status', flex: '0 0 110px', minWidth: 110 },
-    { label: 'Ações', flex: '0 0 190px', minWidth: 190 },
+    { label: 'Criada em', flex: '0 0 105px', minWidth: 105 },
+    { label: 'Usuário', flex: '1 1 130px', minWidth: 130 },
+    { label: 'Tipo', flex: '0 0 85px', minWidth: 85 },
+    { label: 'Motivo', flex: '0 0 160px', minWidth: 160 },
+    { label: 'Valor', flex: '0 0 85px', minWidth: 85 },
+    { label: 'Status', flex: '0 0 95px', minWidth: 95 },
+    { label: 'Ações', flex: '0 0 230px', minWidth: 230 },
   ];
 
   const refundHeader = React.createElement('div', {
-    style: { display: 'flex', height: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9', padding: '0 16px', alignItems: 'center' },
+    // minWidth max-content: sem isto o header parava na largura do container
+    // (996px) enquanto as linhas iam a 1050px — a faixa cinza não cobria a área
+    // rolada e sobrava um vazio branco à direita.
+    style: { display: 'flex', height: 53, background: '#e2e2e2', borderBottom: '1px solid #d9d9d9', padding: '0 16px', alignItems: 'center', minWidth: 'max-content' as const },
   }, ...refundCols.map((c) => React.createElement('div', {
     key: c.label,
-    style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 6px', display: 'flex', alignItems: 'center', height: '100%' },
+    // boxSizing igual ao das células: sem isto o cabeçalho fica 12px por
+    // coluna mais largo que as linhas e os rótulos desalinham dos dados.
+    style: { flex: c.flex, minWidth: c.minWidth, fontSize: 12, fontWeight: 400, color: '#0d0d0d', ...font, padding: '0 6px', display: 'flex', alignItems: 'center', height: '100%', boxSizing: 'border-box' as const },
   }, c.label)));
 
   const refundRowEls = refunds.map((row) => {
@@ -561,7 +583,7 @@ export default function PixGestaoScreen() {
       'data-testid': 'pix-refund-table-row',
       style: {
         display: 'flex', minHeight: 60, alignItems: 'center', padding: '8px 16px',
-        borderBottom: '1px solid #d9d9d9', background: '#f6f6f6',
+        borderBottom: '1px solid #d9d9d9', background: '#f6f6f6', minWidth: 'max-content' as const,
       },
     },
       React.createElement('div', { style: { ...cellBase, flex: refundCols[0].flex, minWidth: refundCols[0].minWidth } }, fmtDateTime(row.created_at)),
@@ -586,9 +608,12 @@ export default function PixGestaoScreen() {
                 height: 36, padding: '0 14px', borderRadius: 999, border: 'none',
                 background: '#0d0d0d', color: '#fff', fontSize: 12, fontWeight: 600,
                 cursor: resolvingId === row.id ? 'wait' : 'pointer',
+                // Sem nowrap/flexShrink o flex comprimia o botão e o rótulo
+                // quebrava em três linhas, cortadas pela altura fixa.
+                whiteSpace: 'nowrap' as const, flexShrink: 0,
                 opacity: resolvingId === row.id ? 0.6 : 1, ...font,
               },
-            }, resolvingId === row.id ? 'Salvando...' : 'Marcar como devolvido')
+            }, resolvingId === row.id ? 'Salvando...' : 'Marcar devolvido')
           : React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 2, fontSize: 12, color: '#767676', ...font } },
               React.createElement('span', null, row.resolved_at ? fmtDateTime(row.resolved_at) : '—'),
               row.resolved_by
@@ -600,7 +625,8 @@ export default function PixGestaoScreen() {
           style: {
             height: 36, padding: '0 14px', marginLeft: 8, borderRadius: 999,
             border: '1px solid #d9d9d9', background: '#fff', color: '#0d0d0d',
-            fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font,
+            fontSize: 12, fontWeight: 600, cursor: 'pointer',
+            whiteSpace: 'nowrap' as const, flexShrink: 0, ...font,
           },
         }, 'Detalhes')));
   });
