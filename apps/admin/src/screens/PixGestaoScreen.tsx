@@ -100,6 +100,21 @@ function fmtBRL(cents: number | null | undefined): string {
   return (v / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
+/** CPF só de dígitos → 000.000.000-00 (devolve o original se não tiver 11). */
+function fmtCpf(raw: string | null | undefined): string {
+  const d = String(raw ?? '').replace(/\D/g, '');
+  if (d.length !== 11) return String(raw ?? '');
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+}
+
+/** Telefone BR → (00) 00000-0000 / (00) 0000-0000. */
+function fmtPhone(raw: string | null | undefined): string {
+  const d = String(raw ?? '').replace(/\D/g, '');
+  if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return String(raw ?? '');
+}
+
 function fmtDateTime(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -138,6 +153,7 @@ export default function PixGestaoScreen() {
   const [dateTo, setDateTo] = useState('');
   const [page, setPage] = useState(1);
   const [detail, setDetail] = useState<PixChargeRow | null>(null);
+  const [refundDetail, setRefundDetail] = useState<PixRefundRow | null>(null);
 
   // ── Devoluções ──────────────────────────────────────────────────────
   const [refunds, setRefunds] = useState<PixRefundRow[]>([]);
@@ -563,7 +579,16 @@ export default function PixGestaoScreen() {
               },
             }, resolvingId === row.id ? 'Salvando...' : 'Marcar como devolvido')
           : React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } },
-              row.resolved_at ? `em ${fmtDateTime(row.resolved_at)}` : '—')));
+              row.resolved_at ? `em ${fmtDateTime(row.resolved_at)}` : '—'),
+        React.createElement('button', {
+          type: 'button',
+          onClick: () => setRefundDetail(row),
+          style: {
+            height: 36, padding: '0 14px', marginLeft: 8, borderRadius: 999,
+            border: '1px solid #d9d9d9', background: '#fff', color: '#0d0d0d',
+            fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font,
+          },
+        }, 'Detalhes')));
   });
 
   const refundsTable = React.createElement('div', { style: { background: '#fff', borderRadius: 16, overflow: 'hidden', width: '100%', border: '1px solid #e2e2e2' } },
@@ -676,6 +701,74 @@ export default function PixGestaoScreen() {
 
   const content = tab === 'cobrancas' ? cobrancasContent : devolucoesContent;
 
+  // ── Modal de detalhe da devolução ───────────────────────────────────
+  // Reúne o que o financeiro precisa para devolver: id da cobrança no provedor
+  // (leva direto ao estorno no painel), quem pagou e qual pedido originou.
+  const refundDetailModal = refundDetail
+    ? React.createElement('div', {
+        role: 'dialog', 'aria-modal': true,
+        style: {
+          position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16,
+        },
+        onClick: () => setRefundDetail(null),
+      },
+        React.createElement('div', {
+          style: {
+            background: '#fff', borderRadius: 16, width: '100%', maxWidth: 560, padding: '28px 32px',
+            display: 'flex', flexDirection: 'column' as const, gap: 16,
+            boxShadow: '0 20px 60px rgba(0,0,0,.15)', maxHeight: '90vh', overflowY: 'auto' as const,
+          },
+          onClick: (e: React.MouseEvent) => e.stopPropagation(),
+        },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+            React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Detalhe da devolução'),
+            React.createElement('button', {
+              type: 'button', onClick: () => setRefundDetail(null), 'aria-label': 'Fechar',
+              style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+            }, closeModalSvg)),
+          React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+
+          React.createElement('div', {
+            style: {
+              display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' as const,
+              background: '#f6f6f6', borderRadius: 12, padding: '14px 16px',
+            },
+          },
+            React.createElement('span', { style: { fontSize: 26, fontWeight: 700, color: '#0d0d0d', ...font } }, fmtBRL(refundDetail.amount_cents)),
+            React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } },
+              REASON_LABELS[refundDetail.reason] ?? refundDetail.reason)),
+
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } },
+            detailField('Solicitada em', fmtDateTime(refundDetail.created_at)),
+            detailField('Pago em', refundDetail.paid_at ? fmtDateTime(refundDetail.paid_at) : '—'),
+            detailField('Pagador', refundDetail.payer_name || userName(refundDetail.user_id)),
+            detailField('CPF do pagador', refundDetail.payer_cpf ? fmtCpf(refundDetail.payer_cpf) : '—'),
+            detailField('Telefone', refundDetail.payer_phone ? fmtPhone(refundDetail.payer_phone) : '—'),
+            detailField('Provedor', refundDetail.provider || '—')),
+
+          React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+          detailField('Cobrança no provedor (buscar no painel para estornar)',
+            copyableValue(refundDetail.provider_charge_id ?? null, 'Id da cobrança')),
+
+          refundDetail.order_origin || refundDetail.order_destination
+            ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
+                React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+                detailField('Trajeto', `${refundDetail.order_origin ?? '—'} → ${refundDetail.order_destination ?? '—'}`),
+                refundDetail.order_departure_at
+                  ? detailField('Partida', fmtDateTime(refundDetail.order_departure_at))
+                  : null)
+            : null,
+
+          refundDetail.notes
+            ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
+                React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+                detailField('Observação', refundDetail.notes))
+            : null,
+
+          detailField('Id do pedido', copyableValue(refundDetail.entity_id ?? null, 'Id do pedido')))) 
+    : null;
+
   return React.createElement(React.Fragment, null,
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 20, width: '100%', alignSelf: 'stretch' } },
       breadcrumb,
@@ -685,5 +778,6 @@ export default function PixGestaoScreen() {
       degradedBanner,
       ...content.filter(Boolean)),
     detailModal,
+    refundDetailModal,
     toastEl);
 }

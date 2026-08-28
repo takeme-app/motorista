@@ -134,6 +134,17 @@ export interface PixRefundRow {
   resolved_at: string | null;
   resolved_by: string | null;
   created_at: string;
+  /** Dados enriquecidos (join manual) — o financeiro precisa deles para devolver. */
+  provider?: string | null;
+  /** Id da cobrança no provedor: leva direto ao estorno no painel do Asaas. */
+  provider_charge_id?: string | null;
+  paid_at?: string | null;
+  payer_name?: string | null;
+  payer_phone?: string | null;
+  payer_cpf?: string | null;
+  order_origin?: string | null;
+  order_destination?: string | null;
+  order_departure_at?: string | null;
 }
 
 export interface PixRefundsResult {
@@ -445,7 +456,63 @@ export async function fetchPixRefunds(includeResolved: boolean): Promise<PixRefu
     if (isTableMissingError(error)) return { rows: [], error: null, tableMissing: true };
     return { rows: [], error: error.message || 'Erro ao carregar devoluções', tableMissing: false };
   }
-  return { rows: (data || []) as PixRefundRow[], error: null, tableMissing: false };
+
+  const rows = (data || []) as PixRefundRow[];
+  if (rows.length === 0) return { rows, error: null, tableMissing: false };
+
+  // Enriquecimento em lote (o financeiro precisa desses dados para devolver):
+  // id da cobrança no provedor, quem pagou e qual pedido. Falha aqui não
+  // derruba a lista — a fila continua utilizável, só sem os extras.
+  try {
+    const chargeIds = [...new Set(rows.map((r) => r.pix_charge_id).filter(Boolean))] as string[];
+    const userIds = [...new Set(rows.map((r) => r.user_id).filter(Boolean))] as string[];
+    const bookingIds = [...new Set(
+      rows.filter((r) => r.entity_type === 'booking').map((r) => r.entity_id).filter(Boolean),
+    )] as string[];
+
+    const [chargesRes, profilesRes, bookingsRes] = await Promise.all([
+      chargeIds.length
+        ? sb.from('pix_charges').select('id, provider, provider_charge_id, paid_at').in('id', chargeIds)
+        : Promise.resolve({ data: [] }),
+      userIds.length
+        ? sb.from('profiles').select('id, full_name, phone, cpf').in('id', userIds)
+        : Promise.resolve({ data: [] }),
+      bookingIds.length
+        ? sb.from('bookings')
+            .select('id, origin_address, destination_address, scheduled_trips(departure_at)')
+            .in('id', bookingIds)
+        : Promise.resolve({ data: [] }),
+    ]);
+
+    const chargeById = new Map<string, any>((chargesRes.data || []).map((c: any) => [c.id, c]));
+    const profileById = new Map<string, any>((profilesRes.data || []).map((p: any) => [p.id, p]));
+    const bookingById = new Map<string, any>((bookingsRes.data || []).map((b: any) => [b.id, b]));
+
+    for (const r of rows) {
+      const c = r.pix_charge_id ? chargeById.get(r.pix_charge_id) : null;
+      const p = r.user_id ? profileById.get(r.user_id) : null;
+      const b = r.entity_id ? bookingById.get(r.entity_id) : null;
+      if (c) {
+        r.provider = c.provider ?? null;
+        r.provider_charge_id = c.provider_charge_id ?? null;
+        r.paid_at = c.paid_at ?? null;
+      }
+      if (p) {
+        r.payer_name = p.full_name ?? null;
+        r.payer_phone = p.phone ?? null;
+        r.payer_cpf = p.cpf ?? null;
+      }
+      if (b) {
+        r.order_origin = b.origin_address ?? null;
+        r.order_destination = b.destination_address ?? null;
+        r.order_departure_at = b.scheduled_trips?.departure_at ?? null;
+      }
+    }
+  } catch {
+    /* extras indisponíveis — a fila segue funcional */
+  }
+
+  return { rows, error: null, tableMissing: false };
 }
 
 /** Contagem da fila aberta — badge no PagamentosScreen. Qualquer erro ⇒ 0 (degrada). */
