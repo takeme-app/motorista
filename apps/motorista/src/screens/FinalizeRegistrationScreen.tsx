@@ -179,6 +179,9 @@ export function FinalizeRegistrationScreen({ navigation, route }: Props) {
           cnh_document_back_url: cnhBackPath,
           background_check_url: criminalPath,
         };
+        // Chave Pix: destino do repasse das corridas pagas por Pix (a plataforma
+        // recebe e repassa por fora — não há split como no cartão).
+        if (formData.pixKey?.trim()) workerUpdate.pix_key = formData.pixKey.trim();
 
         const { error: workerUpErr } = await supabase
           .from('worker_profiles')

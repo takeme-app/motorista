@@ -249,7 +249,7 @@ export function StripeConnectSetupScreen({ navigation }: Props) {
   if (stripeState === 'in_review') {
     const reviewBody =
       stripePendingVerification > 0
-        ? 'Sem concluir o que a Stripe pedir, cartão/Pix e recebimento automático não liberam. Até lá, as viagens ficam em dinheiro e a taxa da plataforma acumula saldo.'
+        ? 'Sem concluir o que a Stripe pedir, o cartão e o recebimento automático não liberam. Até lá, as viagens seguem por Pix e dinheiro, e a taxa da plataforma acumula saldo.'
         : 'Cartão/Pix e recebimento automático só liberam após a Stripe aprovar. Enquanto isso, as viagens ficam em dinheiro e a taxa da plataforma acumula saldo.';
     const reviewTitle = 'Ação pendente';
     return (
@@ -312,7 +312,7 @@ export function StripeConnectSetupScreen({ navigation }: Props) {
         <View style={styles.hero}>
           <Text style={styles.heroTitle}>Configure seu recebimento</Text>
           <Text style={styles.heroSubtitle}>
-            Para liberar cartão/Pix e receber seus ganhos automaticamente, configure sua conta de recebimento.
+            Para liberar o pagamento por cartão e receber seus ganhos automaticamente, configure sua conta de recebimento.
           </Text>
         </View>
 
@@ -324,7 +324,7 @@ export function StripeConnectSetupScreen({ navigation }: Props) {
 
         {/* Benefits */}
         <View style={styles.benefitsCard}>
-          <BenefitRow icon="flash-on" text="Receba automaticamente após cada viagem com cartão/Pix" />
+          <BenefitRow icon="flash-on" text="Receba automaticamente após cada viagem paga com cartão" />
           <BenefitRow icon="pix" text="Depósito direto via PIX na sua conta" />
           <BenefitRow icon="security" text="Seguro e protegido pelo Stripe" />
           <BenefitRow icon="account-balance-wallet" text="Abate automático das taxas acumuladas em dinheiro" />

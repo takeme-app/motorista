@@ -19,6 +19,8 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { fetchDriverPaymentTransfers, type DriverPaymentTransfer } from '../lib/driverPaymentTransfers';
+import { fetchDriverPendingPayouts, type PendingPayoutsSummary } from '../lib/driverPendingPayouts';
+import { SingleFieldModal } from '../components/profile/SingleFieldModal';
 import {
   fetchDriverPlatformFeeSummary,
   platformFeeLedgerAmountLabel,
@@ -92,6 +94,10 @@ export function PaymentsScreen({ navigation }: Props) {
   const [tipsCents, setTipsCents] = useState(0);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pendingPayouts, setPendingPayouts] = useState<PendingPayoutsSummary>({
+    totalCents: 0, count: 0, pixKey: null, unavailable: false,
+  });
+  const [pixModal, setPixModal] = useState(false);
   const [stripeState, setStripeState] = useState<StripeConnectState>('none');
   const [stripePendingVerification, setStripePendingVerification] = useState(0);
   const [stripeAccountId, setStripeAccountId] = useState<string | null>(null);
@@ -121,6 +127,7 @@ export function PaymentsScreen({ navigation }: Props) {
     setStripePendingVerification(Number(wp?.stripe_connect_pending_verification_count ?? 0) || 0);
     const acct = (wp?.stripe_connect_account_id as string | null | undefined)?.trim() ?? '';
     setStripeAccountId(acct || null);
+    setPendingPayouts(await fetchDriverPendingPayouts(supabase, user.id));
     const feeSummary = await fetchDriverPlatformFeeSummary(supabase, 5).catch(() => ({
       ...EMPTY_PLATFORM_FEE_SUMMARY,
       unavailable: true,
@@ -176,6 +183,22 @@ export function PaymentsScreen({ navigation }: Props) {
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  /** Salva a chave Pix sem sair da tela e atualiza o card na hora. */
+  const savePixKey = useCallback(async (value: string) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const key = value.trim();
+    // Cast do client (padrão do admin): neste módulo a inferência não resolve
+    // o update — mesma limitação dos outros TS2769 pré-existentes do arquivo.
+    const sb = supabase as any;
+    const { error } = await sb
+      .from('worker_profiles')
+      .update({ pix_key: key || null, updated_at: new Date().toISOString() })
+      .eq('id', user.id);
+    if (error) throw error;
+    setPendingPayouts((prev) => ({ ...prev, pixKey: key || null }));
+  }, []);
 
   const handleStripeConnectSetup = async () => {
     setConnectLoading(true);
@@ -294,6 +317,65 @@ export function PaymentsScreen({ navigation }: Props) {
             onPressExpress={handleStripeExpressLogin}
           />
 
+          <Text style={[styles.sectionTitle, { marginTop: 20 }]}>A receber da plataforma</Text>
+          <View style={styles.platformFeeCard}>
+            <View style={styles.platformFeeHeader}>
+              <View style={styles.platformFeeIcon}>
+                <MaterialIcons name="payments" size={20} color={GOLD} />
+              </View>
+              <View style={styles.platformFeeTitleCol}>
+                <Text style={styles.platformFeeLabel}>Repasses pendentes</Text>
+                <Text style={styles.platformFeeHint}>
+                  Corridas pagas por Pix são recebidas pela plataforma e repassadas para a sua chave Pix.
+                </Text>
+              </View>
+              <Text style={[styles.platformFeeAmount, styles.platformFeeAmountOk]}>
+                {formatCents(pendingPayouts.totalCents)}
+              </Text>
+            </View>
+
+            {pendingPayouts.unavailable ? (
+              <Text style={styles.platformFeeEmpty}>
+                Valor temporariamente indisponível. Tente atualizar novamente em alguns instantes.
+              </Text>
+            ) : pendingPayouts.count === 0 ? (
+              <Text style={styles.platformFeeEmpty}>Nenhum repasse pendente.</Text>
+            ) : (
+              <Text style={styles.platformFeeEmpty}>
+                {pendingPayouts.count === 1
+                  ? '1 corrida aguardando repasse.'
+                  : `${pendingPayouts.count} corridas aguardando repasse.`}
+              </Text>
+            )}
+
+            {pendingPayouts.pixKey ? (
+              <TouchableOpacity
+                style={styles.pixKeyRow}
+                onPress={() => setPixModal(true)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.pixKeyText} numberOfLines={1}>
+                  Chave Pix: {pendingPayouts.pixKey}
+                </Text>
+                <Text style={styles.pixKeyEdit}>Alterar</Text>
+              </TouchableOpacity>
+            ) : pendingPayouts.count > 0 ? (
+              <View>
+                <Text style={[styles.platformFeeEmpty, { color: '#b53838' }]}>
+                  Cadastre sua chave Pix para receber os repasses.
+                </Text>
+                <TouchableOpacity
+                  style={styles.pixKeyButton}
+                  onPress={() => setPixModal(true)}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="add" size={18} color="#fff" />
+                  <Text style={styles.pixKeyButtonText}>Cadastrar chave Pix</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+          </View>
+
           <Text style={[styles.sectionTitle, { marginTop: 20 }]}>Saldo devido à plataforma</Text>
           <View style={styles.platformFeeCard}>
             <View style={styles.platformFeeHeader}>
@@ -383,6 +465,18 @@ export function PaymentsScreen({ navigation }: Props) {
           </TouchableOpacity>
         </ScrollView>
       )}
+
+      <SingleFieldModal
+        visible={pixModal}
+        onClose={() => setPixModal(false)}
+        title="Chave Pix"
+        subtitle="Informe a chave para receber seus repasses das corridas pagas por Pix."
+        label="Chave Pix"
+        initialValue={pendingPayouts.pixKey ?? ''}
+        placeholder="CPF, CNPJ, e-mail, telefone ou chave aleatória"
+        rawText
+        onSave={savePixKey}
+      />
     </SafeAreaView>
   );
 }
@@ -475,6 +569,38 @@ const styles = StyleSheet.create({
   platformFeeAmount: { fontSize: 17, fontWeight: '800' },
   platformFeeAmountWarn: { color: '#92400E' },
   platformFeeAmountOk: { color: '#16A34A' },
+  pixKeyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: 8,
+  },
+  pixKeyText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#767676',
+  },
+  pixKeyEdit: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: GOLD,
+  },
+  pixKeyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 10,
+    height: 44,
+    borderRadius: 999,
+    backgroundColor: '#0d0d0d',
+  },
+  pixKeyButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
   platformFeeEmpty: { marginTop: 14, fontSize: 13, color: MUTED, lineHeight: 18 },
   ledgerList: { marginTop: 12, borderTopWidth: 1, borderTopColor: '#F3E3A3' },
   ledgerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },

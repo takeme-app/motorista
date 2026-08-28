@@ -55,6 +55,7 @@ const REASON_LABELS: Record<PixRefundReason, string> = {
   amount_mismatch: 'Valor divergente',
   expired_not_realized: 'Expirou sem se realizar',
   user_cancelled_in_window: 'Cancelado na janela',
+  driver_cancelled: 'Motorista cancelou',
   admin_cancelled: 'Cancelado pelo admin',
   orphan_payment: 'Pagamento órfão',
 };
@@ -100,6 +101,21 @@ function fmtBRL(cents: number | null | undefined): string {
   return (v / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
+/** CPF só de dígitos → 000.000.000-00 (devolve o original se não tiver 11). */
+function fmtCpf(raw: string | null | undefined): string {
+  const d = String(raw ?? '').replace(/\D/g, '');
+  if (d.length !== 11) return String(raw ?? '');
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+}
+
+/** Telefone BR → (00) 00000-0000 / (00) 0000-0000. */
+function fmtPhone(raw: string | null | undefined): string {
+  const d = String(raw ?? '').replace(/\D/g, '');
+  if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return String(raw ?? '');
+}
+
 function fmtDateTime(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -138,6 +154,11 @@ export default function PixGestaoScreen() {
   const [dateTo, setDateTo] = useState('');
   const [page, setPage] = useState(1);
   const [detail, setDetail] = useState<PixChargeRow | null>(null);
+  const [refundDetail, setRefundDetail] = useState<PixRefundRow | null>(null);
+  // Consentimento de devolução: nada é gravado sem o operador marcar a caixa.
+  const [resolveTarget, setResolveTarget] = useState<PixRefundRow | null>(null);
+  const [resolveChecked, setResolveChecked] = useState(false);
+  const [resolveNote, setResolveNote] = useState('');
 
   // ── Devoluções ──────────────────────────────────────────────────────
   const [refunds, setRefunds] = useState<PixRefundRow[]>([]);
@@ -193,7 +214,7 @@ export default function PixGestaoScreen() {
     setRefundsError(res.error);
     setRefundsMissing(res.tableMissing);
     setRefundsLoading(false);
-    void mergeNamesFor(res.rows.map((r) => r.user_id));
+    void mergeNamesFor(res.rows.flatMap((r) => [r.user_id, r.resolved_by]));
   }, [includeResolved, mergeNamesFor]);
 
   useEffect(() => { void loadCharges(true); }, [loadCharges]);
@@ -231,21 +252,25 @@ export default function PixGestaoScreen() {
     }
   }, [showToast]);
 
-  const handleMarkResolved = useCallback(async (row: PixRefundRow) => {
-    const nome = row.user_id ? (names[row.user_id] || row.user_id.slice(0, 8)) : '—';
-    const ok = window.confirm(
-      `Marcar como devolvido?\n\nUsuário: ${nome}\nValor: ${fmtBRL(row.amount_cents)}\n\n` +
-      'Confirme SOMENTE se a devolução JÁ FOI FEITA fora do sistema (Pix manual pelo banco). ' +
-      'Esta ação apenas registra o trabalho — não move dinheiro nem executa estorno.',
-    );
-    if (!ok) return;
+  // Abre o consentimento. O registro em si só acontece em confirmResolve,
+  // depois de o operador marcar que a devolução JÁ foi feita no banco.
+  const handleMarkResolved = useCallback((row: PixRefundRow) => {
+    setResolveTarget(row);
+    setResolveChecked(false);
+    setResolveNote('');
+  }, []);
+
+  const confirmResolve = useCallback(async () => {
+    const row = resolveTarget;
+    if (!row || !resolveChecked) return;
     setResolvingId(row.id);
-    const { error } = await markPixRefundResolved(row.id);
+    const { error, alreadyResolved } = await markPixRefundResolved(row.id, resolveNote);
     setResolvingId(null);
     if (error) { showToast(`Erro: ${error}`); return; }
-    showToast('Devolução registrada');
+    setResolveTarget(null);
+    showToast(alreadyResolved ? 'Esta devolução já havia sido confirmada' : 'Devolução registrada');
     void loadRefunds(false);
-  }, [names, showToast, loadRefunds]);
+  }, [resolveTarget, resolveChecked, resolveNote, showToast, loadRefunds]);
 
   const userName = useCallback((userId: string | null) => {
     if (!userId) return '—';
@@ -562,8 +587,20 @@ export default function PixGestaoScreen() {
                 opacity: resolvingId === row.id ? 0.6 : 1, ...font,
               },
             }, resolvingId === row.id ? 'Salvando...' : 'Marcar como devolvido')
-          : React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } },
-              row.resolved_at ? `em ${fmtDateTime(row.resolved_at)}` : '—')));
+          : React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 2, fontSize: 12, color: '#767676', ...font } },
+              React.createElement('span', null, row.resolved_at ? fmtDateTime(row.resolved_at) : '—'),
+              row.resolved_by
+                ? React.createElement('span', { style: { fontSize: 11 } }, `por ${userName(row.resolved_by)}`)
+                : null),
+        React.createElement('button', {
+          type: 'button',
+          onClick: () => setRefundDetail(row),
+          style: {
+            height: 36, padding: '0 14px', marginLeft: 8, borderRadius: 999,
+            border: '1px solid #d9d9d9', background: '#fff', color: '#0d0d0d',
+            fontSize: 12, fontWeight: 600, cursor: 'pointer', ...font,
+          },
+        }, 'Detalhes')));
   });
 
   const refundsTable = React.createElement('div', { style: { background: '#fff', borderRadius: 16, overflow: 'hidden', width: '100%', border: '1px solid #e2e2e2' } },
@@ -676,6 +713,178 @@ export default function PixGestaoScreen() {
 
   const content = tab === 'cobrancas' ? cobrancasContent : devolucoesContent;
 
+  // ── Modal de consentimento da devolução ─────────────────────────────
+  // Esta tela NÃO move dinheiro: o Pix de volta é feito no banco, por fora.
+  // Confirmar aqui é uma declaração do operador de que já fez — por isso a
+  // caixa de consentimento explícita (um clique só, como era antes, deixava
+  // fácil fechar a pendência de um valor que ninguém devolveu) e por isso
+  // fica registrado quem confirmou e quando.
+  const resolveModal = resolveTarget
+    ? React.createElement('div', {
+        role: 'dialog', 'aria-modal': true,
+        style: {
+          position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16,
+        },
+        onClick: () => { if (!resolvingId) setResolveTarget(null); },
+      },
+        React.createElement('div', {
+          style: {
+            background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, padding: '28px 32px',
+            display: 'flex', flexDirection: 'column' as const, gap: 16,
+            boxShadow: '0 20px 60px rgba(0,0,0,.15)', maxHeight: '90vh', overflowY: 'auto' as const,
+          },
+          onClick: (e: React.MouseEvent) => e.stopPropagation(),
+        },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+            React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Confirmar devolução'),
+            React.createElement('button', {
+              type: 'button', onClick: () => setResolveTarget(null), 'aria-label': 'Fechar', disabled: Boolean(resolvingId),
+              style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+            }, closeModalSvg)),
+          React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+
+          React.createElement('div', {
+            style: { background: '#fff8e1', border: '1px solid #f0d68a', borderRadius: 12, padding: '14px 16px', fontSize: 13, lineHeight: 1.5, color: '#654c01', ...font },
+          },
+            React.createElement('strong', null, 'Esta ação não move dinheiro.'),
+            ' Ela apenas registra que o Pix de devolução já foi feito por fora do sistema. Faça a devolução pelo banco antes de confirmar aqui.'),
+
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } },
+            detailField('Valor a devolver', React.createElement('span', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', ...font } }, fmtBRL(resolveTarget.amount_cents))),
+            detailField('Pagador', resolveTarget.payer_name || userName(resolveTarget.user_id)),
+            detailField('Motivo', REASON_LABELS[resolveTarget.reason] ?? resolveTarget.reason),
+            detailField('Chave Pix / CPF', resolveTarget.payer_cpf ? fmtCpf(resolveTarget.payer_cpf) : '—')),
+
+          detailField('Cobrança no provedor', copyableValue(resolveTarget.provider_charge_id ?? null, 'Id da cobrança')),
+
+          React.createElement('label', {
+            style: {
+              display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer',
+              background: '#f6f6f6', borderRadius: 12, padding: '14px 16px',
+            },
+          },
+            React.createElement('input', {
+              type: 'checkbox', checked: resolveChecked,
+              onChange: (e: React.ChangeEvent<HTMLInputElement>) => setResolveChecked(e.target.checked),
+              style: { width: 18, height: 18, marginTop: 1, cursor: 'pointer', flexShrink: 0 },
+            }),
+            React.createElement('span', { style: { fontSize: 13, lineHeight: 1.5, color: '#0d0d0d', ...font } },
+              `Confirmo que já devolvi ${fmtBRL(resolveTarget.amount_cents)} a este passageiro por fora do sistema.`)),
+
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6 } },
+            React.createElement('span', { style: { fontSize: 12, color: '#767676', ...font } }, 'Observação (opcional) — ex.: comprovante, conta usada'),
+            React.createElement('textarea', {
+              value: resolveNote,
+              onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => setResolveNote(e.target.value),
+              rows: 2, maxLength: 300,
+              style: {
+                width: '100%', boxSizing: 'border-box' as const, resize: 'vertical' as const,
+                padding: '10px 12px', borderRadius: 10, border: '1px solid #d9d9d9',
+                fontSize: 13, color: '#0d0d0d', ...font,
+              },
+            })),
+
+          React.createElement('div', { style: { display: 'flex', gap: 10, justifyContent: 'flex-end' } },
+            React.createElement('button', {
+              type: 'button', onClick: () => setResolveTarget(null), disabled: Boolean(resolvingId),
+              style: {
+                height: 40, padding: '0 18px', borderRadius: 999, border: '1px solid #d9d9d9',
+                background: '#fff', color: '#0d0d0d', fontSize: 13, fontWeight: 600, cursor: 'pointer', ...font,
+              },
+            }, 'Cancelar'),
+            React.createElement('button', {
+              type: 'button', onClick: () => { void confirmResolve(); },
+              disabled: !resolveChecked || Boolean(resolvingId),
+              style: {
+                height: 40, padding: '0 18px', borderRadius: 999, border: 'none',
+                background: resolveChecked && !resolvingId ? '#0d0d0d' : '#c4c4c4',
+                color: '#fff', fontSize: 13, fontWeight: 600,
+                cursor: resolveChecked && !resolvingId ? 'pointer' : 'not-allowed', ...font,
+              },
+            }, resolvingId ? 'Salvando...' : 'Confirmar devolução'))))
+    : null;
+
+  // ── Modal de detalhe da devolução ───────────────────────────────────
+  // Reúne o que o financeiro precisa para devolver: id da cobrança no provedor
+  // (leva direto ao estorno no painel), quem pagou e qual pedido originou.
+  const refundDetailModal = refundDetail
+    ? React.createElement('div', {
+        role: 'dialog', 'aria-modal': true,
+        style: {
+          position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16,
+        },
+        onClick: () => setRefundDetail(null),
+      },
+        React.createElement('div', {
+          style: {
+            background: '#fff', borderRadius: 16, width: '100%', maxWidth: 560, padding: '28px 32px',
+            display: 'flex', flexDirection: 'column' as const, gap: 16,
+            boxShadow: '0 20px 60px rgba(0,0,0,.15)', maxHeight: '90vh', overflowY: 'auto' as const,
+          },
+          onClick: (e: React.MouseEvent) => e.stopPropagation(),
+        },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+            React.createElement('h2', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', margin: 0, ...font } }, 'Detalhe da devolução'),
+            React.createElement('button', {
+              type: 'button', onClick: () => setRefundDetail(null), 'aria-label': 'Fechar',
+              style: { width: 36, height: 36, borderRadius: '50%', background: '#f1f1f1', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+            }, closeModalSvg)),
+          React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+
+          React.createElement('div', {
+            style: {
+              display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' as const,
+              background: '#f6f6f6', borderRadius: 12, padding: '14px 16px',
+            },
+          },
+            React.createElement('span', { style: { fontSize: 26, fontWeight: 700, color: '#0d0d0d', ...font } }, fmtBRL(refundDetail.amount_cents)),
+            React.createElement('span', { style: { fontSize: 13, color: '#767676', ...font } },
+              REASON_LABELS[refundDetail.reason] ?? refundDetail.reason)),
+
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } },
+            detailField('Solicitada em', fmtDateTime(refundDetail.created_at)),
+            detailField('Pago em', refundDetail.paid_at ? fmtDateTime(refundDetail.paid_at) : '—'),
+            detailField('Pagador', refundDetail.payer_name || userName(refundDetail.user_id)),
+            detailField('CPF do pagador', refundDetail.payer_cpf ? fmtCpf(refundDetail.payer_cpf) : '—'),
+            detailField('Telefone', refundDetail.payer_phone ? fmtPhone(refundDetail.payer_phone) : '—'),
+            detailField('Provedor', refundDetail.provider || '—')),
+
+          React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+          detailField('Cobrança no provedor (buscar no painel para estornar)',
+            copyableValue(refundDetail.provider_charge_id ?? null, 'Id da cobrança')),
+
+          refundDetail.order_origin || refundDetail.order_destination
+            ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
+                React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+                detailField('Trajeto', `${refundDetail.order_origin ?? '—'} → ${refundDetail.order_destination ?? '—'}`),
+                refundDetail.order_departure_at
+                  ? detailField('Partida', fmtDateTime(refundDetail.order_departure_at))
+                  : null)
+            : null,
+
+          refundDetail.notes
+            ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
+                React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+                detailField('Observação', refundDetail.notes))
+            : null,
+
+          refundDetail.resolved_at
+            ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 16 } },
+                React.createElement('div', { style: { height: 1, background: '#e2e2e2' } }),
+                React.createElement('div', {
+                  style: { background: '#e8f5e9', border: '1px solid #b7dfba', borderRadius: 12, padding: '14px 16px', display: 'flex', flexDirection: 'column' as const, gap: 12 },
+                },
+                  React.createElement('span', { style: { fontSize: 13, fontWeight: 700, color: '#1b5e20', ...font } }, 'Devolução confirmada'),
+                  React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } },
+                    detailField('Quando', fmtDateTime(refundDetail.resolved_at)),
+                    detailField('Por quem', userName(refundDetail.resolved_by)))))
+            : null,
+
+          detailField('Id do pedido', copyableValue(refundDetail.entity_id ?? null, 'Id do pedido')))) 
+    : null;
+
   return React.createElement(React.Fragment, null,
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 20, width: '100%', alignSelf: 'stretch' } },
       breadcrumb,
@@ -685,5 +894,7 @@ export default function PixGestaoScreen() {
       degradedBanner,
       ...content.filter(Boolean)),
     detailModal,
+    refundDetailModal,
+    resolveModal,
     toastEl);
 }

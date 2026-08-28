@@ -37,8 +37,12 @@ export type RegistrationFormData = {
   agencyNumber?: string;
   /** @deprecated ver bankCode. */
   accountNumber?: string;
-  /** @deprecated ver bankCode. */
-  pixKey?: string;
+  /**
+   * Chave Pix do motorista — OBRIGATÓRIA desde o Pix real: corridas pagas por
+   * Pix caem na conta da plataforma e o repasse é feito por fora, para esta
+   * chave. (Voltou a ser exigida; ficou deprecada enquanto tudo ia pelo Stripe.)
+   */
+  pixKey: string;
   ownsVehicle: boolean;
   vehicleYear: string;
   vehicleModel: string;
@@ -71,6 +75,7 @@ const defaultFormData: RegistrationFormData = {
   cpf: '',
   age: '',
   city: '',
+  pixKey: '',
   cityLocality: null,
   cityAdminArea: null,
   cityResolvedFromMaps: false,

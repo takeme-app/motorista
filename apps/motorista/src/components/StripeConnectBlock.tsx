@@ -35,22 +35,22 @@ function stripeBlockCopy(
         title: 'Ação pendente na Stripe',
         subtitle:
           pendingVerificationCount > 0
-            ? 'Falta concluir algo para liberar cartão/Pix; até lá, as viagens ficam em dinheiro e a taxa acumula saldo.'
-            : 'Aguardando aprovação da Stripe. Enquanto isso, viagens ficam em dinheiro e a taxa acumula saldo.',
+            ? 'Falta concluir algo para liberar o cartão; até lá, as viagens seguem por Pix e dinheiro, e a taxa do dinheiro acumula saldo.'
+            : 'Aguardando aprovação da Stripe. Enquanto isso, as viagens seguem por Pix e dinheiro, e a taxa do dinheiro acumula saldo.',
         ctaLabel: 'Revisar cadastro',
         tone: 'warn',
       };
     case 'action_required':
       return {
         title: 'A Stripe pediu informações adicionais',
-        subtitle: 'Complete o formulário para liberar cartão/Pix e permitir o abate automático do saldo devido.',
+        subtitle: 'Complete o formulário para liberar o pagamento por cartão e permitir o abate automático do saldo devido.',
         ctaLabel: 'Completar cadastro',
         tone: 'warn',
       };
     case 'incomplete':
       return {
         title: 'Cadastro Stripe incompleto',
-        subtitle: 'Finalize o cadastro para liberar cartão/Pix. Sem Connect aprovado, as viagens ficam em dinheiro.',
+        subtitle: 'Finalize o cadastro para liberar o pagamento por cartão. Sem Connect, as viagens seguem por Pix e dinheiro.',
         ctaLabel: 'Retomar cadastro',
         tone: 'warn',
       };
@@ -58,7 +58,7 @@ function stripeBlockCopy(
     default:
       return {
         title: 'Ativar recebimento automático',
-        subtitle: 'Libere cartão/Pix e abata automaticamente as taxas acumuladas de corridas em dinheiro.',
+        subtitle: 'Libere o pagamento por cartão e abata automaticamente as taxas acumuladas de corridas em dinheiro. Pix e dinheiro já funcionam sem isso.',
         ctaLabel: 'Configurar Stripe',
         tone: 'neutral',
       };

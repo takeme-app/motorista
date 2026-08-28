@@ -256,12 +256,18 @@ export function TripDetailScreen({ navigation, route }: Props) {
     //    ou outro método sem Payment Intent estornável.
     if (result.insideWindow) {
       void tryOpenSupportTicket('reembolso', { booking_id: bookingId });
-      const isCash = (detail?.payment_method ?? '').toLowerCase() === 'cash';
+      const method = (detail?.payment_method ?? '').toLowerCase();
+      const isCash = method === 'cash';
+      // Pix: o cancelamento já registra a devolução na fila do financeiro
+      // (pix_refunds_pending) — o cliente NÃO precisa abrir chamado.
+      const isPix = method === 'pix';
       showAlert(
         'Viagem cancelada',
         isCash
           ? 'A viagem foi cancelada. Como o pagamento foi em dinheiro, não há estorno automático — combine o reembolso diretamente com o motorista ou fale com o suporte.'
-          : 'A viagem foi cancelada. Este pagamento não tem estorno automático disponível. Fale com o suporte para solicitar análise.',
+          : isPix
+            ? 'A viagem foi cancelada e a devolução do valor pago já foi registrada. A equipe da Take Me devolve por Pix, na chave de origem do pagamento, em até 2 dias úteis.'
+            : 'A viagem foi cancelada. Este pagamento não tem estorno automático disponível. Fale com o suporte para solicitar análise.',
         {
           buttonLabel: 'OK',
           secondaryButton: supportButton,
@@ -1135,12 +1141,23 @@ export function TripDetailScreen({ navigation, route }: Props) {
                 ? `${freeWindowHours}h`
                 : `${freeWindowHours.toFixed(1)}h`;
               const isCashPayment = (detail?.payment_method ?? '').toLowerCase() === 'cash';
+              // Pix: a plataforma recebeu o dinheiro e a devolução é feita MANUALMENTE
+              // pelo financeiro — não há estorno automático em cartão.
+              const isPixPayment = (detail?.payment_method ?? '').toLowerCase() === 'pix';
               return (
                 <>
                   <Text style={styles.confirmModalTitle}>Cancelar viagem?</Text>
                   {isCashPayment ? (
                     <Text style={styles.confirmModalSubtitle}>
                       O pagamento desta viagem foi em dinheiro com o motorista. Ao cancelar, combine o reembolso de {amountBrl} diretamente com o motorista ou abra um chamado no suporte.
+                    </Text>
+                  ) : isPixPayment && insideWindow ? (
+                    <Text style={styles.confirmModalSubtitle}>
+                      Faltam mais de {hoursLabel} para a partida. A devolução de {amountBrl} será feita por Pix pela equipe da Take Me em até 2 dias úteis, na chave de origem do pagamento.
+                    </Text>
+                  ) : isPixPayment ? (
+                    <Text style={styles.confirmModalSubtitle}>
+                      A partida está a menos de {hoursLabel}. O cancelamento será gratuito, mas não haverá devolução automática. Se desejar, abra um chamado no suporte após cancelar.
                     </Text>
                   ) : insideWindow ? (
                     <Text style={styles.confirmModalSubtitle}>

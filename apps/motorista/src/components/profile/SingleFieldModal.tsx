@@ -18,6 +18,12 @@ type Props = {
   digitsOnly?: boolean;
   /** Ex.: formatPhoneBR para telefone. */
   formatDisplay?: (stored: string) => string;
+  /**
+   * Desliga autocorreção/capitalização. Obrigatório em campos onde o valor é
+   * um identificador exato (ex.: chave Pix) — o autocorretor do iOS altera o
+   * texto e o motorista salvaria uma chave inválida sem perceber.
+   */
+  rawText?: boolean;
 };
 
 export function SingleFieldModal({
@@ -32,6 +38,7 @@ export function SingleFieldModal({
   onSave,
   digitsOnly,
   formatDisplay,
+  rawText,
 }: Props) {
   const [value, setValue] = useState(initialValue);
   const [saving, setSaving] = useState(false);
@@ -75,8 +82,8 @@ export function SingleFieldModal({
         placeholder={placeholder}
         placeholderTextColor="#9CA3AF"
         keyboardType={keyboardType}
-        autoCapitalize={keyboardType === 'email-address' ? 'none' : 'sentences'}
-        autoCorrect={keyboardType === 'email-address' ? false : true}
+        autoCapitalize={rawText || keyboardType === 'email-address' ? 'none' : 'sentences'}
+        autoCorrect={rawText || keyboardType === 'email-address' ? false : true}
       />
     </ProfileModalShell>
   );

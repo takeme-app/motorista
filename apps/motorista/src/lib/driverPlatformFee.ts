@@ -100,7 +100,7 @@ export function platformFeeLedgerTitle(entry: DriverPlatformFeeLedgerEntry): str
     return 'Saldo registrado';
   }
 
-  if (entry.note === 'connect_charge_abate') return 'Abatido via cartão/Pix';
+  if (entry.note === 'connect_charge_abate') return 'Abatido em cobrança no cartão';
   if (entry.note === 'manual_adjustment') return 'Ajuste manual';
   return 'Saldo abatido';
 }

@@ -66,6 +66,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
   const [cpf, setCpf] = useState('');
   const [age, setAge] = useState('');
   const [city, setCity] = useState('');
+  const [pixKey, setPixKey] = useState('');
   const [cityResolved, setCityResolved] = useState(false);
   const [cityMeta, setCityMeta] = useState<{ locality: string | null; adminArea: string | null }>({
     locality: null,
@@ -268,6 +269,11 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       }
     }
 
+    if (!pixKey.trim()) {
+      showAlert('Atenção', 'Informe sua chave Pix — é por ela que a plataforma repassa as corridas pagas via Pix.');
+      return;
+    }
+
     if (!acceptedTerms) {
       showAlert('Atenção', 'Aceite os Termos de Uso e a Política de Privacidade.');
       return;
@@ -279,6 +285,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
       cpf: formatCpf(cpfDigits),
       age: onlyDigits(age),
       city: city.trim(),
+      pixKey: pixKey.trim(),
       cityLocality: cityMeta.locality,
       cityAdminArea: cityMeta.adminArea,
       cityResolvedFromMaps: cityResolved,
@@ -413,6 +420,20 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
             cityConfirmed={cityResolved}
             inputStyle={styles.input}
           />
+        </FieldBlock>
+        <FieldBlock label="Chave Pix para recebimento">
+          <TextInput
+            style={styles.input}
+            placeholder="CPF, CNPJ, e-mail, telefone ou chave aleatória"
+            placeholderTextColor="#767676"
+            value={pixKey}
+            onChangeText={setPixKey}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <Text style={styles.helperBelowField}>
+            Corridas pagas por Pix são repassadas pela plataforma para esta chave.
+          </Text>
         </FieldBlock>
         {isParceiro ? (
           <FieldBlock label="Anos de experiência">
