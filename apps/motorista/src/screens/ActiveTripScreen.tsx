@@ -3531,7 +3531,7 @@ export function ActiveTripScreen({ navigation, route }: Props) {
       setTimeout(() => {
         showAlert(
           'Taxa da plataforma',
-          `Taxa ${formatCurrencyCents(completedCashFeeCents)} registrada; será abatida nas próximas corridas com cartão/Pix.`,
+          `Taxa ${formatCurrencyCents(completedCashFeeCents)} registrada; será abatida nas próximas corridas pagas com cartão.`,
         );
       }, 350);
     }
