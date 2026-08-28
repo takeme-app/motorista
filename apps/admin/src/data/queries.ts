@@ -3308,6 +3308,8 @@ export async function fetchPagamentos(): Promise<PagamentoListItem[]> {
       stripeTransferId: transfer.stripeTransferId,
       stripeTransferAt: transfer.stripeTransferAt,
       stripeTransferError: transfer.stripeTransferError,
+      payoutMethod: p.payout_method != null ? String(p.payout_method) : null,
+      receiptUrl: p.receipt_url != null ? String(p.receipt_url) : null,
       dataFinalizacao: p.paid_at ? fmtDate(String(p.paid_at)) : fmtDate(String(p.created_at ?? '')),
       dateAtIso: String(p.paid_at || p.created_at || ''),
       status: mapPayoutStatus(String(p.status ?? '')),

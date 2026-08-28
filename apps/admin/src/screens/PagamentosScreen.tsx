@@ -999,6 +999,23 @@ export default function PagamentosScreen() {
           cursor: 'help',
         },
       }, shortId);
+    } else if (row.payoutMethod === 'pix' || (!row.workerHasConnect && row.statusRaw !== 'cancelled')) {
+      // Repasse feito por fora (Pix/banco) — não existe transfer no Stripe. A
+      // coluna mostrava '—', que se confundia com "sem informação"; aqui fica
+      // explícito o meio e, quando já pago, se há comprovante anexado.
+      const jaPago = row.statusRaw === 'paid';
+      transferCell = React.createElement('span', {
+        title: jaPago
+          ? (row.receiptUrl ? 'Pago por Pix/banco — comprovante anexado.' : 'Pago por Pix/banco — sem comprovante anexado.')
+          : 'Sem Stripe Connect: o repasse é feito por Pix/banco e confirmado aqui.',
+        style: {
+          display: 'inline-block', padding: '3px 10px', borderRadius: 999,
+          fontSize: 11, fontWeight: 600,
+          color: jaPago ? '#14532d' : '#654c01',
+          background: jaPago ? '#dcfce7' : '#fef3c7',
+          cursor: 'help', ...font,
+        },
+      }, jaPago ? (row.receiptUrl ? 'Pix ✓ compr.' : 'Pix ✓') : 'Pix manual');
     } else if (row.entityTypeRaw === 'booking' && row.statusRaw === 'paid') {
       // booking usa transfer_data no charge → nao precisa de transfer explicito.
       transferCell = React.createElement('span', {

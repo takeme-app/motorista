@@ -658,6 +658,10 @@ export interface PagamentoListItem {
   stripeTransferId: string | null;
   stripeTransferAt: string | null;
   stripeTransferError: string | null;
+  /** Como o repasse é/foi feito: 'pix' (manual, por fora) | 'stripe' | null. */
+  payoutMethod: string | null;
+  /** Comprovante anexado na confirmação manual do Pix. */
+  receiptUrl: string | null;
   dataFinalizacao: string;
   /** ISO (paid_at ou created_at) para filtros de período no admin */
   dateAtIso: string;
