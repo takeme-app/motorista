@@ -18,7 +18,11 @@ import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
-import { fetchDriverPaymentTransfers, type DriverPaymentTransfer } from '../lib/driverPaymentTransfers';
+import {
+  fetchDriverPaymentTransfers,
+  sumReceivedCents,
+  type DriverPaymentTransfer,
+} from '../lib/driverPaymentTransfers';
 import { fetchDriverPendingPayouts, type PendingPayoutsSummary } from '../lib/driverPendingPayouts';
 import { SingleFieldModal } from '../components/profile/SingleFieldModal';
 import {
@@ -141,8 +145,9 @@ export function PaymentsScreen({ navigation }: Props) {
     const list = await fetchDriverPaymentTransfers(supabase, user.id, start, end);
 
     setTransfers(list);
-    setRides(list.length);
-    const transfersSum = list.reduce((s, t) => s + t.amount_cents, 0);
+    setRides(list.filter((t) => !t.pending).length);
+    // Pix aguardando repasse aparece na lista mas não é "recebido".
+    const transfersSum = sumReceivedCents(list);
 
     // Gorjetas recebidas hoje (via PaymentIntent separado, transferido 100% para
     // o motorista via transfer_data.destination). Somamos as 3 entidades.
@@ -446,6 +451,7 @@ export function PaymentsScreen({ navigation }: Props) {
                       <Text style={styles.transferAmount}>{formatCents(t.amount_cents)}</Text>
                       <Text style={styles.transferMeta}>
                         {`${transferLabel(t.source)} • ${formatHour(t.paid_at)}`}
+                        {t.pending ? ' • aguardando repasse' : ''}
                       </Text>
                     </View>
                     <Text style={styles.transferDate}>{formatShortDate(t.paid_at)}</Text>

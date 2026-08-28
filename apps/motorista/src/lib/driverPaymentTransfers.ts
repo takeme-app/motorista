@@ -7,7 +7,18 @@ export type DriverPaymentTransfer = {
   amount_cents: number;
   paid_at: string;
   source: DriverPaymentTransferSource;
+  /**
+   * Corrida paga por Pix cujo repasse ainda não saiu. Aparece na lista para o
+   * motorista ver que a corrida existe, mas NÃO entra em nenhuma soma de
+   * "recebido" — quem soma precisa filtrar por isto.
+   */
+  pending?: boolean;
 };
+
+/** Só o que o motorista de fato já recebeu (exclui Pix aguardando repasse). */
+export function sumReceivedCents(list: DriverPaymentTransfer[]): number {
+  return list.reduce((sum, t) => (t.pending ? sum : sum + t.amount_cents), 0);
+}
 
 type BookingRow = {
   id: string;
@@ -24,6 +35,10 @@ type BookingRow = {
  * payout não estiver 'paid', esse valor NÃO é "recebido" — aparece em "A receber
  * da plataforma". (No cartão o split cai direto na conta do motorista; no
  * dinheiro ele recebe em mãos — nos dois casos o ganho sintético está correto.)
+ *
+ * Estas corridas continuam NA LISTA, marcadas com `pending`: sumir com elas
+ * fazia o histórico dizer "nenhuma transferência neste mês" para quem tinha
+ * rodado. Ficam de fora apenas das somas.
  */
 function platformHoldsMoney(paymentMethod: string | null | undefined): boolean {
   return String(paymentMethod ?? '').trim().toLowerCase() === 'pix';
@@ -99,12 +114,13 @@ export async function fetchDriverPaymentTransfers(
     .order('paid_at', { ascending: false });
 
   const bookingTransfers: DriverPaymentTransfer[] = (paidBookings ?? [])
-    .filter((b: BookingRow) => !paidKeys.has(`booking:${b.id}`) && !platformHoldsMoney(b.payment_method))
+    .filter((b: BookingRow) => !paidKeys.has(`booking:${b.id}`))
     .map((b: BookingRow) => ({
       id: b.id,
       amount_cents: workerCents(b),
       paid_at: b.paid_at as string,
       source: 'booking' as const,
+      ...(platformHoldsMoney(b.payment_method) ? { pending: true } : {}),
     }));
 
   const listedPaidBookingIds = new Set(bookingTransfers.map((t) => t.id));
@@ -122,12 +138,15 @@ export async function fetchDriverPaymentTransfers(
   for (const trip of (completedTrips ?? []) as CompletedTripRow[]) {
     const rows = trip.bookings ?? [];
     let extra = 0;
+    let extraPending = 0;
     for (const b of rows) {
       if (b.status !== 'confirmed' && b.status !== 'paid') continue;
       if (listedPaidBookingIds.has(b.id)) continue;
       if (paidKeys.has(`booking:${b.id}`)) continue; // já contabilizada como payout pago
-      if (platformHoldsMoney(b.payment_method)) continue; // Pix: só entra quando o repasse for pago
-      extra += workerCents(b);
+      // Pix e recebido vão em linhas separadas: somar juntos criaria um valor
+      // que é parte "na mão" e parte "a receber", impossível de rotular.
+      if (platformHoldsMoney(b.payment_method)) extraPending += workerCents(b);
+      else extra += workerCents(b);
     }
     if (extra > 0) {
       tripTransfers.push({
@@ -135,6 +154,15 @@ export async function fetchDriverPaymentTransfers(
         amount_cents: extra,
         paid_at: trip.updated_at,
         source: 'completed_trip',
+      });
+    }
+    if (extraPending > 0) {
+      tripTransfers.push({
+        id: `st-pix-${trip.id}`,
+        amount_cents: extraPending,
+        paid_at: trip.updated_at,
+        source: 'completed_trip',
+        pending: true,
       });
     }
   }
@@ -154,12 +182,13 @@ export async function fetchDriverPaymentTransfers(
   const shipmentTransfers: DriverPaymentTransfer[] = ((deliveredShipments ?? []) as Array<{
     id: string; amount_cents: number; worker_earning_cents?: number | null; delivered_at: string | null; payment_method?: string | null;
   }>)
-    .filter((s) => s.delivered_at && !paidKeys.has(`shipment:${s.id}`) && !platformHoldsMoney(s.payment_method))
+    .filter((s) => s.delivered_at && !paidKeys.has(`shipment:${s.id}`))
     .map((s) => ({
       id: `sh-${s.id}`,
       amount_cents: workerCents(s),
       paid_at: s.delivered_at as string,
       source: 'shipment' as const,
+      ...(platformHoldsMoney(s.payment_method) ? { pending: true } : {}),
     }));
 
   // Encomendas de dependentes entregues via a viagem do motorista (driver vem de scheduled_trips).
@@ -175,12 +204,13 @@ export async function fetchDriverPaymentTransfers(
   const depShipmentTransfers: DriverPaymentTransfer[] = ((deliveredDepShipments ?? []) as Array<{
     id: string; amount_cents: number; worker_earning_cents?: number | null; delivered_at: string | null; payment_method?: string | null;
   }>)
-    .filter((s) => s.delivered_at && !platformHoldsMoney(s.payment_method))
+    .filter((s) => s.delivered_at)
     .map((s) => ({
       id: `dsh-${s.id}`,
       amount_cents: workerCents(s),
       paid_at: s.delivered_at as string,
       source: 'shipment' as const,
+      ...(platformHoldsMoney(s.payment_method) ? { pending: true } : {}),
     }));
 
   const combined = [
