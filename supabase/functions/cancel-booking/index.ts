@@ -254,6 +254,14 @@ Deno.serve(async (req) => {
       amount_cents: number | null;
     }): Promise<boolean> => {
       const amountCents = Math.max(0, Math.floor(Number(b.amount_cents ?? 0)));
+      // Fora da janela não há devolução: a linha entra apenas como RASTRO, já
+      // resolvida. Sem ela, o Pix retido pela plataforma não deixava registro
+      // em lugar nenhum e não havia como auditar uma reclamação depois.
+      const reason = insideWindow ? "user_cancelled_in_window" : "cancelled_outside_window";
+      const status = insideWindow ? "pending" : "dismissed";
+      const notes = insideWindow
+        ? "passageiro cancelou dentro da janela gratuita (pagamento Pix real)"
+        : `passageiro cancelou a ${hoursUntilDeparture.toFixed(1)}h da partida (janela gratuita: ${thresholdHours}h) — valor retido, sem devolução devida`;
       try {
         // Dedup: não duplica pendência da mesma cobrança+motivo.
         let alreadyQueued = false;
@@ -262,8 +270,7 @@ Deno.serve(async (req) => {
             .from("pix_refunds_pending")
             .select("id")
             .eq("pix_charge_id", b.pix_charge_id)
-            .eq("reason", "user_cancelled_in_window")
-            .eq("status", "pending")
+            .eq("reason", reason)
             .limit(1);
           alreadyQueued = Array.isArray(existing) && existing.length > 0;
         }
@@ -274,8 +281,10 @@ Deno.serve(async (req) => {
           entity_id: bookingId,
           user_id: b.user_id,
           amount_cents: amountCents,
-          reason: "user_cancelled_in_window",
-          notes: "passageiro cancelou dentro da janela gratuita (pagamento Pix real)",
+          reason,
+          status,
+          ...(status === "dismissed" ? { resolved_at: new Date().toISOString() } : {}),
+          notes,
         } as never);
         if (queueErr) {
           console.error("[cancel-booking] fila de devolução pix:", queueErr.message);
@@ -289,9 +298,12 @@ Deno.serve(async (req) => {
     };
 
     let pixRefundQueued = false;
-    if (insideWindow && wasPixPaid) {
+    if (wasPixPaid) {
+      // Dentro da janela → pendência real de devolução.
+      // Fora da janela → rastro do valor retido (já dismissed).
       pixRefundQueued = await queuePixRefundManual(booking);
       (policySnapshot as Record<string, unknown>).pix_refund_queued = pixRefundQueued;
+      (policySnapshot as Record<string, unknown>).pix_amount_retained = !insideWindow;
     }
 
     // Aplica metadados do cancelamento. Se process-refund já setou status,
@@ -342,13 +354,13 @@ Deno.serve(async (req) => {
         Boolean(fresh.pix_paid_at) &&
         Math.floor(Number(fresh.amount_cents ?? 0)) > 0;
       if (fresh && freshPixPaid) {
-        // Pagamento Pix liquidou no meio do cancelamento: enfileira a devolução
-        // (na janela) ANTES de cancelar de novo, agora sobre o status real.
-        if (insideWindow) {
-          pixRefundQueued = await queuePixRefundManual(fresh);
-          (policySnapshot as Record<string, unknown>).pix_refund_queued = pixRefundQueued;
-          (updatePayload as Record<string, unknown>).cancellation_policy_applied = policySnapshot;
-        }
+        // Pagamento Pix liquidou no meio do cancelamento: registra ANTES de
+        // cancelar de novo, agora sobre o status real. O helper decide sozinho
+        // entre pendência (na janela) e rastro do valor retido (fora dela).
+        pixRefundQueued = await queuePixRefundManual(fresh);
+        (policySnapshot as Record<string, unknown>).pix_refund_queued = pixRefundQueued;
+        (policySnapshot as Record<string, unknown>).pix_amount_retained = !insideWindow;
+        (updatePayload as Record<string, unknown>).cancellation_policy_applied = policySnapshot;
         const { error: retryErr } = await admin
           .from("bookings")
           .update(updatePayload as never)

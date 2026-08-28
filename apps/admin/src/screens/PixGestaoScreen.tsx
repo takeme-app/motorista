@@ -56,6 +56,8 @@ const REASON_LABELS: Record<PixRefundReason, string> = {
   expired_not_realized: 'Expirou sem se realizar',
   user_cancelled_in_window: 'Cancelado na janela',
   driver_cancelled: 'Motorista cancelou',
+  cancelled_outside_window: 'Retido — fora da janela',
+  duplicate_payment: 'Pagamento duplicado',
   admin_cancelled: 'Cancelado pelo admin',
   orphan_payment: 'Pagamento órfão',
 };

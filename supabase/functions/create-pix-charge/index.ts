@@ -207,6 +207,30 @@ Deno.serve(async (req) => {
       return jsonRes({ error: "cpf_required" }, 422);
     }
 
+    // ── 3a) Já tem lugar pago nesta viagem? ──
+    // A dedup abaixo só enxerga reservas 'pending'. Sem esta checagem, quem já
+    // pagou consegue reservar a MESMA viagem de novo e pagar um segundo Pix —
+    // aconteceu em produção (usuário pagou R$ 10 numa viagem de R$ 5, provável
+    // por não ter visto a confirmação do primeiro pagamento). O dinheiro extra
+    // não tem estorno automático, então o certo é não deixar cobrar duas vezes.
+    const { data: alreadyPaid } = await admin
+      .from("bookings")
+      .select("id, status")
+      .eq("user_id", userId)
+      .eq("scheduled_trip_id", sid)
+      .in("status", ["paid", "confirmed"])
+      .limit(1);
+    if (Array.isArray(alreadyPaid) && alreadyPaid.length > 0) {
+      return jsonRes(
+        {
+          error: "Você já tem uma reserva paga nesta viagem. Confira em Atividades.",
+          code: "already_booked",
+          booking_id: alreadyPaid[0].id,
+        },
+        409,
+      );
+    }
+
     // ── 3) Dedup de retomada + limite de pendentes ──
     const nowIso = new Date().toISOString();
     const { data: pendingCharges } = await admin
