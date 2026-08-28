@@ -531,19 +531,54 @@ export async function fetchPixRefundsPendingCount(): Promise<number> {
  * Marca uma devolução como feita (status 'done'). NÃO move dinheiro — apenas
  * registra que a devolução JÁ FOI FEITA fora do sistema.
  */
-export async function markPixRefundResolved(id: string, notes?: string): Promise<{ error: string | null }> {
+/**
+ * Registra que a devolução JÁ FOI FEITA por fora (Pix manual pelo banco).
+ * Não move dinheiro — só fecha o item da fila e deixa o rastro de auditoria
+ * (quando, por quem, e a observação que o operador escreveu na confirmação).
+ *
+ * A observação é ANEXADA: `notes` já traz o motivo de origem da pendência
+ * ("passageiro cancelou dentro da janela", etc.) e perder isso apagaria a
+ * única explicação de por que a devolução existia.
+ *
+ * O UPDATE é guardado por `status='pending'`: se outro operador confirmou no
+ * intervalo, 0 linhas mudam e o chamador avisa em vez de sobrescrever a
+ * autoria de quem chegou primeiro.
+ */
+export async function markPixRefundResolved(
+  id: string,
+  notes?: string,
+): Promise<{ error: string | null; alreadyResolved?: boolean }> {
   if (!isSupabaseConfigured) return { error: 'Supabase não configurado' };
   const userId = await currentUserId();
+
+  const { data: current, error: readErr } = await sb
+    .from('pix_refunds_pending')
+    .select('notes')
+    .eq('id', id)
+    .maybeSingle();
+  if (readErr) return { error: readErr.message || 'Erro ao ler a pendência' };
+
   const patch: Record<string, unknown> = {
     status: 'done',
     resolved_at: new Date().toISOString(),
     resolved_by: userId || null,
   };
-  if (notes && notes.trim()) patch.notes = notes.trim();
-  const { error } = await sb
+
+  const extra = (notes ?? '').trim();
+  if (extra) {
+    const previous = ((current as { notes?: string | null } | null)?.notes ?? '').trim();
+    patch.notes = previous ? `${previous}\n\n[devolução] ${extra}` : `[devolução] ${extra}`;
+  }
+
+  const { data: updated, error } = await sb
     .from('pix_refunds_pending')
     .update(patch)
     .eq('id', id)
-    .eq('status', 'pending');
-  return { error: error ? (error.message || 'Erro ao marcar devolução') : null };
+    .eq('status', 'pending')
+    .select('id');
+  if (error) return { error: error.message || 'Erro ao marcar devolução' };
+  if (!updated || updated.length === 0) {
+    return { error: null, alreadyResolved: true };
+  }
+  return { error: null };
 }
