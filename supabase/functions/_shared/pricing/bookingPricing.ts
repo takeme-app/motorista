@@ -118,6 +118,14 @@ export async function getBookingAdminPct(admin: SupabaseClient): Promise<number>
   return readServiceAdminPctValue((byServiceRow as { value?: unknown } | undefined)?.value, fallbackPct);
 }
 
+/**
+ * Base do preço: 'per_person' quando vem de price_per_person_cents (rota ou
+ * viagem) — multiplica pelo nº de passageiros; 'flat_trip' no legado
+ * amount_cents — preço fechado da viagem. MESMA regra derivada que o app usa
+ * (clientScheduledTrips.resolveTripPriceWithBasis).
+ */
+export type TripPriceBasis = "per_person" | "flat_trip";
+
 function resolveTripPriceCents(
   trip: {
     route_id?: string | null;
@@ -125,33 +133,33 @@ function resolveTripPriceCents(
     amount_cents?: number | null;
   },
   routePriceById: Map<string, number | null>,
-): number | null {
+): { cents: number | null; basis: TripPriceBasis | null } {
   const routeId = trip.route_id;
   if (routeId && routePriceById.has(routeId)) {
     const fromRoute = routePriceById.get(routeId);
-    if (fromRoute != null && fromRoute >= 0) return fromRoute;
+    if (fromRoute != null && fromRoute >= 0) return { cents: fromRoute, basis: "per_person" };
   }
   const tripPpp = trip.price_per_person_cents;
-  if (tripPpp != null && tripPpp >= 0) return tripPpp;
+  if (tripPpp != null && tripPpp >= 0) return { cents: tripPpp, basis: "per_person" };
   const legacy = trip.amount_cents;
-  if (legacy != null && legacy >= 0) return legacy;
-  return null;
+  if (legacy != null && legacy >= 0) return { cents: legacy, basis: "flat_trip" };
+  return { cents: null, basis: null };
 }
 
 export async function resolvePriceCentsForScheduledTrip(
   admin: SupabaseClient,
   scheduledTripId: string,
-): Promise<{ cents: number | null; error: string | null }> {
+): Promise<{ cents: number | null; basis: TripPriceBasis | null; error: string | null }> {
   const { data: trip, error: tripErr } = await admin
     .from("scheduled_trips")
     .select("route_id, price_per_person_cents, amount_cents")
     .eq("id", scheduledTripId)
     .maybeSingle();
   if (tripErr) {
-    return { cents: null, error: "Não foi possível obter os dados da viagem." };
+    return { cents: null, basis: null, error: "Não foi possível obter os dados da viagem." };
   }
   if (!trip) {
-    return { cents: null, error: "Viagem não encontrada." };
+    return { cents: null, basis: null, error: "Viagem não encontrada." };
   }
   const routeId = trip.route_id as string | null | undefined;
   const routePriceById = new Map<string, number | null>();
@@ -163,13 +171,13 @@ export async function resolvePriceCentsForScheduledTrip(
       .eq("is_active", true)
       .maybeSingle();
     if (routeErr) {
-      return { cents: null, error: "Não foi possível obter o preço da rota." };
+      return { cents: null, basis: null, error: "Não foi possível obter o preço da rota." };
     }
     if (route) {
       routePriceById.set(route.id as string, (route.price_per_person_cents as number | null) ?? null);
     }
   }
-  const cents = resolveTripPriceCents(
+  const { cents, basis } = resolveTripPriceCents(
     {
       route_id: trip.route_id as string | null | undefined,
       price_per_person_cents: trip.price_per_person_cents as number | null | undefined,
@@ -177,7 +185,7 @@ export async function resolvePriceCentsForScheduledTrip(
     },
     routePriceById,
   );
-  return { cents, error: null };
+  return { cents, basis, error: null };
 }
 
 export type BookingDraftPricing = {
@@ -200,18 +208,25 @@ export async function computeBookingDraftPricing(
   admin: SupabaseClient,
   userId: string,
   scheduledTripId: string,
+  passengerCount: number,
 ): Promise<BookingDraftPricing | { error: string; status: number }> {
-  const { cents: amountCentsResolved, error: priceErr } = await resolvePriceCentsForScheduledTrip(
+  const { cents: amountCentsResolved, basis, error: priceErr } = await resolvePriceCentsForScheduledTrip(
     admin,
     scheduledTripId,
   );
   if (priceErr) {
     return { error: priceErr, status: 400 };
   }
-  const amountCents = amountCentsResolved != null ? Number(amountCentsResolved) : NaN;
-  if (!Number.isInteger(amountCents) || amountCents < 1) {
+  const unitCents = amountCentsResolved != null ? Number(amountCentsResolved) : NaN;
+  if (!Number.isInteger(unitCents) || unitCents < 1) {
     return { error: "Valor da viagem inválido", status: 400 };
   }
+  // price_per_person_cents é POR PESSOA: a base do pedido multiplica pelo nº
+  // de passageiros (mesma conta do checkout do app). Sem isto, uma reserva de
+  // 2 passageiros era cobrada pelo preço de 1 — o app mostrava R$ 10 e o Pix
+  // saía R$ 5 (aconteceu em produção). 'flat_trip' (legado) é preço fechado.
+  const pax = Math.max(1, Math.floor(Number(passengerCount) || 1));
+  const amountCents = basis === "flat_trip" ? unitCents : Math.floor(unitCents * pax);
 
   // Resolve rota do motorista + pricing_route_id (para matching de promoção).
   const { data: routeInfo } = await admin

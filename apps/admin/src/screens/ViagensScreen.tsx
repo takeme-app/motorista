@@ -278,6 +278,12 @@ export default function ViagensScreen() {
     { label: 'Status', flex: '0 0 118px', minWidth: 118 },
     { label: 'Visualizar/Editar', flex: '0 0 96px', minWidth: 96 },
   ];
+
+  // Largura mínima ÚNICA para cabeçalho e linhas (soma das colunas + padding
+  // lateral do container): em tela estreita os dois rolam juntos com fundo
+  // pintado até o fim — sem o vazio branco à direita nem coluna flutuando fora
+  // do card.
+  const tableMinWidth = tableCols.reduce((sum, c) => sum + c.minWidth, 0) + 32;
   const viagemPagamentoShort = (m: ViagemListItem['paymentMethod']) =>
     (m === 'cash' ? 'Din.' : m === 'pix' ? 'Pix' : 'Cart.');
 
@@ -297,7 +303,7 @@ export default function ViagensScreen() {
 
   // Table header
   const viagensTableHeader = React.createElement('div', {
-    style: { ...webStyles.viagensTableHeader, display: 'flex' },
+    style: { ...webStyles.viagensTableHeader, display: 'flex', minWidth: tableMinWidth },
   },
     ...tableCols.map((c) => React.createElement('div', {
       key: c.label,
@@ -305,6 +311,7 @@ export default function ViagensScreen() {
         flex: c.flex, minWidth: c.minWidth, padding: '0 8px',
         display: 'flex', alignItems: 'center',
         fontSize: 12, fontWeight: 400, lineHeight: '1.5',
+        boxSizing: 'border-box' as const,
       },
     }, c.label)));
 
@@ -350,7 +357,10 @@ export default function ViagensScreen() {
   };
 
   // Table rows
-  const cellBase = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', padding: '0 8px' } as const;
+  // boxSizing border-box: sem isto o padding somava POR FORA do minWidth e
+  // cada célula ficava 16px mais larga que o declarado (11 colunas = 176px
+  // fantasma), estourando o card.
+  const cellBase = { display: 'flex', alignItems: 'center', fontSize: 14, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', padding: '0 8px', boxSizing: 'border-box' } as const;
   const viagensTableRowEl = (entry: RowWithItem, idx: number) => {
     const { row, item } = entry;
     const st = statusStyles[row.status];
@@ -359,7 +369,7 @@ export default function ViagensScreen() {
     return React.createElement('div', {
       key: rowKey,
       'data-testid': 'viagem-table-row',
-      style: { ...webStyles.viagensTableRow, display: 'flex', cursor: 'pointer' },
+      style: { ...webStyles.viagensTableRow, display: 'flex', cursor: 'pointer', minWidth: tableMinWidth },
       onClick: () => openTripDetail(row, item),
       role: 'button',
       tabIndex: 0,
@@ -368,7 +378,7 @@ export default function ViagensScreen() {
       // Motorista (uma viagem pode ter vários passageiros; a lista é por viagem)
       React.createElement('div', { style: { ...webStyles.viagensPassengerCell, flex: tableCols[0].flex, minWidth: tableCols[0].minWidth } },
         renderAvatar(item.motoristaNome || '—', item.motoristaAvatarUrl),
-        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', lineHeight: '1.5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, item.motoristaNome || '—')),
+        React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', lineHeight: '1.5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 } }, item.motoristaNome || '—')),
       // Origem
       React.createElement('div', { style: { ...cellBase, flex: tableCols[1].flex, minWidth: tableCols[1].minWidth, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } }, row.origem),
       // Destino
@@ -465,8 +475,11 @@ export default function ViagensScreen() {
     React.createElement('div', { style: webStyles.viagensTableSectionHeader },
       React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', lineHeight: '1.5' } }, 'Lista de viagens'),
       filtroBtn),
-    viagensTableHeader,
-    ...viagensTableBody,
+    // Só o miolo (cabeçalho + linhas) rola horizontalmente em tela estreita;
+    // título/Filtro e paginação ficam sempre visíveis na largura do card.
+    React.createElement('div', { style: { width: '100%', overflowX: 'auto' as const } },
+      viagensTableHeader,
+      ...viagensTableBody),
     paginacaoControls);
 
   // Modal Filtro da tabela (Figma 1132-26548)

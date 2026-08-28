@@ -412,11 +412,16 @@ export const webStyles = {
   viagensChartLegendItem: { display: 'flex', alignItems: 'center', gap: 8 },
   viagensChartLegendDot: { width: 20, height: 20, borderRadius: '50%', flexShrink: 0 },
   viagensChartLegendText: { fontSize: 16, fontWeight: 400, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' },
-  viagensTableSection: { display: 'flex', flexDirection: 'column', gap: 0, width: '100%', borderRadius: 16, overflow: 'auto' as const, background: '#ffffff', boxSizing: 'border-box' as const },
+  // overflow hidden (não auto): quem rola é só o miolo da tabela — com o card
+  // inteiro rolando, o título/Filtro e a paginação saíam da tela junto.
+  viagensTableSection: { display: 'flex', flexDirection: 'column', gap: 0, width: '100%', borderRadius: 16, overflow: 'hidden' as const, background: '#ffffff', boxSizing: 'border-box' as const },
   viagensTableSectionHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 28px',
     background: '#f6f6f6', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box' as const, height: 80,
   },
+  // A largura mínima da tabela é DEFINIDA no screen (soma das colunas), igual
+  // para cabeçalho e linhas: max-content deixava a linha mais larga que o
+  // cabeçalho quando um nome longo não encolhia (min-width:auto de flex).
   viagensTableHeader: {
     display: 'flex', alignItems: 'center', height: 53, padding: '0 16px', background: '#e2e2e2', borderBottom: '1px solid #d9d9d9',
     fontSize: 12, fontWeight: 400, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box' as const,
@@ -430,7 +435,7 @@ export const webStyles = {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '4px 12px', borderRadius: 999,
     fontSize: 13, fontWeight: 700, fontFamily: 'Inter, sans-serif', boxSizing: 'border-box' as const,
   },
-  viagensPassengerCell: { display: 'flex', alignItems: 'center', gap: 12, minWidth: 193, padding: '0 8px' },
+  viagensPassengerCell: { display: 'flex', alignItems: 'center', gap: 12, minWidth: 193, padding: '0 8px', boxSizing: 'border-box' as const },
   viagensAvatar: { width: 40, height: 40, borderRadius: '50%', background: '#e2e2e2', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' as const },
   viagensActionIcons: { display: 'flex', alignItems: 'center', gap: 8 },
   viagensActionBtn: { width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', background: 'none', border: 'none', padding: 0 },
@@ -493,7 +498,7 @@ export const webStyles = {
   detailPerfCardTitle: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' },
   detailPerfCardValue: { fontSize: 32, fontWeight: 700, color: '#0d0d0d', fontFamily: "'Open Sans', Inter, sans-serif", lineHeight: 1.5 },
   detailMotoristaCard: { background: '#f6f6f6', borderRadius: 12, padding: '24px 16px', display: 'flex', flexWrap: 'wrap' as const, alignItems: 'center', gap: 16 },
-  detailMotoristaAvatar: { width: 56, height: 56, borderRadius: '50%', background: '#e2e2e2', flexShrink: 0 },
+  detailMotoristaAvatar: { width: 56, height: 56, borderRadius: '50%', background: '#e2e2e2', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' as const },
   detailMotoristaBadge: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', background: '#f1f1f1', borderRadius: 90, fontSize: 14, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' },
   detailMotoristaName: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif', width: '100%' },
   detailMotoristaRating: { fontSize: 14, color: '#545454', fontFamily: 'Inter, sans-serif' },

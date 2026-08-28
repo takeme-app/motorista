@@ -71,7 +71,14 @@ export function PixPaliativoScreen() {
       // sobrava a mensagem genérica, impossível de diagnosticar em produção.
       const msg = e instanceof Error ? e.message : String(e);
       console.warn('[PixPaliativo] falha ao efetivar o pedido:', msg);
-      setEffectivateError('Não foi possível concluir agora. Toque em "Tentar novamente".');
+      // Reserva duplicada nunca vai passar em nova tentativa (índice parcial
+      // bookings_one_active_per_user_trip): "Tentar novamente" viraria loop.
+      // Mostra a causa real para o usuário saber o que fazer.
+      setEffectivateError(
+        /bookings_one_active_per_user_trip/i.test(msg)
+          ? 'Você já tem uma reserva nesta viagem. Para mudar a quantidade de lugares, cancele a reserva atual e faça uma nova.'
+          : 'Não foi possível concluir agora. Toque em "Tentar novamente".',
+      );
     } finally {
       setEffectivating(false);
     }

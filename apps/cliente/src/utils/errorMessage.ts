@@ -13,6 +13,10 @@ const ERROR_PT: Array<[RegExp, string]> = [
   [/network request failed|failed to fetch|network error/i, 'Sem conexão. Verifique a internet e tente novamente.'],
   [/rate limit|rate_limit|too many requests|429|email.*hour|password reset.*period/i, 'Aguarde alguns minutos para solicitar um novo e-mail de recuperação.'],
   [/session.*expired|refresh token/i, 'Sessão expirada. Faça login novamente.'],
+  // Índice parcial bookings_one_active_per_user_trip: uma reserva ativa por
+  // usuário por viagem. Precisa vir ANTES da regra genérica de 23505, que
+  // diria só "este dado já está em uso" e não ajudaria em nada aqui.
+  [/bookings_one_active_per_user_trip/i, 'Você já tem uma reserva nesta viagem. Para mudar a quantidade de lugares, cancele a reserva atual e faça uma nova.'],
   [/duplicate key|unique constraint|23505/i, 'Este dado já está em uso. Use outro valor.'],
   [/foreign key|violates foreign key/i, 'Não foi possível concluir. Verifique os dados.'],
   [/bucket.*not found|storage.*not found/i, 'Serviço de armazenamento indisponível. Tente mais tarde.'],
