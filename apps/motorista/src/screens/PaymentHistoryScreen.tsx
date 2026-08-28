@@ -16,7 +16,11 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
-import { fetchDriverPaymentTransfers, type DriverPaymentTransfer } from '../lib/driverPaymentTransfers';
+import {
+  fetchDriverPaymentTransfers,
+  sumReceivedCents,
+  type DriverPaymentTransfer,
+} from '../lib/driverPaymentTransfers';
 import { SCREEN_TOP_EXTRA_PADDING } from '../theme/screenLayout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PaymentHistory'>;
@@ -160,7 +164,10 @@ export function PaymentHistoryScreen({ navigation }: Props) {
     setFilterVisible(true);
   };
 
-  const totalCents = transfers.reduce((s, t) => s + t.amount_cents, 0);
+  // O total do mês é o que entrou de fato; corridas Pix aguardando repasse
+  // aparecem na lista com etiqueta, mas fora da soma.
+  const totalCents = sumReceivedCents(transfers);
+  const pendingCents = transfers.reduce((sum, t) => (t.pending ? sum + t.amount_cents : sum), 0);
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const monthShort = PT_MONTHS_SHORT[month];
   const weekGroups = getWeekGroups(transfers, year, month);
@@ -202,6 +209,11 @@ export function PaymentHistoryScreen({ navigation }: Props) {
           <View style={styles.periodCard}>
             <Text style={styles.periodRange}>{monthShort} {String(startDay).padStart(2,'0')} - {monthShort} {String(Math.min(endDay, daysInMonth)).padStart(2,'0')}</Text>
             <Text style={styles.periodTotal}>{formatCents(totalCents)}</Text>
+            {pendingCents > 0 && (
+              <Text style={styles.periodPending}>
+                {`+ ${formatCents(pendingCents)} em corridas Pix aguardando repasse`}
+              </Text>
+            )}
           </View>
 
           {weekGroups.length === 0 ? (
@@ -218,6 +230,7 @@ export function PaymentHistoryScreen({ navigation }: Props) {
                         <Text style={styles.transferAmount}>{formatCents(t.amount_cents)}</Text>
                         <Text style={styles.transferMeta}>
                           {`${transferLabel(t.source)} • ${formatHour(t.paid_at)}`}
+                          {t.pending ? ' • aguardando repasse' : ''}
                         </Text>
                       </View>
                       <Text style={styles.transferDate}>{formatShortDate(t.paid_at)}</Text>
@@ -359,6 +372,7 @@ const styles = StyleSheet.create({
   periodCard: { alignItems: 'center', marginBottom: 24 },
   periodRange: { fontSize: 14, color: '#9CA3AF', marginBottom: 4 },
   periodTotal: { fontSize: 32, fontWeight: '700', color: '#111827' },
+  periodPending: { fontSize: 13, color: '#8a6d0b', marginTop: 6, textAlign: 'center' },
 
   emptyText: { fontSize: 14, color: '#9CA3AF', textAlign: 'center', marginVertical: 24 },
 

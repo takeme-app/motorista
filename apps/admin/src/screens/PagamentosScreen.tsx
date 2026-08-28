@@ -494,7 +494,23 @@ export default function PagamentosScreen() {
   const title = React.createElement('h1', { style: webStyles.homeTitle }, 'Pagamentos');
 
   // ── Batch data & handlers (must be before searchRow) ───────────────────
-  const pendingFilteredRows = filteredRows.filter((r) => r.status === 'Agendado');
+  /**
+   * Quais linhas podem ser selecionadas para ação em lote.
+   *
+   * 'Agendado' (pending) é o caso normal. 'Em andamento' (processing) SEM Connect
+   * também entra: é o estado em que o próprio process-payouts deixa quem não tem
+   * Connect, justamente para o financeiro pagar por Pix/banco e depois confirmar
+   * aqui. Sem isso, a linha que mais precisa da confirmação manual era a única
+   * que não dava para marcar — o repasse ficava "aguardando" para sempre no app
+   * do motorista. A edge já aceita processing no modo mark_paid.
+   *
+   * Processing COM Connect segue fora: a liberação via Connect só varre
+   * status='pending', então selecioná-la não faria nada.
+   */
+  const isSelectableRow = (r: PagamentoListItem) =>
+    r.status === 'Agendado' || (r.status === 'Em andamento' && !r.workerHasConnect);
+
+  const pendingFilteredRows = filteredRows.filter(isSelectableRow);
   const allPendingSelected = pendingFilteredRows.length > 0 && pendingFilteredRows.every((r) => selectedIds.has(r.id));
 
   const handleSelectAllPending = useCallback(() => {
@@ -553,7 +569,7 @@ export default function PagamentosScreen() {
     setDryRunLoading(true);
     setConfirmModalOpen(true);
     try {
-      const { data, error } = await runProcessPayoutsDryRun([...selectedIds]);
+      const { data, error } = await runProcessPayoutsDryRun([...selectedIds], { mark_paid: true });
       if (error) {
         showToast('❌ Dry-run falhou: ' + error);
       } else if (data?.processed) {
@@ -955,7 +971,7 @@ export default function PagamentosScreen() {
 
   const tableRowEls = filteredRows.map((row) => {
     const st = statusStyles[row.status];
-    const isPending = row.status === 'Agendado';
+    const isPending = isSelectableRow(row);
     const isSelected = selectedIds.has(row.id);
     // Destaque visual quando transfer explicito (shipment/excursion) falhou.
     const hasTransferError = Boolean(row.stripeTransferError);
@@ -983,6 +999,23 @@ export default function PagamentosScreen() {
           cursor: 'help',
         },
       }, shortId);
+    } else if (row.payoutMethod === 'pix' || (!row.workerHasConnect && row.statusRaw !== 'cancelled')) {
+      // Repasse feito por fora (Pix/banco) — não existe transfer no Stripe. A
+      // coluna mostrava '—', que se confundia com "sem informação"; aqui fica
+      // explícito o meio e, quando já pago, se há comprovante anexado.
+      const jaPago = row.statusRaw === 'paid';
+      transferCell = React.createElement('span', {
+        title: jaPago
+          ? (row.receiptUrl ? 'Pago por Pix/banco — comprovante anexado.' : 'Pago por Pix/banco — sem comprovante anexado.')
+          : 'Sem Stripe Connect: o repasse é feito por Pix/banco e confirmado aqui.',
+        style: {
+          display: 'inline-block', padding: '3px 10px', borderRadius: 999,
+          fontSize: 11, fontWeight: 600,
+          color: jaPago ? '#14532d' : '#654c01',
+          background: jaPago ? '#dcfce7' : '#fef3c7',
+          cursor: 'help', ...font,
+        },
+      }, jaPago ? (row.receiptUrl ? 'Pix ✓ compr.' : 'Pix ✓') : 'Pix manual');
     } else if (row.entityTypeRaw === 'booking' && row.statusRaw === 'paid') {
       // booking usa transfer_data no charge → nao precisa de transfer explicito.
       transferCell = React.createElement('span', {
@@ -1059,10 +1092,12 @@ export default function PagamentosScreen() {
   }
 
   // Linha de detalhamento do dry-run (aparece no modal antes de confirmar).
-  const dryRunRow = (label: string, value: number | string, emphasis?: boolean) =>
+  // value nullish vira 0: a edge só preenche os contadores do modo que está
+  // rodando, e String(undefined) imprimia "undefined" na prévia.
+  const dryRunRow = (label: string, value: number | string | null | undefined, emphasis?: boolean) =>
     React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0' } },
       React.createElement('span', { style: { fontSize: 13, color: '#444', ...font } }, label),
-      React.createElement('span', { style: { fontSize: 14, fontWeight: emphasis ? 700 : 600, color: emphasis ? '#0d0d0d' : '#444', ...font } }, String(value)));
+      React.createElement('span', { style: { fontSize: 14, fontWeight: emphasis ? 700 : 600, color: emphasis ? '#0d0d0d' : '#444', ...font } }, String(value ?? 0)));
 
   const dryRunSection = dryRunLoading
     ? React.createElement('div', {
@@ -1073,11 +1108,17 @@ export default function PagamentosScreen() {
           style: { background: '#f8f9fa', borderRadius: 12, padding: '16px 20px', display: 'flex', flexDirection: 'column' as const, gap: 4 },
         },
           React.createElement('span', { style: { fontSize: 13, fontWeight: 700, color: '#0d0d0d', marginBottom: 4, ...font } }, 'Prévia (dry-run)'),
-          dryRunRow('Connect — transfers a criar', dryRunPreview.stripe_connect_transfers_created, true),
-          dryRunRow('Connect — bookings pagos no charge', dryRunPreview.stripe_connect_auto_paid),
-          dryRunRow('Sem Connect — para PIX manual (processing)', dryRunPreview.manual_pix_processing),
           confirmMode === 'manual_pix_confirm'
-            ? dryRunRow('Sem Connect — serão marcados paid', dryRunPreview.manual_pix_paid ?? 0, true)
+            ? dryRunRow('Serão marcados como pagos', dryRunPreview.manual_pix_paid, true)
+            : null,
+          confirmMode !== 'manual_pix_confirm'
+            ? dryRunRow('Connect — transfers a criar', dryRunPreview.stripe_connect_transfers_created, true)
+            : null,
+          confirmMode !== 'manual_pix_confirm'
+            ? dryRunRow('Connect — bookings pagos no charge', dryRunPreview.stripe_connect_auto_paid)
+            : null,
+          confirmMode !== 'manual_pix_confirm'
+            ? dryRunRow('Sem Connect — para PIX manual (processing)', dryRunPreview.manual_pix_processing)
             : null,
           dryRunPreview.below_threshold_skipped
             ? dryRunRow('Abaixo do limite — ignorados', dryRunPreview.below_threshold_skipped ?? 0)
