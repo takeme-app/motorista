@@ -1,33 +1,10 @@
--- Cancelamento do motorista numa reserva paga por Pix real.
+-- Texto de cancelamento ciente do meio de pagamento.
 --
--- Contexto: cancel-scheduled-trip só sabe estornar via Stripe (gate em
--- stripe_payment_intent_id). Uma reserva paga por Pix não tem PaymentIntent,
--- então o cancelamento pelo motorista passava batido: o dinheiro ficava com a
--- plataforma, NADA entrava na fila de devolução, e o passageiro ainda recebia
--- push prometendo "estorno automático no cartão".
---
--- Aqui: (1) motivo próprio na fila de devolução — o financeiro precisa saber
--- que foi o motorista que cancelou (é diferente do passageiro desistir);
--- (2) textos de cancelamento cientes de Pix.
+-- O passageiro que pagou por Pix recebia push prometendo "estorno automático
+-- no cartão (5 a 10 dias)" numa compra que não teve cartão. A devolução do Pix
+-- é MANUAL (fila pix_refunds_pending) — prometer cartão gera chamado de
+-- suporte e quebra de confiança.
 
--- ── 1. Novo motivo na fila de devolução ─────────────────────────────────────
-ALTER TABLE public.pix_refunds_pending
-  DROP CONSTRAINT IF EXISTS pix_refunds_pending_reason_check;
-
-ALTER TABLE public.pix_refunds_pending
-  ADD CONSTRAINT pix_refunds_pending_reason_check CHECK (
-    reason = ANY (ARRAY[
-      'paid_after_expiry',
-      'amount_mismatch',
-      'expired_not_realized',
-      'user_cancelled_in_window',
-      'driver_cancelled',
-      'admin_cancelled',
-      'orphan_payment'
-    ])
-  );
-
--- ── 2. Notificação de cancelamento ciente de Pix ────────────────────────────
 -- Reserva paga por Pix real = pix_paid_at preenchido e sem PaymentIntent.
 -- Nesse caso a devolução é MANUAL (fila pix_refunds_pending), não automática
 -- no cartão — prometer cartão gera chamado de suporte e quebra de confiança.
