@@ -381,6 +381,7 @@ export function ProfileOverviewScreen({ navigation }: Props) {
         label="Chave Pix"
         initialValue={data.pixKey ?? ''}
         placeholder="CPF, e-mail, telefone ou chave aleatória"
+        rawText
         onSave={async (v) => {
           try {
             await savePix(v);

@@ -20,6 +20,7 @@ import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
 import { fetchDriverPaymentTransfers, type DriverPaymentTransfer } from '../lib/driverPaymentTransfers';
 import { fetchDriverPendingPayouts, type PendingPayoutsSummary } from '../lib/driverPendingPayouts';
+import { SingleFieldModal } from '../components/profile/SingleFieldModal';
 import {
   fetchDriverPlatformFeeSummary,
   platformFeeLedgerAmountLabel,
@@ -96,6 +97,7 @@ export function PaymentsScreen({ navigation }: Props) {
   const [pendingPayouts, setPendingPayouts] = useState<PendingPayoutsSummary>({
     totalCents: 0, count: 0, pixKey: null, unavailable: false,
   });
+  const [pixModal, setPixModal] = useState(false);
   const [stripeState, setStripeState] = useState<StripeConnectState>('none');
   const [stripePendingVerification, setStripePendingVerification] = useState(0);
   const [stripeAccountId, setStripeAccountId] = useState<string | null>(null);
@@ -181,6 +183,22 @@ export function PaymentsScreen({ navigation }: Props) {
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  /** Salva a chave Pix sem sair da tela e atualiza o card na hora. */
+  const savePixKey = useCallback(async (value: string) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const key = value.trim();
+    // Cast do client (padrão do admin): neste módulo a inferência não resolve
+    // o update — mesma limitação dos outros TS2769 pré-existentes do arquivo.
+    const sb = supabase as any;
+    const { error } = await sb
+      .from('worker_profiles')
+      .update({ pix_key: key || null, updated_at: new Date().toISOString() })
+      .eq('id', user.id);
+    if (error) throw error;
+    setPendingPayouts((prev) => ({ ...prev, pixKey: key || null }));
+  }, []);
 
   const handleStripeConnectSetup = async () => {
     setConnectLoading(true);
@@ -331,11 +349,30 @@ export function PaymentsScreen({ navigation }: Props) {
             )}
 
             {pendingPayouts.pixKey ? (
-              <Text style={styles.platformFeeEmpty}>Chave Pix: {pendingPayouts.pixKey}</Text>
+              <TouchableOpacity
+                style={styles.pixKeyRow}
+                onPress={() => setPixModal(true)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.pixKeyText} numberOfLines={1}>
+                  Chave Pix: {pendingPayouts.pixKey}
+                </Text>
+                <Text style={styles.pixKeyEdit}>Alterar</Text>
+              </TouchableOpacity>
             ) : pendingPayouts.count > 0 ? (
-              <Text style={[styles.platformFeeEmpty, { color: '#b53838' }]}>
-                Cadastre sua chave Pix no perfil para receber os repasses.
-              </Text>
+              <View>
+                <Text style={[styles.platformFeeEmpty, { color: '#b53838' }]}>
+                  Cadastre sua chave Pix para receber os repasses.
+                </Text>
+                <TouchableOpacity
+                  style={styles.pixKeyButton}
+                  onPress={() => setPixModal(true)}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="add" size={18} color="#fff" />
+                  <Text style={styles.pixKeyButtonText}>Cadastrar chave Pix</Text>
+                </TouchableOpacity>
+              </View>
             ) : null}
           </View>
 
@@ -428,6 +465,18 @@ export function PaymentsScreen({ navigation }: Props) {
           </TouchableOpacity>
         </ScrollView>
       )}
+
+      <SingleFieldModal
+        visible={pixModal}
+        onClose={() => setPixModal(false)}
+        title="Chave Pix"
+        subtitle="Informe a chave para receber seus repasses das corridas pagas por Pix."
+        label="Chave Pix"
+        initialValue={pendingPayouts.pixKey ?? ''}
+        placeholder="CPF, CNPJ, e-mail, telefone ou chave aleatória"
+        rawText
+        onSave={savePixKey}
+      />
     </SafeAreaView>
   );
 }
@@ -520,6 +569,38 @@ const styles = StyleSheet.create({
   platformFeeAmount: { fontSize: 17, fontWeight: '800' },
   platformFeeAmountWarn: { color: '#92400E' },
   platformFeeAmountOk: { color: '#16A34A' },
+  pixKeyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: 8,
+  },
+  pixKeyText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#767676',
+  },
+  pixKeyEdit: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: GOLD,
+  },
+  pixKeyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 10,
+    height: 44,
+    borderRadius: 999,
+    backgroundColor: '#0d0d0d',
+  },
+  pixKeyButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
   platformFeeEmpty: { marginTop: 14, fontSize: 13, color: MUTED, lineHeight: 18 },
   ledgerList: { marginTop: 12, borderTopWidth: 1, borderTopColor: '#F3E3A3' },
   ledgerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
