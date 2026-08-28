@@ -822,6 +822,12 @@ export default function ViagemDetalheScreen() {
   const passageiroCard = (row: PaxDisplayRow, idx: number) => {
     const name = row.name;
     const isOpenedPrimary = Boolean(detail) && row.bookingId === detail?.listItem?.bookingId && row.isPrimary;
+    // Reserva com acompanhante: liga cada card ao contexto — quem é o titular
+    // (dono da reserva/pagamento) e quem embarca junto. Sem isto o card do
+    // acompanhante aparecia solto, sem PIN e sem dizer de quem é a reserva.
+    const sameBookingRows = passengerDisplayRows.filter((r) => r.bookingId === row.bookingId);
+    const hasCompanions = sameBookingRows.length > 1;
+    const holderRow = row.isPrimary ? null : sameBookingRows.find((r) => r.isPrimary) ?? null;
     const bags =
       row.bagsRaw != null && Number.isFinite(Number(row.bagsRaw))
         ? Number(row.bagsRaw)
@@ -836,6 +842,20 @@ export default function ViagemDetalheScreen() {
 
     // PIN de embarque é por RESERVA — mostrado uma vez, no card do titular de cada reserva.
     const rowPin = row.pickupCode?.trim() ?? '';
+    // Card do acompanhante: diz de quem é a reserva e com qual PIN embarca —
+    // o PIN é por reserva e só aparecia (em chips) no card do titular.
+    const companionNote = !row.isPrimary && holderRow
+      ? React.createElement('div', {
+          style: { paddingTop: 12, fontSize: 12, color: '#545454', fontFamily: 'Inter, sans-serif', lineHeight: 1.5 },
+        },
+          React.createElement('div', null, `Acompanhante na reserva de ${holderRow.name}.`),
+          rowPin
+            ? React.createElement('div', { style: { marginTop: 2 } },
+                'Embarca com o PIN da reserva: ',
+                React.createElement('strong', { style: { fontFamily: 'ui-monospace, SFMono-Regular, monospace', color: '#0d0d0d' } }, rowPin))
+            : null)
+      : null;
+
     const pickupInlineBlock = rowPin && row.isPrimary
       ? React.createElement(
           'div',
@@ -857,7 +877,20 @@ export default function ViagemDetalheScreen() {
             : React.createElement('div', { style: { width: 48, height: 48, borderRadius: '50%', background: '#e2e2e2', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 600, color: '#767676', fontFamily: 'Inter, sans-serif' } },
                 name.charAt(0).toUpperCase()),
           React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-            React.createElement('div', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' } }, name),
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' as const } },
+              React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' } }, name),
+              // Selo só quando a reserva tem mais de um passageiro — em reserva
+              // individual "Titular" seria ruído.
+              hasCompanions
+                ? React.createElement('span', {
+                    style: {
+                      fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999,
+                      background: row.isPrimary ? '#0d0d0d' : '#e2e2e2',
+                      color: row.isPrimary ? '#fff' : '#545454',
+                      fontFamily: 'Inter, sans-serif', whiteSpace: 'nowrap' as const,
+                    },
+                  }, row.isPrimary ? 'Titular da reserva' : 'Acompanhante')
+                : null),
             cpfLabel ? React.createElement('div', { style: { fontSize: 12, color: '#767676', fontFamily: 'Inter, sans-serif', marginTop: 2 } }, cpfLabel) : null,
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 } },
               starFilledSvg,
@@ -882,7 +915,8 @@ export default function ViagemDetalheScreen() {
           }, atendimentoIconSvg)
           : null),
       pickupInlineBlock,
-      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, paddingTop: 12, borderTop: pickupInlineBlock ? '1px solid #e2e2e2' : 'none', width: '100%', boxSizing: 'border-box' as const } },
+      companionNote,
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 4, paddingTop: 12, borderTop: (pickupInlineBlock || companionNote) ? '1px solid #e2e2e2' : 'none', width: '100%', boxSizing: 'border-box' as const } },
         React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
           React.createElement('span', { style: { fontSize: 14, color: '#767676', fontFamily: 'Inter, sans-serif' } }, 'Mala'),
           React.createElement('span', { style: { fontSize: 16, fontWeight: 600, color: '#0d0d0d', fontFamily: 'Inter, sans-serif' } }, bagLabel)),
