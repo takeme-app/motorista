@@ -481,6 +481,28 @@ Deno.serve(async (req) => {
         });
       }
 
+      // Uma reserva ATIVA por usuário por viagem (índice parcial
+      // bookings_one_active_per_user_trip garante no banco). Checar ANTES de
+      // cobrar evita cobrar no cartão e ter que estornar em seguida quando o
+      // insert bater no índice.
+      const { data: existingBooking } = await admin
+        .from("bookings")
+        .select("id, status")
+        .eq("user_id", userId)
+        .eq("scheduled_trip_id", sid)
+        .in("status", ["pending", "paid", "confirmed"])
+        .limit(1);
+      if (Array.isArray(existingBooking) && existingBooking.length > 0) {
+        return new Response(
+          JSON.stringify({
+            error: "Você já tem uma reserva nesta viagem. Para mudar a quantidade de lugares, cancele a reserva atual e faça uma nova.",
+            code: "already_booked",
+            booking_id: existingBooking[0].id,
+          }),
+          { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
       const { data: tripRow, error: tripLoadErr } = await admin
         .from("scheduled_trips")
         .select("id, status, seats_available, driver_id")

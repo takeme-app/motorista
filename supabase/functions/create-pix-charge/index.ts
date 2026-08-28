@@ -207,25 +207,35 @@ Deno.serve(async (req) => {
       return jsonRes({ error: "cpf_required" }, 422);
     }
 
-    // ── 3a) Já tem lugar pago nesta viagem? ──
-    // A dedup abaixo só enxerga reservas 'pending'. Sem esta checagem, quem já
-    // pagou consegue reservar a MESMA viagem de novo e pagar um segundo Pix —
+    // ── 3a) Já tem reserva ativa nesta viagem? ──
+    // Uma reserva ATIVA por usuário por viagem (índice parcial
+    // bookings_one_active_per_user_trip garante no banco). Sem isto, quem já
+    // pagou conseguia reservar a MESMA viagem de novo e pagar um segundo Pix —
     // aconteceu em produção (usuário pagou R$ 10 numa viagem de R$ 5, provável
-    // por não ter visto a confirmação do primeiro pagamento). O dinheiro extra
-    // não tem estorno automático, então o certo é não deixar cobrar duas vezes.
-    const { data: alreadyPaid } = await admin
+    // por não ter visto a confirmação do primeiro pagamento). Pix não tem
+    // estorno automático, então o dinheiro extra ficava preso na fila manual.
+    //
+    // 'pending' entra na checagem porque uma reserva pendente de OUTRO método
+    // (dinheiro, paliativo) também ocupa a vaga — a dedup logo abaixo só
+    // enxerga pendentes com cobrança Pix.
+    const { data: existingBooking } = await admin
       .from("bookings")
-      .select("id, status")
+      .select("id, status, payment_method")
       .eq("user_id", userId)
       .eq("scheduled_trip_id", sid)
-      .in("status", ["paid", "confirmed"])
+      .in("status", ["pending", "paid", "confirmed"])
       .limit(1);
-    if (Array.isArray(alreadyPaid) && alreadyPaid.length > 0) {
+    const existingRow = Array.isArray(existingBooking) ? existingBooking[0] : undefined;
+    // Reserva Pix ainda pendente cai na dedup de retomada abaixo (devolve o
+    // MESMO QR em vez de barrar) — só bloqueia aqui o que ela não cobre.
+    const isResumablePixPending =
+      existingRow?.status === "pending" && existingRow?.payment_method === "pix";
+    if (existingRow && !isResumablePixPending) {
       return jsonRes(
         {
-          error: "Você já tem uma reserva paga nesta viagem. Confira em Atividades.",
+          error: "Você já tem uma reserva nesta viagem. Para mudar a quantidade de lugares, cancele a reserva atual e faça uma nova.",
           code: "already_booked",
-          booking_id: alreadyPaid[0].id,
+          booking_id: existingRow.id,
         },
         409,
       );
