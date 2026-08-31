@@ -145,7 +145,7 @@ export default function ConfiguracoesScreen() {
         type: 'button',
         style: tabStyle(aba === 'usuarios'),
         onClick: () => setAba('usuarios'),
-      }, 'Usuários e Permissões',
+      }, 'Usuários',
         aba === 'usuarios' ? React.createElement('span', {
           style: {
             position: 'absolute' as const, left: 0, right: 0, bottom: 0, height: 2,
@@ -237,7 +237,6 @@ export default function ConfiguracoesScreen() {
         }, nome),
         alterarSenhaBtn),
       readOnlyField('E-mail', email),
-      readOnlyField('Senha', '*********'),
       readOnlyField('Nível de acesso', nivel)));
 
   // ── Usuários e Permissões ───────────────────────────────────────────────

@@ -17,7 +17,6 @@ import {
   updatePixProviderSetting,
   fetchPixPalliativeSetting,
   updatePixPalliativeSetting,
-  findProfileByIdentifier,
   fetchProfileNames,
   fetchPixProviderHealth,
   DEFAULT_PIX_PROVIDER_SETTING,
@@ -117,9 +116,6 @@ export default function PixConfigTab() {
   const [provError, setProvError] = useState<string | null>(null);
 
   // ── Estado: allowlist input ─────────────────────────────────────────
-  const [allowInput, setAllowInput] = useState('');
-  const [allowError, setAllowError] = useState<string | null>(null);
-  const [allowSearching, setAllowSearching] = useState(false);
 
   // ── Estado: saúde ───────────────────────────────────────────────────
   const [health, setHealth] = useState<PixProviderHealthResult | null>(null);
@@ -198,22 +194,7 @@ export default function PixConfigTab() {
     setTimeout(() => setProvSaved(false), 2000);
   }, [draftMode, draftTest, draftTtl, allowlistIds, persisted.mode, profileNames, mergeNames]);
 
-  const addToAllowlist = useCallback(async () => {
-    const value = allowInput.trim();
-    if (!value) return;
-    setAllowError(null);
-    setAllowSearching(true);
-    const { profile, error } = await findProfileByIdentifier(value);
-    setAllowSearching(false);
-    if (!profile) { setAllowError(error || 'Nenhum perfil encontrado'); return; }
-    setAllowlistIds((prev) => (prev.includes(profile.id) ? prev : [...prev, profile.id]));
-    mergeNames({ [profile.id]: profile.full_name || 'Sem nome' });
-    setAllowInput('');
-  }, [allowInput, mergeNames]);
 
-  const removeFromAllowlist = useCallback((id: string) => {
-    setAllowlistIds((prev) => prev.filter((x) => x !== id));
-  }, []);
 
   const testConnection = useCallback(async () => {
     setHealthLoading(true);
@@ -337,79 +318,11 @@ export default function PixConfigTab() {
       provSaved ? React.createElement('span', { style: { color: '#22c55e', fontSize: 14, fontWeight: 500, ...font } }, 'Salvo com sucesso!') : null,
       provError ? React.createElement('span', { style: errorTextStyle }, provError) : null));
 
-  // ── Card 2: Teste controlado ────────────────────────────────────────
-  const allowChips = allowlistIds.map((id) => {
-    const nome = profileNames[id] || 'Perfil';
-    return React.createElement('span', {
-      key: id,
-      style: {
-        display: 'inline-flex', alignItems: 'center', gap: 8, height: 36,
-        padding: '0 8px 0 14px', borderRadius: 999, background: '#fff',
-        border: '1px solid #d9d9d9', fontSize: 13, color: '#0d0d0d', ...font,
-      },
-    },
-      React.createElement('span', { style: { fontWeight: 600 } }, nome),
-      React.createElement('span', { style: { color: '#767676', fontSize: 12 } }, id.slice(0, 8)),
-      React.createElement('button', {
-        type: 'button',
-        'aria-label': `Remover ${nome} da allowlist`,
-        onClick: () => removeFromAllowlist(id),
-        style: {
-          width: 22, height: 22, borderRadius: '50%', border: 'none', background: '#f1f1f1',
-          cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
-        },
-      },
-        React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none' },
-          React.createElement('path', { d: 'M18 6L6 18M6 6l12 12', stroke: '#0d0d0d', strokeWidth: 2, strokeLinecap: 'round' }))));
-  });
-
-  const testCard = React.createElement('div', { style: cardStyle },
-    React.createElement('h3', { style: cardTitleStyle }, 'Teste controlado'),
-    React.createElement('p', { style: cardSubStyle },
-      'Usuários da allowlist usam o provedor de teste em vez do provedor ativo. ' +
-      'Permite validar um provedor real em produção com contas do time antes do go-live.'),
-    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6 } },
-      React.createElement('label', { style: labelStyle }, 'Provedor de teste'),
-      React.createElement('div', { style: selectWrapStyle },
-        React.createElement('select', {
-          value: draftTest,
-          'data-testid': 'pix-test-provider-select',
-          onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setDraftTest(e.target.value as PixRealProvider | ''),
-          style: selectStyle,
-        },
-          React.createElement('option', { value: '' }, 'Nenhum (teste desativado)'),
-          React.createElement('option', { value: 'asaas' }, 'Asaas'),
-          React.createElement('option', { value: 'bradesco', disabled: true }, 'Bradesco (em breve)')),
-        selectChevron)),
-    React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6 } },
-      React.createElement('label', { style: labelStyle }, 'Allowlist de usuários'),
-      allowChips.length > 0
-        ? React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap' as const, gap: 8 } }, ...allowChips)
-        : React.createElement('p', { style: helperStyle }, 'Nenhum usuário na allowlist.'),
-      React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' as const, alignItems: 'center' } },
-        React.createElement('input', {
-          type: 'text', value: allowInput, placeholder: 'UUID, CPF ou telefone',
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => { setAllowInput(e.target.value); setAllowError(null); },
-          onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => { if (e.key === 'Enter') void addToAllowlist(); },
-          style: { ...textInputStyle, flex: '1 1 220px', minWidth: 200 },
-        }),
-        React.createElement('button', {
-          type: 'button', onClick: addToAllowlist, disabled: allowSearching,
-          style: {
-            height: 44, padding: '0 20px', borderRadius: 999, border: '1px solid #0d0d0d',
-            background: '#fff', color: '#0d0d0d', fontSize: 13, fontWeight: 600,
-            cursor: allowSearching ? 'wait' : 'pointer', opacity: allowSearching ? 0.6 : 1, ...font,
-          },
-        }, allowSearching ? 'Buscando...' : 'Adicionar')),
-      allowError ? React.createElement('p', { style: errorTextStyle }, allowError) : null,
-      React.createElement('p', { style: helperStyle },
-        'A allowlist fica publicamente legível em platform_settings — use apenas contas internas.')),
-    React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } },
-      React.createElement('button', {
-        type: 'button', onClick: saveProvider, disabled: provSaving,
-        style: { ...pillBtnStyle, cursor: provSaving ? 'wait' : 'pointer', opacity: provSaving ? 0.6 : 1 },
-      }, provSaving ? 'Salvando...' : 'Salvar'),
-      provSaved ? React.createElement('span', { style: { color: '#22c55e', fontSize: 14, fontWeight: 500, ...font } }, 'Salvo com sucesso!') : null));
+  // Card "Teste controlado" removido da UI (28/08/2026): o go-live foi global
+  // (mode=asaas) e o piloto por allowlist deixou de fazer sentido operacional.
+  // O CONTRATO permanece: test_provider/allowlist seguem em platform_settings e
+  // o backend/app continuam aplicando a regra do provedor efetivo — o saveProvider
+  // repassa os valores armazenados intactos, sem apagar nada.
 
   // ── Card 3: Pix paliativo ───────────────────────────────────────────
   const copiaInvalida = copiaECola.trim().length > 0 && !copiaECola.trim().startsWith('000201');
@@ -495,7 +408,6 @@ export default function PixConfigTab() {
   },
     React.createElement('h2', { style: { fontSize: 18, fontWeight: 600, color: '#0d0d0d', margin: 0, ...font } }, 'Provedores Pix'),
     providerCard,
-    testCard,
     palliativeCard,
     shortcut);
 }

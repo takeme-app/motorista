@@ -15,6 +15,7 @@ import {
   fetchPixRefunds,
   markPixRefundResolved,
   fetchProfileNames,
+  fetchUserEmails,
   PIX_CHARGE_STATUSES,
   type PixChargeRow,
   type PixChargeStatus,
@@ -172,6 +173,8 @@ export default function PixGestaoScreen() {
 
   // ── Nomes de usuários + toast ───────────────────────────────────────
   const [names, setNames] = useState<Record<string, string>>({});
+  // id → e-mail (vem de auth.users via RPC; profiles não tem essa coluna).
+  const [emails, setEmails] = useState<Record<string, string>>({});
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const showToast = useCallback((msg: string) => { setToastMsg(msg); }, []);
   useEffect(() => {
@@ -183,8 +186,14 @@ export default function PixGestaoScreen() {
   const mergeNamesFor = useCallback(async (ids: (string | null)[]) => {
     const missing = [...new Set(ids.filter((id): id is string => Boolean(id)))];
     if (missing.length === 0) return;
-    const map = await fetchProfileNames(missing);
-    if (Object.keys(map).length > 0) setNames((prev) => ({ ...prev, ...map }));
+    // Nome e e-mail em paralelo: fontes diferentes (profiles × auth.users),
+    // mesmos ids. O e-mail falha em silêncio e a UI cai para '—'.
+    const [nameMap, emailMap] = await Promise.all([
+      fetchProfileNames(missing),
+      fetchUserEmails(missing),
+    ]);
+    if (Object.keys(nameMap).length > 0) setNames((prev) => ({ ...prev, ...nameMap }));
+    if (Object.keys(emailMap).length > 0) setEmails((prev) => ({ ...prev, ...emailMap }));
   }, []);
 
   const loadCharges = useCallback(async (showSpinner: boolean) => {
@@ -278,6 +287,11 @@ export default function PixGestaoScreen() {
     if (!userId) return '—';
     return names[userId] || `${userId.slice(0, 8)}…`;
   }, [names]);
+
+  const userEmail = useCallback((userId: string | null) => {
+    if (!userId) return '—';
+    return emails[userId] || '—';
+  }, [emails]);
 
   // ── Header ──────────────────────────────────────────────────────────
   const breadcrumb = React.createElement('div', {
@@ -712,6 +726,7 @@ export default function PixGestaoScreen() {
           detailField('ID no provedor (provider_charge_id)', copyableValue(detail.provider_charge_id, 'ID no provedor')),
           detailField('Provedor', `${detail.provider}${detail.provider_env ? ` (${detail.provider_env})` : ''}`),
           detailField('Usuário', userName(detail.user_id)),
+          detailField('E-mail', copyableValue(emails[detail.user_id ?? ''] ?? null, 'E-mail')),
           detailField('Pedido (entity_id)', copyableValue(detail.entity_id, 'ID do pedido')),
           detailField('Valor esperado', fmtBRL(detail.expected_amount_cents)),
           detail.paid_amount_cents != null ? detailField('Valor pago', fmtBRL(detail.paid_amount_cents)) : null,
@@ -782,6 +797,7 @@ export default function PixGestaoScreen() {
           React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } },
             detailField('Valor a devolver', React.createElement('span', { style: { fontSize: 20, fontWeight: 700, color: '#0d0d0d', ...font } }, fmtBRL(resolveTarget.amount_cents))),
             detailField('Pagador', resolveTarget.payer_name || userName(resolveTarget.user_id)),
+            detailField('E-mail', userEmail(resolveTarget.user_id)),
             detailField('Motivo', REASON_LABELS[resolveTarget.reason] ?? resolveTarget.reason),
             detailField('Chave Pix / CPF', resolveTarget.payer_cpf ? fmtCpf(resolveTarget.payer_cpf) : '—')),
 
@@ -876,6 +892,7 @@ export default function PixGestaoScreen() {
             detailField('Solicitada em', fmtDateTime(refundDetail.created_at)),
             detailField('Pago em', refundDetail.paid_at ? fmtDateTime(refundDetail.paid_at) : '—'),
             detailField('Pagador', refundDetail.payer_name || userName(refundDetail.user_id)),
+            detailField('E-mail', userEmail(refundDetail.user_id)),
             detailField('CPF do pagador', refundDetail.payer_cpf ? fmtCpf(refundDetail.payer_cpf) : '—'),
             detailField('Telefone', refundDetail.payer_phone ? fmtPhone(refundDetail.payer_phone) : '—'),
             detailField('Provedor', refundDetail.provider || '—')),
