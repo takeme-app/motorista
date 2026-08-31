@@ -575,13 +575,24 @@ export async function quoteShipmentForClient(params: {
     const km = await billableKmForShipment(
       params.originLat, params.originLng, params.destinationLat, params.destinationLng,
     );
-    const effPerKm =
+    // Tarifa ZERO não é tarifa — é "não configurado". O `??` só cai para o
+    // próximo quando o valor é null/undefined, então km_price_cents=0 passava
+    // como válido e a distância saía de graça: um envio Muriaé→Rio (200 km)
+    // custou R$ 1,15 em produção, que era só a taxa fixa de entrega.
+    // O ramo COM base (acima) já aplicava esta regra — `rate == null || rate <= 0`
+    // devolve erro. Aqui faltava, e o cliente via um preço irreal em vez de
+    // uma mensagem dizendo que falta configurar.
+    const rawPerKm =
       defaults.preparer?.shipment_per_km_fee_cents ?? defaults.globals.km_price_cents ?? null;
+    const effPerKm = rawPerKm != null && rawPerKm > 0 ? rawPerKm : null;
     const effDelivery =
       defaults.preparer?.shipment_delivery_fee_cents ??
       defaults.globals.shipment_base_delivery_fee_cents ??
       null;
-    const hasOverride = effPerKm != null || effDelivery != null;
+    // Só a taxa fixa de entrega não precifica distância: sem preço por km o
+    // modelo por quilômetro não está configurado. Preço fechado por trecho tem
+    // caminho próprio (baseTariff 'fixed' e o catálogo pricing_routes).
+    const hasOverride = effPerKm != null;
     const bestRoute = pickBestRoutePreferPerKm(
       defaults.routes, params.originAddress, params.destinationAddress,
     );
@@ -604,7 +615,7 @@ export async function quoteShipmentForClient(params: {
       return {
         ok: false,
         error:
-          'Ainda não há preços de encomenda configurados. Peça ao administrador para definir os valores padrão em Configurações.',
+          'Ainda não há preço por km configurado para encomendas. Peça ao administrador para definir o "Preço do KM rodado" em Configurações.',
       };
     }
     basePricedCents = clampInt(clampInt(baseCents + sizeFixedCents) * tsMul);
