@@ -344,6 +344,10 @@ export default function ConfiguracoesScreen() {
   const [driverPenaltyPct, setDriverPenaltyPct] = useState('');
   const [driverPenaltyEnabled, setDriverPenaltyEnabled] = useState(true);
   const [platSaved, setPlatSaved] = useState(false);
+  // Erro da gravação: sem isto, uma falha de escrita ficava invisível e a tela
+  // ainda dizia "Salvo com sucesso!".
+  const [platSaveError, setPlatSaveError] = useState<string | null>(null);
+  const [paySaveError, setPaySaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!platLoading) {
@@ -411,16 +415,27 @@ export default function ConfiguracoesScreen() {
     }
     const cancelHours = Math.max(0, parseFloat(cancelFreeWindowHours || '0'));
     const penaltyPct = Math.max(0, parseFloat(driverPenaltyPct || '0'));
-    await Promise.all([
-      updateSetting('default_admin_pct', normalizedAdminPct),
-      updateSetting('platform_fee_pct_by_service', servicePayload.value),
-      updateSetting('gas_price_cents', gasCents),
-      updateSetting('km_price_cents', kmCents),
-      updateSetting('shipment_package_size_prices_cents', sizePricesCents),
-      updateSetting('booking_cancellation_free_window_hours', cancelHours),
-      updateSetting('driver_cancellation_penalty_pct', penaltyPct),
-      updateSetting('driver_cancellation_penalty_enabled', driverPenaltyEnabled),
-    ]);
+    setPlatSaveError(null);
+    try {
+      await Promise.all([
+        updateSetting('default_admin_pct', normalizedAdminPct),
+        updateSetting('platform_fee_pct_by_service', servicePayload.value),
+        updateSetting('gas_price_cents', gasCents),
+        updateSetting('km_price_cents', kmCents),
+        updateSetting('shipment_package_size_prices_cents', sizePricesCents),
+        updateSetting('booking_cancellation_free_window_hours', cancelHours),
+        updateSetting('driver_cancellation_penalty_pct', penaltyPct),
+        updateSetting('driver_cancellation_penalty_enabled', driverPenaltyEnabled),
+      ]);
+    } catch (e) {
+      // Promise.all + updateSetting em lote: uma chave pode ter gravado e outra
+      // não, então a mensagem manda recarregar em vez de afirmar que nada foi
+      // salvo.
+      setPlatSaveError(
+        `${e instanceof Error ? e.message : 'Falha ao salvar.'} Recarregue a página para conferir o que foi gravado.`,
+      );
+      return;
+    }
     setServiceFeeError(null);
     setPlatSaved(true);
     setTimeout(() => setPlatSaved(false), 2000);
@@ -754,7 +769,8 @@ export default function ConfiguracoesScreen() {
           background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
         },
       }, 'Salvar'),
-      platSaved ? React.createElement('span', { style: { color: '#22c55e', fontSize: 14, fontWeight: 500, ...font } }, 'Salvo com sucesso!') : null));
+      platSaved ? React.createElement('span', { style: { color: '#22c55e', fontSize: 14, fontWeight: 500, ...font } }, 'Salvo com sucesso!') : null,
+      platSaveError ? React.createElement('span', { style: { color: '#b91c1c', fontSize: 14, fontWeight: 500, ...font } }, platSaveError) : null));
 
   // ── Pagamentos Automáticos ──────────────────────────────────────────────
   const [payAutoEnabled, setPayAutoEnabled] = useState(false);
@@ -774,12 +790,20 @@ export default function ConfiguracoesScreen() {
 
   const savePayoutSettings = useCallback(async () => {
     const threshCents = Math.round(parseFloat(payMinThreshold || '0') * 100);
-    await Promise.all([
-      updateSetting('payout_auto_enabled', payAutoEnabled),
-      updateSetting('payout_schedule_type', payScheduleType),
-      updateSetting('payout_schedule_day', parseInt(payScheduleDay, 10) || 5),
-      updateSetting('payout_min_threshold_cents', threshCents),
-    ]);
+    setPaySaveError(null);
+    try {
+      await Promise.all([
+        updateSetting('payout_auto_enabled', payAutoEnabled),
+        updateSetting('payout_schedule_type', payScheduleType),
+        updateSetting('payout_schedule_day', parseInt(payScheduleDay, 10) || 5),
+        updateSetting('payout_min_threshold_cents', threshCents),
+      ]);
+    } catch (e) {
+      setPaySaveError(
+        `${e instanceof Error ? e.message : 'Falha ao salvar.'} Recarregue a página para conferir o que foi gravado.`,
+      );
+      return;
+    }
     setPaySaved(true);
     setTimeout(() => setPaySaved(false), 2500);
   }, [payAutoEnabled, payScheduleType, payScheduleDay, payMinThreshold, updateSetting]);
@@ -878,7 +902,8 @@ export default function ConfiguracoesScreen() {
           background: '#0d0d0d', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...font,
         },
       }, 'Salvar'),
-      paySaved ? React.createElement('span', { style: { color: '#22c55e', fontSize: 14, fontWeight: 500, ...font } }, 'Salvo com sucesso!') : null));
+      paySaved ? React.createElement('span', { style: { color: '#22c55e', fontSize: 14, fontWeight: 500, ...font } }, 'Salvo com sucesso!') : null,
+      paySaveError ? React.createElement('span', { style: { color: '#b91c1c', fontSize: 14, fontWeight: 500, ...font } }, paySaveError) : null));
 
   // ── Novo Usuário Modal ──────────────────────────────────────────────────
   const permModulos = ['Início', 'Viagens', 'Passageiros', 'Motoristas', 'Destinos', 'Encomendas', 'Preparadores', 'Promoções', 'Pagamentos', 'Atendimento'];

@@ -10,7 +10,7 @@ interface PlatformSetting {
 interface UsePlatformSettingsReturn {
   settings: Record<string, any>;
   loading: boolean;
-  /** Atualiza um setting */
+  /** Atualiza um setting. LANÇA se a escrita falhar — quem chama precisa saber. */
   updateSetting: (key: string, value: any) => Promise<void>;
   /** Busca o valor de um setting */
   getSetting: (key: string, defaultValue?: any) => any;
@@ -68,9 +68,15 @@ export function usePlatformSettings(): UsePlatformSettingsReturn {
         updated_by: userId || null,
       }, { onConflict: 'key' });
 
-    if (!error) {
-      setSettings((prev) => ({ ...prev, [key]: value }));
+    if (error) {
+      // Antes o erro era engolido: o upsert falhava (RLS, rede, permissão), a
+      // função resolvia normalmente e a tela mostrava "Salvo com sucesso!"
+      // sobre uma configuração que nunca foi gravada. Reproduzido bloqueando
+      // as escritas: 8 chamadas com 403 e o sucesso aparecendo mesmo assim.
+      console.error(`[usePlatformSettings] falha ao salvar '${key}':`, error.message);
+      throw new Error(error.message || `Não foi possível salvar '${key}'.`);
     }
+    setSettings((prev) => ({ ...prev, [key]: value }));
   }, []);
 
   const getSetting = useCallback((key: string, defaultValue?: any) => {
