@@ -358,6 +358,31 @@ export async function fetchProfileNames(ids: string[]): Promise<Record<string, s
   return map;
 }
 
+/**
+ * E-mail dos usuários (id → email).
+ *
+ * `profiles` não tem e-mail — ele vive em auth.users, fora do alcance do
+ * PostgREST. A RPC admin_lookup_user_emails faz a ponte: SECURITY DEFINER com
+ * guard de is_admin() e teto de 200 ids.
+ *
+ * Falha silenciosa por design: o e-mail é um enriquecimento do detalhe, e um
+ * erro aqui (RPC ainda não publicada num ambiente, permissão) não pode derrubar
+ * a listagem de cobranças/devoluções.
+ */
+export async function fetchUserEmails(ids: (string | null)[]): Promise<Record<string, string>> {
+  const unique = [...new Set(ids.filter((id): id is string => Boolean(id)))];
+  const map: Record<string, string> = {};
+  if (!isSupabaseConfigured || unique.length === 0) return map;
+  try {
+    const { data, error } = await sb.rpc('admin_lookup_user_emails', { p_user_ids: unique });
+    if (error) return map;
+    (data || []).forEach((r: any) => { if (r?.user_id && r?.email) map[r.user_id] = r.email; });
+  } catch {
+    // mantém o mapa vazio: a UI mostra '—'
+  }
+  return map;
+}
+
 // ── Saúde dos provedores (edge pix-provider-health) ──────────────────────
 
 /**
