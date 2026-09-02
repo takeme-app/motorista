@@ -106,6 +106,17 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
   const sheetBottom = useBottomSafeInset({ extra: 16 });
   const [trips, setTrips] = useState<TripRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // Cada linha alterada gera um evento realtime, e um toggle de dia mexe em
+  // VÁRIAS linhas (a rota pode ter horários duplicados). Sem controle, um
+  // desliga/religa dispara meia dúzia de load() concorrentes e vence o que
+  // RESPONDE por último — não o que começou por último. Uma resposta da fase
+  // "desligado" chegando atrasada repõe o retrato velho, e a viagem só volta
+  // ao entrar de novo na tela. Daí o contador de sequência.
+  const loadSeqRef = useRef(0);
+  // Dias com toggle em voo: o valor que o motorista acabou de escolher manda
+  // sobre o que qualquer load trouxer, até a operação terminar.
+  const pendingTogglesRef = useRef<Record<number, boolean>>({});
+  const realtimeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [dayToggles, setDayToggles] = useState<DayToggle>({});
   const [priceAdjust, setPriceAdjust] = useState<PriceAdjust>({ weekend: '15', nocturnal: '15', holiday: '15' });
   const [routeBasePriceCents, setRouteBasePriceCents] = useState(0);
@@ -127,11 +138,16 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent === true;
+    const seq = ++loadSeqRef.current;
+    /** Resposta obsoleta: outro load começou depois deste. Não escreve estado. */
+    const stale = () => seq !== loadSeqRef.current;
     if (!silent) setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user?.id) {
-      setTrips([]);
-      setDayToggles({});
+      if (!stale()) {
+        setTrips([]);
+        setDayToggles({});
+      }
       if (!silent) setLoading(false);
       return;
     }
@@ -143,7 +159,12 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
         )
         .eq('route_id', routeId)
         .eq('driver_id', user.id)
-        .eq('is_active', true)
+        // Carrega TAMBÉM as viagens desativadas (is_active=false). Sem isto, o
+        // dia desligado perdia as linhas da memória e religar dependia de uma
+        // ida ao banco para o card reaparecer — que é o bug relatado. A mesma
+        // conclusão já estava na TripScheduleScreen; a chave continua sendo
+        // derivada de is_active logo abaixo, então o comportamento do toggle
+        // não muda: muda só de onde o card volta.
         .in('status', ['active', 'scheduled'])
         .order('day_of_week', { ascending: true }),
       (supabase as any)
@@ -158,8 +179,15 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
 
     if (error) {
       console.warn('[RouteScheduleScreen] scheduled_trips', error.message);
-      setTrips([]);
-      setDayToggles({});
+      if (!stale()) {
+        setTrips([]);
+        setDayToggles({});
+      }
+      if (!silent) setLoading(false);
+      return;
+    }
+
+    if (stale()) {
       if (!silent) setLoading(false);
       return;
     }
@@ -171,7 +199,9 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
       const idx = t.day_of_week === 0 ? 6 : t.day_of_week - 1;
       toggles[idx] = (toggles[idx] ?? false) || Boolean(t.is_active);
     }
-    setDayToggles(toggles);
+    // O dia que o motorista está chaveando agora não pode ser sobrescrito pelo
+    // que veio do banco no meio da operação: a chave voltaria sozinha.
+    setDayToggles({ ...toggles, ...pendingTogglesRef.current });
 
     const surcharges = routeRes.data as
       | {
@@ -208,10 +238,24 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
         .on(
           'postgres_changes' as never,
           { event: '*', schema: 'public', table: 'scheduled_trips', filter: `route_id=eq.${routeId}` } as never,
-          () => { void load({ silent: true }); },
+          () => {
+            // Um toggle de dia altera VÁRIAS linhas e cada uma vira um evento.
+            // Sem juntar, seriam N recargas concorrentes por clique.
+            if (realtimeTimerRef.current) clearTimeout(realtimeTimerRef.current);
+            realtimeTimerRef.current = setTimeout(() => {
+              realtimeTimerRef.current = null;
+              void load({ silent: true });
+            }, 400);
+          },
         )
         .subscribe();
-      return () => { void supabase.removeChannel(channel); };
+      return () => {
+        if (realtimeTimerRef.current) {
+          clearTimeout(realtimeTimerRef.current);
+          realtimeTimerRef.current = null;
+        }
+        void supabase.removeChannel(channel);
+      };
     }, [routeId, load]),
   );
 
@@ -226,20 +270,27 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
     const seen = new Map<string, TripRow>();
     for (const t of list) {
       const key = `${t.departure_time ?? ''}|${t.arrival_time ?? ''}`;
-      if (!seen.has(key)) seen.set(key, t);
+      const kept = seen.get(key);
+      // Agora que as desativadas também vêm no load, a linha ATIVA tem que
+      // ganhar do duplicado desligado: é o id dela que "Transferir viagem" e
+      // "Excluir horário" usam. Ficar com a desligada faria o motorista apagar
+      // uma linha que já estava fora, deixando a ativa no ar.
+      if (!kept || (!kept.is_active && t.is_active)) seen.set(key, t);
     }
     return Array.from(seen.values());
   };
 
   const toggleDay = async (dayIdx: number, value: boolean) => {
     setDayToggles((p) => ({ ...p, [dayIdx]: value }));
+    // Enquanto a operação roda, a escolha do motorista manda: nenhum load pode
+    // repor o valor antigo da chave por baixo dele.
+    pendingTogglesRef.current[dayIdx] = value;
     const dayNum = dayIdx === 6 ? 0 : dayIdx + 1;
     try {
       if (value) {
-        // Busca as viagens do dia direto no banco (SEM filtrar is_active), pois as
-        // viagens desligadas pelo toggle ficam com is_active=false e por isso não
-        // entram no estado em memória (load usa .eq('is_active', true)). Sem isto,
-        // o toggle nunca conseguia RELIGAR uma viagem previamente desativada.
+        // Busca as viagens do dia direto no banco, e não do estado em memória:
+        // o que está na tela pode estar desatualizado (outro aparelho, o cron de
+        // viagens vencidas, o admin). Quem manda sobre o que religar é o banco.
         const { data: dbDayRows, error: fetchErr } = await supabase
           .from('scheduled_trips')
           .select('id, departure_time, arrival_time')
@@ -266,12 +317,14 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
               ? 'Horários de partida ou chegada inválidos. Use HH:MM (ex.: 09:00 e 10:30).'
               : 'Não há viagens neste dia. Use + Adicionar viagem.',
           );
+          delete pendingTogglesRef.current[dayIdx];
           await load({ silent: true });
           return;
         }
         const geoOk = await ensureWorkerRouteHasCoordinates(supabase, routeId);
         if (!geoOk.ok) {
           showAlert('Mapa', geoOk.message);
+          delete pendingTogglesRef.current[dayIdx];
           await load({ silent: true });
           return;
         }
@@ -333,7 +386,10 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
     } catch {
       showAlert('Erro', 'Não foi possível atualizar o cronograma.');
     }
+    // Recarrega AINDA com o dia travado, para o retrato final não brigar com a
+    // chave; só então devolve o controle ao que veio do banco.
     await load({ silent: true });
+    delete pendingTogglesRef.current[dayIdx];
   };
 
   const openAddModal = (dayIdx: number) => {
@@ -619,8 +675,11 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
           <Text style={styles.sectionTitle}>Roteiro da semana atual</Text>
 
           {DAYS.map((day, idx) => {
-            const dTrips = dayTrips(idx);
             const enabled = dayToggles[idx] ?? false;
+            // Dia desligado segue mostrando "0 viagens", como antes — mas as
+            // linhas ficam na memória, então ligar a chave traz o card na hora,
+            // sem esperar o banco responder.
+            const dTrips = enabled ? dayTrips(idx) : [];
 
             return (
               <View key={day} style={[styles.dayCard, !enabled && styles.dayCardDisabled]}>
