@@ -17,6 +17,10 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
 import { registerPalliativePix } from '../../lib/palliativePixStore';
+import { fetchPixProviderMode, type PixProviderMode } from '../../lib/pixProviderConfig';
+import { validateCpf, onlyDigits } from '../../utils/formatCpf';
+import { profileHasValidCpf } from '../../lib/profileCpf';
+import { useIsFocused } from '@react-navigation/native';
 import { PaymentMethodSection, type CardPaymentConfirmParams, type PaymentMethodType } from '../../components/PaymentMethodSection';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
@@ -165,6 +169,22 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
   const [downloading, setDownloading] = useState(false);
   // Desconto promocional de excursão (espelha o que os edges charge/confirm aplicam).
   const [promoDiscountCents, setPromoDiscountCents] = useState(0);
+  // Modo do Pix: 'palliative' mantém o QR estático de sempre; provedor real
+  // manda para a PixPaymentScreen (cobrança única com confirmação automática).
+  const [pixProviderMode, setPixProviderMode] = useState<PixProviderMode>('palliative');
+  useEffect(() => {
+    void fetchPixProviderMode().then(setPixProviderMode);
+  }, []);
+  // O servidor PREFERE o CPF do perfil e só grava um novo quando não há um
+  // válido — então pedir o CPF de quem já tem é pedir dado repetido. `null`
+  // (leitura pendente ou falha) conta como "não tem": perguntar à toa incomoda,
+  // esconder de quem não tem trava a pessoa num 422 sem saída.
+  const [profileCpfOk, setProfileCpfOk] = useState<boolean | null>(null);
+  useEffect(() => {
+    void profileHasValidCpf().then(setProfileCpfOk);
+  }, []);
+  // Voltar da tela de Pix real precisa remostrar o orçamento já aprovado.
+  const isFocused = useIsFocused();
 
   useEffect(() => {
     let cancelled = false;
@@ -214,7 +234,7 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [excursionRequestId]);
+  }, [excursionRequestId, isFocused]);
 
   // Após gerar o Pix, o pagamento é assíncrono: o stripe-webhook muda o status
   // para `approved`. Faz polling do status enquanto o Pix está pendente para
@@ -305,6 +325,39 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
       } finally {
         setSavingPayment(false);
       }
+      return;
+    }
+
+    // Pix REAL: o orçamento já existe; o servidor só anexa a cobrança e a
+    // aprovação (+ payouts) acontece na liquidação. Nada é aprovado antes de
+    // o pagamento entrar — diferente do paliativo abaixo.
+    // Modo do Pix RELIDO aqui (cache 30s), NUNCA o estado da tela: o
+    // useCallback congela o valor do closure e a leitura da montagem é
+    // assíncrona, então o estado pode estar em 'palliative' enquanto a tela
+    // já mostra o campo de CPF do modo real. Confirmar nessa janela mandava o
+    // pedido para o fluxo paliativo, que o cria SEM cobrar — o bug de
+    // 02/09/2026. A viagem já lia assim; agora os quatro fluxos leem igual.
+    const pixModeNow = params.method === 'pix' ? await fetchPixProviderMode() : null;
+    if (pixModeNow) setPixProviderMode(pixModeNow);
+
+    if (pixModeNow != null && pixModeNow !== 'palliative') {
+      const collectedCpf = onlyDigits(params.holderCpfDigits ?? '');
+      const collectedCpfOk = validateCpf(collectedCpf);
+      if (!collectedCpfOk && profileCpfOk !== true) {
+        Alert.alert(
+          'CPF necessário',
+          'O pagamento por Pix exige CPF. Informe seu CPF no campo da opção Pix e confirme novamente.',
+        );
+        return;
+      }
+      setPixPaymentInfo(null);
+      navigation.navigate('PixPayment', {
+        service: 'excursion',
+        ...(collectedCpfOk ? { cpf: collectedCpf } : {}),
+        excursionRequestId: detail.id,
+        estimatedAmountCents: Math.max(1, total - promoDiscountCents),
+        excursionSuccess: true,
+      });
       return;
     }
 
@@ -617,6 +670,7 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
             cancellationPolicyVariant="trip"
             loading={savingPayment}
             allowedMethods={['credito', 'debito', 'pix', 'dinheiro']}
+            pixCpfRequired={pixProviderMode !== 'palliative' && profileCpfOk !== true}
             cashInstructionVariant="excursion"
           />
         ) : null}

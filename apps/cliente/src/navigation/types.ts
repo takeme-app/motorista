@@ -66,6 +66,8 @@ export type ShipmentRecipientParam = {
 
 export type ShipmentStackParamList = {
   PixPaliativo: { requestId: string };
+  /** Pix real da encomenda — a tela é a mesma da viagem, registrada nas duas stacks. */
+  PixPayment: PixPaymentScreenParams;
   SelectShipmentAddress: undefined;
   SelectShipmentDriver: {
     origin: ShipmentPlaceParam;
@@ -163,6 +165,7 @@ export type DependentShipmentFormParams = {
 
 export type DependentShipmentStackParamList = {
   PixPaliativo: { requestId: string };
+  PixPayment: PixPaymentScreenParams;
   DependentShipmentForm: undefined;
   AddDependent: undefined;
   DependentSuccess: undefined;
@@ -326,6 +329,53 @@ export type PixPaymentScreenParams =
       /** Valor estimado no app — exibido só enquanto o servidor não responde. */
       estimatedAmountCents: number;
       successNav: TripPixSuccessNavParam;
+      shipmentSuccess?: undefined;
+      dependentSuccess?: undefined;
+      excursionSuccess?: undefined;
+      resume?: undefined;
+    }
+  | {
+      // Encomenda: o payload de insert vai inteiro para o servidor, que cria a
+      // encomenda já ancorada na cobrança (o app não insere, diferente do
+      // paliativo). successNav não se aplica — a tela de sucesso é outra.
+      service: 'shipment';
+      shipmentDraft: Record<string, unknown>;
+      cpf?: string;
+      estimatedAmountCents: number;
+      shipmentSuccess: { isLargePackage: boolean };
+      dependentSuccess?: undefined;
+      excursionSuccess?: undefined;
+      successNav?: undefined;
+      draft?: undefined;
+      resume?: undefined;
+    }
+  | {
+      // Envio de dependente: mesma forma da encomenda — o servidor insere a
+      // linha ancorada na cobrança e o motorista da viagem só é notificado
+      // quando o pagamento entra.
+      service: 'dependent_shipment';
+      dependentDraft: Record<string, unknown>;
+      cpf?: string;
+      estimatedAmountCents: number;
+      dependentSuccess: true;
+      excursionSuccess?: undefined;
+      shipmentSuccess?: undefined;
+      successNav?: undefined;
+      draft?: undefined;
+      resume?: undefined;
+    }
+  | {
+      // Excursão: o orçamento JÁ existe (status 'quoted'); o servidor só anexa
+      // a cobrança e o pagamento é que aprova. Por isso vai o id, não um draft.
+      service: 'excursion';
+      excursionRequestId: string;
+      cpf?: string;
+      estimatedAmountCents: number;
+      excursionSuccess: true;
+      dependentSuccess?: undefined;
+      shipmentSuccess?: undefined;
+      successNav?: undefined;
+      draft?: undefined;
       resume?: undefined;
     }
   | { resume: true; stored: PendingPixChargeParam };

@@ -31,6 +31,9 @@ import { fetchDriverStripeChargesEnabled } from '../../lib/driverStripeConnect';
 import { fetchPlatformFeePctForService } from '../../lib/platformFees';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
+import { fetchPixProviderMode, type PixProviderMode } from '../../lib/pixProviderConfig';
+import { validateCpf, onlyDigits } from '../../utils/formatCpf';
+import { profileHasValidCpf } from '../../lib/profileCpf';
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'ConfirmDependentShipment'>;
 
@@ -108,6 +111,20 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     photoUris,
   } = route.params;
   const driver = route.params.driver;
+  // Modo do Pix: 'palliative' mantém o QR estático de sempre; provedor real
+  // manda para a PixPaymentScreen (cobrança única com confirmação automática).
+  const [pixProviderMode, setPixProviderMode] = useState<PixProviderMode>('palliative');
+  useEffect(() => {
+    void fetchPixProviderMode().then(setPixProviderMode);
+  }, []);
+  // O servidor PREFERE o CPF do perfil e só grava um novo quando não há um
+  // válido — então pedir o CPF de quem já tem é pedir dado repetido. `null`
+  // (leitura pendente ou falha) conta como "não tem": perguntar à toa incomoda,
+  // esconder de quem não tem trava a pessoa num 422 sem saída.
+  const [profileCpfOk, setProfileCpfOk] = useState<boolean | null>(null);
+  useEffect(() => {
+    void profileHasValidCpf().then(setProfileCpfOk);
+  }, []);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('dinheiro');
   const [submitting, setSubmitting] = useState(false);
   /** Stripe Connect (`charges_enabled`): só então cartão/Pix ficam disponíveis. */
@@ -387,6 +404,43 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           photo_paths: uploadedPaths,
         };
 
+        // Pix REAL: não insere o envio aqui. O create-pix-charge insere no
+        // servidor já ancorado na cobrança, para o motorista da viagem não ser
+        // notificado antes do pagamento. Espelha a encomenda.
+        // Modo do Pix RELIDO aqui (cache 30s), NUNCA o estado da tela: o
+        // useCallback congela o valor do closure e a leitura da montagem é
+        // assíncrona, então o estado pode estar em 'palliative' enquanto a tela
+        // já mostra o campo de CPF do modo real. Confirmar nessa janela mandava o
+        // pedido para o fluxo paliativo, que o cria SEM cobrar — o bug de
+        // 02/09/2026. A viagem já lia assim; agora os quatro fluxos leem igual.
+        const pixModeNow = params.method === 'pix' ? await fetchPixProviderMode() : null;
+        if (pixModeNow) setPixProviderMode(pixModeNow);
+
+        if (pixModeNow != null && pixModeNow !== 'palliative') {
+          const collectedCpf = onlyDigits(params.holderCpfDigits ?? '');
+          const collectedCpfOk = validateCpf(collectedCpf);
+          if (!collectedCpfOk && profileCpfOk !== true) {
+            // Não navega sem CPF: o servidor devolveria 422 e o usuário voltaria
+            // para cá. O campo inline já está visível (pixCpfRequired).
+            showAlert(
+              'CPF necessário',
+              'O pagamento por Pix exige CPF. Informe seu CPF no campo da opção Pix e confirme novamente.',
+            );
+            setSubmitting(false);
+            return;
+          }
+          navigation.navigate('PixPayment', {
+            service: 'dependent_shipment',
+            ...(collectedCpfOk ? { cpf: collectedCpf } : {}),
+            dependentDraft: dependentInsertPayload as unknown as Record<string, unknown>,
+            estimatedAmountCents: Number(
+              (pricingFields as { amount_cents?: number }).amount_cents ?? amountCents,
+            ),
+            dependentSuccess: true,
+          });
+          return;
+        }
+
         // Pix paliativo: cria o envio do dependente só aos 40s (na tela de Pix).
         if (params.method === 'pix') {
           let pixDepId = '';
@@ -492,6 +546,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
       }
     },
     [
+      profileCpfOk,
       dependentId,
       fullName,
       contactPhone,
@@ -583,6 +638,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           allowedMethods={allowedPaymentMethods}
           cashInstructionVariant="dependent_shipment"
           connectCashOnlyContext="dependent_shipment"
+          pixCpfRequired={pixProviderMode !== 'palliative' && profileCpfOk !== true}
         />
       </ScrollView>
     </View>

@@ -139,24 +139,39 @@ function readErrorCode(body: Record<string, unknown> | null): string {
  * `pending`, segurando a vaga). Retomada é do servidor: cobrança pendente não
  * expirada do mesmo usuário+viagem devolve o MESMO QR.
  */
-export async function createPixCharge(input: {
-  service: 'booking';
-  cpf?: string;
-  draft: PixBookingDraftParam;
-}): Promise<CreatePixChargeResult> {
+export async function createPixCharge(
+  input:
+    | { service: 'booking'; cpf?: string; draft: PixBookingDraftParam }
+    // Encomenda: o preço vem da cotação do app (shipmentQuote), como no cartão.
+    // Mandamos o payload de insert e o servidor cria a encomenda já ancorada na
+    // cobrança, para o gatilho de fila não ofertá-la antes do pagamento.
+    | { service: 'shipment'; cpf?: string; shipmentDraft: Record<string, unknown> }
+    // Envio de dependente: idem encomenda.
+    | { service: 'dependent_shipment'; cpf?: string; dependentDraft: Record<string, unknown> }
+    // Excursão: o orçamento já existe; só mandamos o id.
+    | { service: 'excursion'; cpf?: string; excursionRequestId: string },
+): Promise<CreatePixChargeResult> {
   try {
     const token = await getAccessToken();
     if (!token) {
       return { ok: false, code: 'error', message: 'Sessão expirada. Faça login novamente.' };
     }
-    const { scheduled_trip_id, ...draftRest } = input.draft;
+    const payload =
+      input.service === 'shipment'
+        ? { entity_type: 'shipment', shipment_draft: input.shipmentDraft }
+        : input.service === 'dependent_shipment'
+        ? { entity_type: 'dependent_shipment', dependent_draft: input.dependentDraft }
+        : input.service === 'excursion'
+        ? { entity_type: 'excursion', excursion_request_id: input.excursionRequestId }
+        : (() => {
+            const { scheduled_trip_id, ...draftRest } = input.draft;
+            return { entity_type: 'booking', scheduled_trip_id, draft: draftRest };
+          })();
     const { data, error } = await supabase.functions.invoke(EDGE_CREATE_PIX_CHARGE_SLUG, {
       headers: { Authorization: `Bearer ${token}` },
       body: {
-        entity_type: input.service,
-        scheduled_trip_id,
+        ...payload,
         ...(input.cpf ? { cpf: input.cpf } : {}),
-        draft: draftRest,
       },
     });
 

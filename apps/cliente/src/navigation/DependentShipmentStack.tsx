@@ -9,6 +9,7 @@ import { SelectDependentTripDriverScreen } from '../screens/dependentShipment/Se
 import { ConfirmDependentShipmentScreen } from '../screens/dependentShipment/ConfirmDependentShipmentScreen';
 import { DependentShipmentSuccessScreen } from '../screens/dependentShipment/DependentShipmentSuccessScreen';
 import { PixPaliativoScreen } from '../screens/payment/PixPaliativoScreen';
+import { PixPaymentScreen } from '../screens/payment/PixPaymentScreen';
 
 const Stack = createNativeStackNavigator<DependentShipmentStackParamList>();
 
@@ -40,6 +41,9 @@ export function DependentShipmentStack() {
       <Stack.Screen name="SelectDependentTripDriver" component={SelectDependentTripDriverScreen} />
       <Stack.Screen name="ConfirmDependentShipment" component={ConfirmDependentShipmentScreen} />
       <Stack.Screen name="PixPaliativo" component={PixPaliativoScreen} />
+      {/* Pix REAL (gestor de provedores). A tela paliativa acima continua sendo
+          o caminho quando a flag está em 'palliative'. */}
+      <Stack.Screen name="PixPayment" component={PixPaymentScreen} />
       <Stack.Screen name="DependentShipmentSuccess" component={DependentShipmentSuccessScreen} />
     </Stack.Navigator>
   );

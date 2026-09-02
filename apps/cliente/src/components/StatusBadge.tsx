@@ -14,6 +14,8 @@ export type TripStatusBadge =
   | 'em_analise'
   | 'aguardando_motorista'
   | 'aguardando_aprovacao'
+  /** Pix real gerado, pagamento ainda não identificado — o motorista NÃO foi acionado. */
+  | 'aguardando_pagamento'
   | 'orcamento';
 
 /** Motivo gravado pelo trigger ao iniciar viagem sem aceite do motorista (bookings/envios/dependentes). */
@@ -39,6 +41,7 @@ const VARIANT_STYLES: Record<
   em_analise: { backgroundColor: '#e5e5e5', color: '#0d0d0d' },
   aguardando_motorista: { backgroundColor: '#e5e5e5', color: '#0d0d0d' },
   aguardando_aprovacao: { backgroundColor: '#fef3c7', color: '#92400e' },
+  aguardando_pagamento: { backgroundColor: '#fef3c7', color: '#92400e' },
   orcamento: { backgroundColor: '#dbeafe', color: '#1e3a8a' },
 };
 
@@ -53,6 +56,7 @@ const VARIANT_LABELS: Record<StatusBadgeVariant, string> = {
   em_analise: 'Em análise',
   aguardando_motorista: 'Aguardando aceite do motorista',
   aguardando_aprovacao: 'Aguardando aprovação',
+  aguardando_pagamento: 'Aguardando pagamento',
   orcamento: 'Orçamento disponível',
 };
 

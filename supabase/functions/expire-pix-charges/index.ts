@@ -61,7 +61,50 @@ async function expireCharge(
     return;
   }
 
-  // Fase 1: só bookings. Cancela devolvendo a vaga (trigger de capacidade).
+  // Encomenda e envio de dependente: cancela para não ficar pedido não pago em
+  // aberto. O motorista nunca chegou a ser acionado (portão do pix_paid_at:
+  // fila de ofertas na encomenda, notificação no dependente), então não há nada
+  // a desfazer do lado dele. Guard em pix_paid_at IS NULL: se o pagamento
+  // entrou no meio do caminho, não cancela.
+  if (charge.entity_type === "shipment" || charge.entity_type === "dependent_shipment") {
+    const table = charge.entity_type === "shipment" ? "shipments" : "dependent_shipments";
+    const { error: cancelAppErr } = await admin
+      .from(table)
+      .update({
+        status: "cancelled",
+        cancellation_reason: "pix_expired",
+        updated_at: nowIso,
+      } as never)
+      .eq("id", charge.entity_id)
+      .is("pix_paid_at", null);
+    if (cancelAppErr) {
+      console.error(
+        `[expire-pix-charges] cancel ${table} ${charge.entity_id}:`,
+        cancelAppErr.message,
+      );
+    }
+  }
+
+  // Excursão: o orçamento EXISTIA antes da cobrança (o cliente pediu, o
+  // preparador orçou). Expirar o Pix não pode cancelar o orçamento — só
+  // desanexa a cobrança para o cliente poder gerar outra. O status segue
+  // 'quoted', como estava antes de ele tentar pagar.
+  if (charge.entity_type === "excursion") {
+    const { error: detachExcErr } = await admin
+      .from("excursion_requests")
+      .update({ pix_charge_id: null, updated_at: nowIso } as never)
+      .eq("id", charge.entity_id)
+      .eq("pix_charge_id", charge.id)
+      .is("pix_paid_at", null);
+    if (detachExcErr) {
+      console.error(
+        `[expire-pix-charges] detach excursion ${charge.entity_id}:`,
+        detachExcErr.message,
+      );
+    }
+  }
+
+  // Cancela devolvendo a vaga (trigger de capacidade).
   if (charge.entity_type === "booking") {
     const { error: cancelErr } = await admin
       .from("bookings")

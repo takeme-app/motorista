@@ -4,6 +4,7 @@ import { RecipientScreen } from '../screens/shipment/RecipientScreen';
 import { SelectShipmentDriverScreen } from '../screens/shipment/SelectShipmentDriverScreen';
 import { ConfirmShipmentScreen } from '../screens/shipment/ConfirmShipmentScreen';
 import { ShipmentSuccessScreen } from '../screens/shipment/ShipmentSuccessScreen';
+import { PixPaymentScreen } from '../screens/payment/PixPaymentScreen';
 import { PixPaliativoScreen } from '../screens/payment/PixPaliativoScreen';
 import type { ShipmentStackParamList } from './types';
 
@@ -23,6 +24,7 @@ export function ShipmentStack() {
       <Stack.Screen name="Recipient" component={RecipientScreen} />
       <Stack.Screen name="ConfirmShipment" component={ConfirmShipmentScreen} />
       <Stack.Screen name="PixPaliativo" component={PixPaliativoScreen} />
+      <Stack.Screen name="PixPayment" component={PixPaymentScreen} />
       <Stack.Screen name="ShipmentSuccess" component={ShipmentSuccessScreen} />
     </Stack.Navigator>
   );

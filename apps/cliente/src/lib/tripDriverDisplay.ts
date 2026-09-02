@@ -33,10 +33,24 @@ export function formatTripFareBrl(cents: number | null | undefined): string {
 export function formatActivityTotalPaidLine(
   cents: number | null | undefined,
   paymentMethod?: string | null,
+  options?: {
+    /** Pix real gerado e ainda não liquidado (ver lib/pixPending). */
+    awaitingPixPayment?: boolean;
+    /** Excursão ainda em orçamento: o valor é proposta, não cobrança. */
+    quoteOnly?: boolean;
+  },
 ): string {
   if (cents == null || cents < 0) return '—';
-  // Pix/dinheiro são pagos no fim da corrida — não estão "pagos" na reserva.
+  // Pix REAL pendente: nem "pago" nem "a pagar no fim" — está esperando o
+  // pagamento AGORA, e nada anda até ele entrar.
+  if (options?.awaitingPixPayment) {
+    return `Aguardando pagamento · ${formatTripFareBrl(cents)}`;
+  }
+  if (options?.quoteOnly) {
+    return `Valor do orçamento · ${formatTripFareBrl(cents)}`;
+  }
+  // Pix paliativo/dinheiro são pagos no fim da corrida — não estão "pagos" na reserva.
   const pm = (paymentMethod ?? '').toLowerCase();
-  const label = pm === 'pix' || pm === 'cash' ? 'Total a pagar' : 'Total pago';
+  const label = pm === 'pix' || pm === 'cash' || pm === 'dinheiro' ? 'Total a pagar' : 'Total pago';
   return `${label} · ${formatTripFareBrl(cents)}`;
 }

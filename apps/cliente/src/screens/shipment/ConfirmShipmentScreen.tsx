@@ -17,6 +17,9 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ShipmentStackParamList } from '../../navigation/types';
 import { PaymentMethodSection, type PaymentMethodType, type CardPaymentConfirmParams } from '../../components/PaymentMethodSection';
+import { fetchPixProviderMode, type PixProviderMode } from '../../lib/pixProviderConfig';
+import { validateCpf, onlyDigits } from '../../utils/formatCpf';
+import { profileHasValidCpf } from '../../lib/profileCpf';
 import { fetchDriverStripeChargesEnabled } from '../../lib/driverStripeConnect';
 import { supabase } from '../../lib/supabase';
 import { registerPalliativePix } from '../../lib/palliativePixStore';
@@ -59,6 +62,20 @@ function orderIdFromUuid(uuid: string): string {
 }
 
 export function ConfirmShipmentScreen({ navigation, route }: Props) {
+  // Modo do Pix: 'palliative' mantém o QR estático de sempre; provedor real
+  // manda para a PixPaymentScreen (cobrança única com confirmação automática).
+  const [pixProviderMode, setPixProviderMode] = useState<PixProviderMode>('palliative');
+  useEffect(() => {
+    void fetchPixProviderMode().then(setPixProviderMode);
+  }, []);
+  // O servidor PREFERE o CPF do perfil e só grava um novo quando não há um
+  // válido — então pedir o CPF de quem já tem é pedir dado repetido. `null`
+  // (leitura pendente ou falha) conta como "não tem": perguntar à toa incomoda,
+  // esconder de quem não tem trava a pessoa num 422 sem saída.
+  const [profileCpfOk, setProfileCpfOk] = useState<boolean | null>(null);
+  useEffect(() => {
+    void profileHasValidCpf().then(setProfileCpfOk);
+  }, []);
   const insets = useSafeAreaInsets();
   const bottomInset = useBottomSafeInset({ extra: 16 });
   const { showAlert } = useAppAlert();
@@ -324,6 +341,42 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
         const canStartQueueForPix =
           Boolean(clientPreferredDriverId) && status === 'confirmed';
 
+        // Pix REAL: não insere a encomenda aqui. O create-pix-charge insere no
+        // servidor já ancorada na cobrança, para o gatilho de fila não ofertá-la
+        // antes do pagamento. Espelha o que o checkout de viagem faz.
+        // Modo do Pix RELIDO aqui (cache 30s), NUNCA o estado da tela: o
+        // useCallback congela o valor do closure e a leitura da montagem é
+        // assíncrona, então o estado pode estar em 'palliative' enquanto a tela
+        // já mostra o campo de CPF do modo real. Confirmar nessa janela mandava o
+        // pedido para o fluxo paliativo, que o cria SEM cobrar — o bug de
+        // 02/09/2026. A viagem já lia assim; agora os quatro fluxos leem igual.
+        const pixModeNow = params.method === 'pix' ? await fetchPixProviderMode() : null;
+        if (pixModeNow) setPixProviderMode(pixModeNow);
+
+        if (pixModeNow != null && pixModeNow !== 'palliative') {
+          const collectedCpf = onlyDigits(params.holderCpfDigits ?? '');
+          const collectedCpfOk = validateCpf(collectedCpf);
+          if (!collectedCpfOk && profileCpfOk !== true) {
+            // Não navega sem CPF: o servidor devolveria 422 e o usuário voltaria
+            // para cá. O campo inline já está visível (pixCpfRequired).
+            showAlert(
+              'CPF necessário',
+              'O pagamento por Pix exige CPF. Informe seu CPF no campo da opção Pix e confirme novamente.',
+            );
+            return;
+          }
+          navigation.navigate('PixPayment', {
+            service: 'shipment',
+            ...(collectedCpfOk ? { cpf: collectedCpf } : {}),
+            shipmentDraft: shipmentInsertPayload as unknown as Record<string, unknown>,
+            estimatedAmountCents: Number(
+              (pricingInsertRow as { amount_cents?: number }).amount_cents ?? 0,
+            ),
+            shipmentSuccess: { isLargePackage: packageSize === 'grande' },
+          });
+          return;
+        }
+
         // Pix paliativo (Stripe Pix desabilitado): não cobra. A encomenda é criada e
         // ofertada ao motorista só aos 40s (na tela de Pix) — não antes ("sem pagar o pix").
         if (params.method === 'pix') {
@@ -581,6 +634,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
       }
     },
     [
+      profileCpfOk,
       origin,
       destination,
       whenOption,
@@ -690,6 +744,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
         </View>
 
         <PaymentMethodSection
+          pixCpfRequired={pixProviderMode !== 'palliative' && profileCpfOk !== true}
           amountCents={displayTotalCents}
           selectedMethod={selectedPaymentMethod}
           onSelectMethod={setSelectedPaymentMethod}
