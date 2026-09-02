@@ -60,6 +60,28 @@ export async function promoteEntityPaid(
     return { promoted: Array.isArray(data) && data.length > 0 };
   }
 
-  // shipment / dependent_shipment / excursion: fases 2+.
+  if (entityType === "shipment") {
+    // A encomenda já nasceu com o status final ('confirmed' ou 'pending_review')
+    // — o que a segurava era o portão do gatilho de fila, que não oferta
+    // enquanto pix_paid_at estiver nulo. Marcar o pagamento é, portanto, o que
+    // LIBERA a oferta ao motorista: o próprio trigger reavalia no UPDATE
+    // (migration shipment_pix_real_queue_gate) e abre a fila.
+    //
+    // Guard idempotente em pix_paid_at IS NULL: webhook e polling podem chegar
+    // juntos, e abrir a fila duas vezes bagunçaria o rodízio de ofertas.
+    const { data, error } = await admin
+      .from("shipments")
+      .update({
+        pix_paid_at: paidAtIso,
+        updated_at: new Date().toISOString(),
+      } as never)
+      .eq("id", entityId)
+      .is("pix_paid_at", null)
+      .select("id");
+    if (error) throw new Error(`promoção da encomenda falhou: ${error.message}`);
+    return { promoted: Array.isArray(data) && data.length > 0 };
+  }
+
+  // dependent_shipment / excursion: fases seguintes.
   throw new UnsupportedEntityError(entityType);
 }

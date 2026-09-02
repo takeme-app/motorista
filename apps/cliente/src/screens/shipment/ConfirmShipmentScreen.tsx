@@ -17,6 +17,8 @@ import { StatusBar } from 'expo-status-bar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ShipmentStackParamList } from '../../navigation/types';
 import { PaymentMethodSection, type PaymentMethodType, type CardPaymentConfirmParams } from '../../components/PaymentMethodSection';
+import { fetchPixProviderMode, type PixProviderMode } from '../../lib/pixProviderConfig';
+import { validateCpf, onlyDigits } from '../../utils/formatCpf';
 import { fetchDriverStripeChargesEnabled } from '../../lib/driverStripeConnect';
 import { supabase } from '../../lib/supabase';
 import { registerPalliativePix } from '../../lib/palliativePixStore';
@@ -59,6 +61,12 @@ function orderIdFromUuid(uuid: string): string {
 }
 
 export function ConfirmShipmentScreen({ navigation, route }: Props) {
+  // Modo do Pix: 'palliative' mantém o QR estático de sempre; provedor real
+  // manda para a PixPaymentScreen (cobrança única com confirmação automática).
+  const [pixProviderMode, setPixProviderMode] = useState<PixProviderMode>('palliative');
+  useEffect(() => {
+    void fetchPixProviderMode().then(setPixProviderMode);
+  }, []);
   const insets = useSafeAreaInsets();
   const bottomInset = useBottomSafeInset({ extra: 16 });
   const { showAlert } = useAppAlert();
@@ -323,6 +331,32 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
         // trg_shipment_auto_open_driver_offer_queue abre a fila quando admin_approved_at é setado).
         const canStartQueueForPix =
           Boolean(clientPreferredDriverId) && status === 'confirmed';
+
+        // Pix REAL: não insere a encomenda aqui. O create-pix-charge insere no
+        // servidor já ancorada na cobrança, para o gatilho de fila não ofertá-la
+        // antes do pagamento. Espelha o que o checkout de viagem faz.
+        if (params.method === 'pix' && pixProviderMode !== 'palliative') {
+          const collectedCpf = onlyDigits(params.holderCpfDigits ?? '');
+          if (!validateCpf(collectedCpf)) {
+            // Não navega sem CPF: o servidor devolveria 422 e o usuário voltaria
+            // para cá. O campo inline já está visível (pixCpfRequired).
+            showAlert(
+              'CPF necessário',
+              'O pagamento por Pix exige CPF. Informe seu CPF no campo da opção Pix e confirme novamente.',
+            );
+            return;
+          }
+          navigation.navigate('PixPayment', {
+            service: 'shipment',
+            cpf: collectedCpf,
+            shipmentDraft: shipmentInsertPayload as unknown as Record<string, unknown>,
+            estimatedAmountCents: Number(
+              (pricingInsertRow as { amount_cents?: number }).amount_cents ?? 0,
+            ),
+            shipmentSuccess: { isLargePackage: packageSize === 'grande' },
+          });
+          return;
+        }
 
         // Pix paliativo (Stripe Pix desabilitado): não cobra. A encomenda é criada e
         // ofertada ao motorista só aos 40s (na tela de Pix) — não antes ("sem pagar o pix").
@@ -690,6 +724,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
         </View>
 
         <PaymentMethodSection
+          pixCpfRequired={pixProviderMode !== 'palliative'}
           amountCents={displayTotalCents}
           selectedMethod={selectedPaymentMethod}
           onSelectMethod={setSelectedPaymentMethod}

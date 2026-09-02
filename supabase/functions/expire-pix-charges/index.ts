@@ -61,7 +61,26 @@ async function expireCharge(
     return;
   }
 
-  // Fase 1: só bookings. Cancela devolvendo a vaga (trigger de capacidade).
+  // Encomenda: cancela para não ficar pedido não pago em aberto. O gatilho de
+  // fila nunca chegou a ofertá-la (portão do pix_paid_at), então não há oferta
+  // pendente a desfazer. Guard em pix_paid_at IS NULL: se o pagamento entrou no
+  // meio do caminho, não cancela.
+  if (charge.entity_type === "shipment") {
+    const { error: cancelShipErr } = await admin
+      .from("shipments")
+      .update({
+        status: "cancelled",
+        cancellation_reason: "pix_expired",
+        updated_at: nowIso,
+      } as never)
+      .eq("id", charge.entity_id)
+      .is("pix_paid_at", null);
+    if (cancelShipErr) {
+      console.error(`[expire-pix-charges] cancel shipment ${charge.entity_id}:`, cancelShipErr.message);
+    }
+  }
+
+  // Cancela devolvendo a vaga (trigger de capacidade).
   if (charge.entity_type === "booking") {
     const { error: cancelErr } = await admin
       .from("bookings")

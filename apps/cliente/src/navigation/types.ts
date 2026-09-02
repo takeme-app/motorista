@@ -66,6 +66,8 @@ export type ShipmentRecipientParam = {
 
 export type ShipmentStackParamList = {
   PixPaliativo: { requestId: string };
+  /** Pix real da encomenda — a tela é a mesma da viagem, registrada nas duas stacks. */
+  PixPayment: PixPaymentScreenParams;
   SelectShipmentAddress: undefined;
   SelectShipmentDriver: {
     origin: ShipmentPlaceParam;
@@ -326,6 +328,20 @@ export type PixPaymentScreenParams =
       /** Valor estimado no app — exibido só enquanto o servidor não responde. */
       estimatedAmountCents: number;
       successNav: TripPixSuccessNavParam;
+      shipmentSuccess?: undefined;
+      resume?: undefined;
+    }
+  | {
+      // Encomenda: o payload de insert vai inteiro para o servidor, que cria a
+      // encomenda já ancorada na cobrança (o app não insere, diferente do
+      // paliativo). successNav não se aplica — a tela de sucesso é outra.
+      service: 'shipment';
+      shipmentDraft: Record<string, unknown>;
+      cpf?: string;
+      estimatedAmountCents: number;
+      shipmentSuccess: { isLargePackage: boolean };
+      successNav?: undefined;
+      draft?: undefined;
       resume?: undefined;
     }
   | { resume: true; stored: PendingPixChargeParam };

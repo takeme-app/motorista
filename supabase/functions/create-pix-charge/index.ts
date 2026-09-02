@@ -149,10 +149,12 @@ Deno.serve(async (req) => {
       scheduled_trip_id?: string;
       cpf?: string;
       draft?: DraftBookingBody;
+      /** Encomenda: payload de insert montado pelo app (mesmo do caminho cartão). */
+      shipment_draft?: Record<string, unknown>;
     };
 
     const entityType = (body.entity_type ?? "").trim();
-    if (entityType !== "booking") {
+    if (entityType !== "booking" && entityType !== "shipment") {
       return jsonRes(
         { error: `entity_type '${entityType || "?"}' ainda não suportado no Pix real (fases 2+).` },
         501,
@@ -161,8 +163,11 @@ Deno.serve(async (req) => {
 
     const sid = body.scheduled_trip_id?.trim();
     const draft = body.draft;
-    if (!sid || !draft) {
+    if (entityType === "booking" && (!sid || !draft)) {
       return jsonRes({ error: "scheduled_trip_id e draft são obrigatórios." }, 400);
+    }
+    if (entityType === "shipment" && !body.shipment_draft) {
+      return jsonRes({ error: "shipment_draft é obrigatório." }, 400);
     }
 
     const admin = createClient(supabaseUrl, serviceRoleKey);
@@ -205,6 +210,152 @@ Deno.serve(async (req) => {
       if (cpfErr) console.warn("[create-pix-charge] persistência de CPF falhou:", cpfErr.message);
     } else {
       return jsonRes({ error: "cpf_required" }, 422);
+    }
+
+    // ══ ENCOMENDA (shipment) ══════════════════════════════════════════
+    // Diferente da viagem, o preço da encomenda é calculado no app (a cotação
+    // depende de rota/base/distância e vive em shipmentQuote.ts). O caminho do
+    // CARTÃO já funciona assim — o app insere a encomenda e o charge-shipments
+    // apenas lê o amount_cents da linha. Aqui seguimos a MESMA forma, com uma
+    // diferença importante: quem insere é o servidor, para que a encomenda já
+    // nasça com pix_charge_id e o gatilho de fila não a oferte antes do
+    // pagamento (portão instalado na migration shipment_pix_real_queue_gate).
+    if (entityType === "shipment") {
+      const d = body.shipment_draft as Record<string, unknown>;
+      const amountCents = Math.floor(Number(d.amount_cents ?? 0));
+      if (!Number.isInteger(amountCents) || amountCents < 1) {
+        return jsonRes({ error: "Valor da encomenda inválido." }, 400);
+      }
+
+      // Limite de cobranças pendentes por usuário (mesmo teto da viagem).
+      const nowIsoShip = new Date().toISOString();
+      const { data: pendingShip } = await admin
+        .from("pix_charges")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("status", "pending")
+        .gt("expires_at", nowIsoShip);
+      if (Array.isArray(pendingShip) && pendingShip.length >= MAX_PENDING_CHARGES_PER_USER) {
+        return jsonRes(
+          { error: "Você já tem cobranças Pix pendentes demais. Pague ou aguarde expirarem." },
+          429,
+        );
+      }
+
+      // Whitelist: o app manda o payload inteiro, mas só estes campos entram.
+      // Sem isto um cliente poderia se autoatribuir driver_id, admin_approved_at
+      // ou driver_offer_index e furar a fila de ofertas.
+      const ALLOWED_SHIPMENT_FIELDS = [
+        "origin_address", "origin_lat", "origin_lng", "origin_city",
+        "destination_address", "destination_lat", "destination_lng",
+        "client_preferred_driver_id", "scheduled_trip_id", "base_id",
+        "when_option", "scheduled_at", "package_size",
+        "recipient_name", "recipient_email", "recipient_phone", "instructions",
+        "photo_url", "photo_paths",
+        "pricing_route_id", "price_route_base_cents", "pricing_subtotal_cents",
+        "pricing_surcharges_cents", "platform_fee_cents", "promo_discount_cents",
+        "promo_gain_cents", "worker_earning_cents", "admin_earning_cents",
+        "admin_pct_applied", "promotion_id", "promo_worker_route_id",
+        "preparer_payout_cents", "preparer_id", "amount_cents",
+      ];
+      const shipmentRow: Record<string, unknown> = {};
+      for (const k of ALLOWED_SHIPMENT_FIELDS) {
+        if (d[k] !== undefined) shipmentRow[k] = d[k];
+      }
+
+      const rawStatus = String(d.status ?? "confirmed");
+      const status = rawStatus === "pending_review" ? "pending_review" : "confirmed";
+
+      const shipmentId = crypto.randomUUID();
+      const ttlShip = setting.charge_ttl_minutes;
+      const expiresAtShip = new Date(Date.now() + ttlShip * 60 * 1000).toISOString();
+
+      const { data: chargeIns, error: chargeErrShip } = await admin
+        .from("pix_charges")
+        .insert({
+          provider: provider.name,
+          provider_env: provider.env,
+          provider_charge_id: null,
+          entity_type: "shipment",
+          entity_id: shipmentId,
+          user_id: userId,
+          expected_amount_cents: amountCents,
+          status: "pending",
+          expires_at: expiresAtShip,
+        } as never)
+        .select("id")
+        .single();
+      if (chargeErrShip || !chargeIns?.id) {
+        console.error("[create-pix-charge] insert pix_charges (shipment):", chargeErrShip?.message);
+        return jsonRes({ error: "Não foi possível iniciar a cobrança Pix." }, 500);
+      }
+      const chargeIdShip = chargeIns.id as string;
+
+      const { error: shipInsErr } = await admin.from("shipments").insert({
+        ...shipmentRow,
+        id: shipmentId,
+        user_id: userId,
+        payment_method: "pix",
+        status,
+        pix_charge_id: chargeIdShip,
+      } as never);
+      if (shipInsErr) {
+        await markChargeCreateFailed(admin, chargeIdShip, `insert shipment: ${shipInsErr.message}`);
+        console.error("[create-pix-charge] insert shipment:", shipInsErr.message);
+        return jsonRes({ error: "Não foi possível registrar a encomenda." }, 500);
+      }
+
+      const customerNameShip = ((profile?.full_name as string | null) ?? "").trim() || "Cliente Take Me";
+      let createdShip;
+      try {
+        createdShip = await provider.createCharge({
+          internalId: chargeIdShip,
+          userId,
+          amountCents,
+          cpfDigits,
+          customerName: customerNameShip,
+          description: "Take Me — envio de encomenda",
+        });
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        console.error("[create-pix-charge] provedor falhou (shipment):", reason);
+        // Mesma ordem da viagem: cancela o pedido ANTES de marcar a charge, para
+        // que um crash no meio deixe a charge 'pending' e o cron resgate.
+        const cancelIso = new Date().toISOString();
+        const { error: cancelErr } = await admin
+          .from("shipments")
+          .update({
+            status: "cancelled",
+            cancellation_reason: "pix_create_failed",
+            updated_at: cancelIso,
+          } as never)
+          .eq("id", shipmentId);
+        if (cancelErr) console.error("[create-pix-charge] cancel shipment:", cancelErr.message);
+        await markChargeCreateFailed(admin, chargeIdShip, reason);
+        return jsonRes({ error: "Provedor Pix indisponível no momento. Tente novamente." }, 502);
+      }
+
+      const { error: qrErrShip } = await admin
+        .from("pix_charges")
+        .update({
+          provider_charge_id: createdShip.providerChargeId,
+          qr_payload: createdShip.qrPayload,
+          qr_image_base64: createdShip.qrImageBase64,
+          updated_at: new Date().toISOString(),
+        } as never)
+        .eq("id", chargeIdShip);
+      if (qrErrShip) console.error("[create-pix-charge] update QR (shipment):", qrErrShip.message);
+
+      return jsonRes({
+        ok: true,
+        pix_charge_id: chargeIdShip,
+        entity_type: "shipment",
+        entity_id: shipmentId,
+        amount_cents: amountCents,
+        qr_payload: createdShip.qrPayload,
+        qr_image_base64: createdShip.qrImageBase64,
+        expires_at: expiresAtShip,
+      });
     }
 
     // ── 3a) Já tem reserva ativa nesta viagem? ──

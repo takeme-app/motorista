@@ -27,18 +27,23 @@ import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Text } from '../../components/Text';
 import type {
+  ShipmentStackParamList,
   TripStackParamList,
   PaymentConfirmedBookingParam,
   TripLiveDriverDisplay,
   TripPixSuccessNavParam,
 } from '../../navigation/types';
 import { supabase } from '../../lib/supabase';
+import { formatShipmentCode } from '@take-me/shared';
 import { createPixCharge, getPixChargeStatus, type PixChargeCreated } from '../../lib/pixCharge';
 import { setPendingPixCharge, clearPendingPixCharge } from '../../lib/pixChargeStorage';
 import { invalidatePixProviderModeCache } from '../../lib/pixProviderConfig';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 
-type Props = NativeStackScreenProps<TripStackParamList, 'PixPayment'>;
+// A tela é registrada nas DUAS stacks (viagem e encomenda) e precisa navegar
+// para destinos de ambas. O param list combinado expressa isso sem cast.
+type PixPaymentParamList = TripStackParamList & Pick<ShipmentStackParamList, 'ShipmentSuccess'>;
+type Props = NativeStackScreenProps<PixPaymentParamList, 'PixPayment'>;
 
 // Visual alinhado à PixPaliativoScreen (mesma paleta/ritmo de tela).
 const COLORS = {
@@ -75,9 +80,13 @@ export function PixPaymentScreen({ navigation, route }: Props) {
   const params = route.params;
   const isResume = 'resume' in params && params.resume === true;
   const draftParams = isResume ? null : params;
-  const successNav: TripPixSuccessNavParam = isResume
+  const isShipment = !isResume && params.service === 'shipment';
+  const shipmentSuccessParams = !isResume && params.service === 'shipment' ? params.shipmentSuccess : null;
+  // Encomenda não tem successNav (a tela de sucesso é outra); o objeto vazio
+  // mantém o resto do componente sem ramificações espalhadas.
+  const successNav: TripPixSuccessNavParam = (isResume
     ? params.stored.successNav
-    : params.successNav;
+    : params.successNav) ?? ({} as TripPixSuccessNavParam);
 
   const { showAlert } = useAppAlert();
 
@@ -145,6 +154,17 @@ export function PixPaymentScreen({ navigation, route }: Props) {
         origin: successNav.origin,
         destination: successNav.destination,
       };
+      if (isShipment) {
+        // Encomenda tem tela de sucesso própria; o id do servidor é o da
+        // encomenda criada junto com a cobrança.
+        navigation.replace('ShipmentSuccess', {
+          orderId: bookingId ? formatShipmentCode(bookingId) : '----',
+          shipmentId: bookingId || undefined,
+          isLargePackage: shipmentSuccessParams?.isLargePackage ?? false,
+          paymentProcessed: true,
+        });
+        return;
+      }
       navigation.replace('PaymentConfirmed', {
         booking,
         immediateTrip: successNav.immediateTrip,
@@ -152,7 +172,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
         paymentMethod: 'pix',
       });
     },
-    [charge, amountCents, navigation, successNav],
+    [charge, amountCents, navigation, successNav, isShipment, shipmentSuccessParams],
   );
 
   /** Consulta o status (polling/realtime/manual) e aplica a transição adequada. */
@@ -230,11 +250,19 @@ export function PixPaymentScreen({ navigation, route }: Props) {
         setState('create_error');
         return;
       }
-      const res = await createPixCharge({
-        service: draftParams.service,
-        cpf: draftParams.cpf,
-        draft: draftParams.draft,
-      });
+      const res = await createPixCharge(
+        draftParams.service === 'shipment'
+          ? {
+              service: 'shipment',
+              cpf: draftParams.cpf,
+              shipmentDraft: draftParams.shipmentDraft,
+            }
+          : {
+              service: 'booking',
+              cpf: draftParams.cpf,
+              draft: draftParams.draft,
+            },
+      );
       if (!res.ok) {
         if (res.code === 'palliative_mode') {
           // Flag mudou para paliativo entre a leitura e a criação: invalida o
@@ -263,9 +291,13 @@ export function PixPaymentScreen({ navigation, route }: Props) {
       setQrImageFailed(false);
       setNowMs(Date.now());
       setState('awaiting');
+      // Retomada ("você tem um Pix pendente") é só de viagem por enquanto. Para
+      // encomenda, fechar o app no meio deixa o QR expirar em 15 min — o cron
+      // cancela a encomenda e nada fica pago sem pedido.
+      if (draftParams.service === 'booking') {
       await setPendingPixCharge({
         userId: user.id,
-        service: draftParams.service,
+        service: 'booking',
         pixChargeId: res.charge.pixChargeId,
         entityId: res.charge.entityId,
         amountCents: res.charge.amountCents,
@@ -275,6 +307,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
         createdAt: new Date().toISOString(),
         successNav,
       });
+      }
     } finally {
       creatingRef.current = false;
     }
