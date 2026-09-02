@@ -398,7 +398,16 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
         // Pix REAL: não insere o envio aqui. O create-pix-charge insere no
         // servidor já ancorado na cobrança, para o motorista da viagem não ser
         // notificado antes do pagamento. Espelha a encomenda.
-        if (params.method === 'pix' && pixProviderMode !== 'palliative') {
+        // Modo do Pix RELIDO aqui (cache 30s), NUNCA o estado da tela: o
+        // useCallback congela o valor do closure e a leitura da montagem é
+        // assíncrona, então o estado pode estar em 'palliative' enquanto a tela
+        // já mostra o campo de CPF do modo real. Confirmar nessa janela mandava o
+        // pedido para o fluxo paliativo, que o cria SEM cobrar — o bug de
+        // 02/09/2026. A viagem já lia assim; agora os quatro fluxos leem igual.
+        const pixModeNow = params.method === 'pix' ? await fetchPixProviderMode() : null;
+        if (pixModeNow) setPixProviderMode(pixModeNow);
+
+        if (pixModeNow != null && pixModeNow !== 'palliative') {
           const collectedCpf = onlyDigits(params.holderCpfDigits ?? '');
           if (!validateCpf(collectedCpf)) {
             // Não navega sem CPF: o servidor devolveria 422 e o usuário voltaria
@@ -527,7 +536,6 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
       }
     },
     [
-      pixProviderMode,
       dependentId,
       fullName,
       contactPhone,
