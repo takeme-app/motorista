@@ -61,13 +61,15 @@ async function expireCharge(
     return;
   }
 
-  // Encomenda: cancela para não ficar pedido não pago em aberto. O gatilho de
-  // fila nunca chegou a ofertá-la (portão do pix_paid_at), então não há oferta
-  // pendente a desfazer. Guard em pix_paid_at IS NULL: se o pagamento entrou no
-  // meio do caminho, não cancela.
-  if (charge.entity_type === "shipment") {
-    const { error: cancelShipErr } = await admin
-      .from("shipments")
+  // Encomenda e envio de dependente: cancela para não ficar pedido não pago em
+  // aberto. O motorista nunca chegou a ser acionado (portão do pix_paid_at:
+  // fila de ofertas na encomenda, notificação no dependente), então não há nada
+  // a desfazer do lado dele. Guard em pix_paid_at IS NULL: se o pagamento
+  // entrou no meio do caminho, não cancela.
+  if (charge.entity_type === "shipment" || charge.entity_type === "dependent_shipment") {
+    const table = charge.entity_type === "shipment" ? "shipments" : "dependent_shipments";
+    const { error: cancelAppErr } = await admin
+      .from(table)
       .update({
         status: "cancelled",
         cancellation_reason: "pix_expired",
@@ -75,8 +77,11 @@ async function expireCharge(
       } as never)
       .eq("id", charge.entity_id)
       .is("pix_paid_at", null);
-    if (cancelShipErr) {
-      console.error(`[expire-pix-charges] cancel shipment ${charge.entity_id}:`, cancelShipErr.message);
+    if (cancelAppErr) {
+      console.error(
+        `[expire-pix-charges] cancel ${table} ${charge.entity_id}:`,
+        cancelAppErr.message,
+      );
     }
   }
 

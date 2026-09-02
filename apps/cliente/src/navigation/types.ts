@@ -165,6 +165,7 @@ export type DependentShipmentFormParams = {
 
 export type DependentShipmentStackParamList = {
   PixPaliativo: { requestId: string };
+  PixPayment: PixPaymentScreenParams;
   DependentShipmentForm: undefined;
   AddDependent: undefined;
   DependentSuccess: undefined;
@@ -329,6 +330,7 @@ export type PixPaymentScreenParams =
       estimatedAmountCents: number;
       successNav: TripPixSuccessNavParam;
       shipmentSuccess?: undefined;
+      dependentSuccess?: undefined;
       resume?: undefined;
     }
   | {
@@ -340,6 +342,21 @@ export type PixPaymentScreenParams =
       cpf?: string;
       estimatedAmountCents: number;
       shipmentSuccess: { isLargePackage: boolean };
+      dependentSuccess?: undefined;
+      successNav?: undefined;
+      draft?: undefined;
+      resume?: undefined;
+    }
+  | {
+      // Envio de dependente: mesma forma da encomenda — o servidor insere a
+      // linha ancorada na cobrança e o motorista da viagem só é notificado
+      // quando o pagamento entra.
+      service: 'dependent_shipment';
+      dependentDraft: Record<string, unknown>;
+      cpf?: string;
+      estimatedAmountCents: number;
+      dependentSuccess: true;
+      shipmentSuccess?: undefined;
       successNav?: undefined;
       draft?: undefined;
       resume?: undefined;

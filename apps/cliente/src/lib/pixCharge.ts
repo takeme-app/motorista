@@ -145,7 +145,9 @@ export async function createPixCharge(
     // Encomenda: o preço vem da cotação do app (shipmentQuote), como no cartão.
     // Mandamos o payload de insert e o servidor cria a encomenda já ancorada na
     // cobrança, para o gatilho de fila não ofertá-la antes do pagamento.
-    | { service: 'shipment'; cpf?: string; shipmentDraft: Record<string, unknown> },
+    | { service: 'shipment'; cpf?: string; shipmentDraft: Record<string, unknown> }
+    // Envio de dependente: idem encomenda.
+    | { service: 'dependent_shipment'; cpf?: string; dependentDraft: Record<string, unknown> },
 ): Promise<CreatePixChargeResult> {
   try {
     const token = await getAccessToken();
@@ -155,6 +157,8 @@ export async function createPixCharge(
     const payload =
       input.service === 'shipment'
         ? { entity_type: 'shipment', shipment_draft: input.shipmentDraft }
+        : input.service === 'dependent_shipment'
+        ? { entity_type: 'dependent_shipment', dependent_draft: input.dependentDraft }
         : (() => {
             const { scheduled_trip_id, ...draftRest } = input.draft;
             return { entity_type: 'booking', scheduled_trip_id, draft: draftRest };

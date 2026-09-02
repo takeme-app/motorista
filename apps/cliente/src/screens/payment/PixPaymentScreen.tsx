@@ -28,6 +28,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Text } from '../../components/Text';
 import type {
   ShipmentStackParamList,
+  DependentShipmentStackParamList,
   TripStackParamList,
   PaymentConfirmedBookingParam,
   TripLiveDriverDisplay,
@@ -42,7 +43,9 @@ import { useAppAlert } from '../../contexts/AppAlertContext';
 
 // A tela é registrada nas DUAS stacks (viagem e encomenda) e precisa navegar
 // para destinos de ambas. O param list combinado expressa isso sem cast.
-type PixPaymentParamList = TripStackParamList & Pick<ShipmentStackParamList, 'ShipmentSuccess'>;
+type PixPaymentParamList = TripStackParamList &
+  Pick<ShipmentStackParamList, 'ShipmentSuccess'> &
+  Pick<DependentShipmentStackParamList, 'DependentShipmentSuccess'>;
 type Props = NativeStackScreenProps<PixPaymentParamList, 'PixPayment'>;
 
 // Visual alinhado à PixPaliativoScreen (mesma paleta/ritmo de tela).
@@ -81,6 +84,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
   const isResume = 'resume' in params && params.resume === true;
   const draftParams = isResume ? null : params;
   const isShipment = !isResume && params.service === 'shipment';
+  const isDependentShipment = !isResume && params.service === 'dependent_shipment';
   const shipmentSuccessParams = !isResume && params.service === 'shipment' ? params.shipmentSuccess : null;
   // Encomenda não tem successNav (a tela de sucesso é outra); o objeto vazio
   // mantém o resto do componente sem ramificações espalhadas.
@@ -165,6 +169,14 @@ export function PixPaymentScreen({ navigation, route }: Props) {
         });
         return;
       }
+      if (isDependentShipment) {
+        // Envio de dependente também tem tela de sucesso própria.
+        navigation.replace('DependentShipmentSuccess', {
+          orderId: bookingId ? formatShipmentCode(bookingId) : '----',
+          shipmentId: bookingId || undefined,
+        });
+        return;
+      }
       navigation.replace('PaymentConfirmed', {
         booking,
         immediateTrip: successNav.immediateTrip,
@@ -172,7 +184,15 @@ export function PixPaymentScreen({ navigation, route }: Props) {
         paymentMethod: 'pix',
       });
     },
-    [charge, amountCents, navigation, successNav, isShipment, shipmentSuccessParams],
+    [
+      charge,
+      amountCents,
+      navigation,
+      successNav,
+      isShipment,
+      shipmentSuccessParams,
+      isDependentShipment,
+    ],
   );
 
   /** Consulta o status (polling/realtime/manual) e aplica a transição adequada. */
@@ -257,11 +277,17 @@ export function PixPaymentScreen({ navigation, route }: Props) {
               cpf: draftParams.cpf,
               shipmentDraft: draftParams.shipmentDraft,
             }
-          : {
-              service: 'booking',
-              cpf: draftParams.cpf,
-              draft: draftParams.draft,
-            },
+          : draftParams.service === 'dependent_shipment'
+            ? {
+                service: 'dependent_shipment',
+                cpf: draftParams.cpf,
+                dependentDraft: draftParams.dependentDraft,
+              }
+            : {
+                service: 'booking',
+                cpf: draftParams.cpf,
+                draft: draftParams.draft,
+              },
       );
       if (!res.ok) {
         if (res.code === 'palliative_mode') {
@@ -291,9 +317,9 @@ export function PixPaymentScreen({ navigation, route }: Props) {
       setQrImageFailed(false);
       setNowMs(Date.now());
       setState('awaiting');
-      // Retomada ("você tem um Pix pendente") é só de viagem por enquanto. Para
-      // encomenda, fechar o app no meio deixa o QR expirar em 15 min — o cron
-      // cancela a encomenda e nada fica pago sem pedido.
+      // Retomada ("você tem um Pix pendente") é só de viagem por enquanto. Na
+      // encomenda e no envio de dependente, fechar o app no meio deixa o QR
+      // expirar em 15 min — o cron cancela o pedido e nada fica pago sem pedido.
       if (draftParams.service === 'booking') {
       await setPendingPixCharge({
         userId: user.id,

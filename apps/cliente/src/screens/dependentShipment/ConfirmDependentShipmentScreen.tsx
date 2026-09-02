@@ -31,6 +31,8 @@ import { fetchDriverStripeChargesEnabled } from '../../lib/driverStripeConnect';
 import { fetchPlatformFeePctForService } from '../../lib/platformFees';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
+import { fetchPixProviderMode, type PixProviderMode } from '../../lib/pixProviderConfig';
+import { validateCpf, onlyDigits } from '../../utils/formatCpf';
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'ConfirmDependentShipment'>;
 
@@ -108,6 +110,12 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
     photoUris,
   } = route.params;
   const driver = route.params.driver;
+  // Modo do Pix: 'palliative' mantém o QR estático de sempre; provedor real
+  // manda para a PixPaymentScreen (cobrança única com confirmação automática).
+  const [pixProviderMode, setPixProviderMode] = useState<PixProviderMode>('palliative');
+  useEffect(() => {
+    void fetchPixProviderMode().then(setPixProviderMode);
+  }, []);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('dinheiro');
   const [submitting, setSubmitting] = useState(false);
   /** Stripe Connect (`charges_enabled`): só então cartão/Pix ficam disponíveis. */
@@ -387,6 +395,33 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           photo_paths: uploadedPaths,
         };
 
+        // Pix REAL: não insere o envio aqui. O create-pix-charge insere no
+        // servidor já ancorado na cobrança, para o motorista da viagem não ser
+        // notificado antes do pagamento. Espelha a encomenda.
+        if (params.method === 'pix' && pixProviderMode !== 'palliative') {
+          const collectedCpf = onlyDigits(params.holderCpfDigits ?? '');
+          if (!validateCpf(collectedCpf)) {
+            // Não navega sem CPF: o servidor devolveria 422 e o usuário voltaria
+            // para cá. O campo inline já está visível (pixCpfRequired).
+            showAlert(
+              'CPF necessário',
+              'O pagamento por Pix exige CPF. Informe seu CPF no campo da opção Pix e confirme novamente.',
+            );
+            setSubmitting(false);
+            return;
+          }
+          navigation.navigate('PixPayment', {
+            service: 'dependent_shipment',
+            cpf: collectedCpf,
+            dependentDraft: dependentInsertPayload as unknown as Record<string, unknown>,
+            estimatedAmountCents: Number(
+              (pricingFields as { amount_cents?: number }).amount_cents ?? amountCents,
+            ),
+            dependentSuccess: true,
+          });
+          return;
+        }
+
         // Pix paliativo: cria o envio do dependente só aos 40s (na tela de Pix).
         if (params.method === 'pix') {
           let pixDepId = '';
@@ -492,6 +527,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
       }
     },
     [
+      pixProviderMode,
       dependentId,
       fullName,
       contactPhone,
@@ -583,6 +619,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           allowedMethods={allowedPaymentMethods}
           cashInstructionVariant="dependent_shipment"
           connectCashOnlyContext="dependent_shipment"
+          pixCpfRequired={pixProviderMode !== 'palliative'}
         />
       </ScrollView>
     </View>

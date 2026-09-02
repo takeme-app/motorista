@@ -151,10 +151,16 @@ Deno.serve(async (req) => {
       draft?: DraftBookingBody;
       /** Encomenda: payload de insert montado pelo app (mesmo do caminho cartão). */
       shipment_draft?: Record<string, unknown>;
+      /** Envio de dependente: idem (o preço também é do app). */
+      dependent_draft?: Record<string, unknown>;
     };
 
     const entityType = (body.entity_type ?? "").trim();
-    if (entityType !== "booking" && entityType !== "shipment") {
+    if (
+      entityType !== "booking" &&
+      entityType !== "shipment" &&
+      entityType !== "dependent_shipment"
+    ) {
       return jsonRes(
         { error: `entity_type '${entityType || "?"}' ainda não suportado no Pix real (fases 2+).` },
         501,
@@ -168,6 +174,9 @@ Deno.serve(async (req) => {
     }
     if (entityType === "shipment" && !body.shipment_draft) {
       return jsonRes({ error: "shipment_draft é obrigatório." }, 400);
+    }
+    if (entityType === "dependent_shipment" && !body.dependent_draft) {
+      return jsonRes({ error: "dependent_draft é obrigatório." }, 400);
     }
 
     const admin = createClient(supabaseUrl, serviceRoleKey);
@@ -212,149 +221,190 @@ Deno.serve(async (req) => {
       return jsonRes({ error: "cpf_required" }, 422);
     }
 
-    // ══ ENCOMENDA (shipment) ══════════════════════════════════════════
-    // Diferente da viagem, o preço da encomenda é calculado no app (a cotação
-    // depende de rota/base/distância e vive em shipmentQuote.ts). O caminho do
-    // CARTÃO já funciona assim — o app insere a encomenda e o charge-shipments
-    // apenas lê o amount_cents da linha. Aqui seguimos a MESMA forma, com uma
-    // diferença importante: quem insere é o servidor, para que a encomenda já
-    // nasça com pix_charge_id e o gatilho de fila não a oferte antes do
-    // pagamento (portão instalado na migration shipment_pix_real_queue_gate).
-    if (entityType === "shipment") {
-      const d = body.shipment_draft as Record<string, unknown>;
+    // ══ ENCOMENDA e ENVIO DE DEPENDENTE ═══════════════════════════════
+    // Diferente da viagem, o preço destes dois é calculado no app (depende de
+    // rota/base/distância e vive em shipmentQuote.ts / dependentPricing). O
+    // caminho do CARTÃO já funciona assim — o app insere a linha e a função de
+    // cobrança apenas lê o amount_cents dela. Aqui seguimos a MESMA forma, com
+    // uma diferença importante: quem insere é o SERVIDOR, para que a linha já
+    // nasça com pix_charge_id e o gatilho que aciona o motorista não dispare
+    // antes do pagamento.
+    //
+    //   encomenda  → gatilho de FILA de ofertas (shipment_pix_real_queue_gate)
+    //   dependente → gatilho de NOTIFICAÇÃO do motorista da viagem escolhida
+    //                (dependent_shipment_pix_real_notify_gate)
+    //
+    // O que libera os dois é o mesmo: pix_paid_at deixar de ser nulo.
+    const PIX_APP_PRICED_ENTITIES = {
+      shipment: {
+        table: "shipments",
+        label: "a encomenda",
+        draft: body.shipment_draft,
+        description: "Take Me — envio de encomenda",
+        defaultStatus: "confirmed",
+        // Whitelist: o app manda o payload inteiro, mas só estes campos entram.
+        // Sem isto um cliente poderia se autoatribuir driver_id,
+        // admin_approved_at ou driver_offer_index e furar a fila de ofertas.
+        fields: [
+          "origin_address", "origin_lat", "origin_lng", "origin_city",
+          "destination_address", "destination_lat", "destination_lng",
+          "client_preferred_driver_id", "scheduled_trip_id", "base_id",
+          "when_option", "scheduled_at", "package_size",
+          "recipient_name", "recipient_email", "recipient_phone", "instructions",
+          "photo_url", "photo_paths",
+          "pricing_route_id", "price_route_base_cents", "pricing_subtotal_cents",
+          "pricing_surcharges_cents", "platform_fee_cents", "promo_discount_cents",
+          "promo_gain_cents", "worker_earning_cents", "admin_earning_cents",
+          "admin_pct_applied", "promotion_id", "promo_worker_route_id",
+          "preparer_payout_cents", "preparer_id", "amount_cents",
+        ],
+      },
+      dependent_shipment: {
+        table: "dependent_shipments",
+        label: "o envio do dependente",
+        draft: body.dependent_draft,
+        description: "Take Me — envio de dependente",
+        // O envio de dependente sempre nasce em análise (o motorista aceita).
+        defaultStatus: "pending_review",
+        // Mesma regra da encomenda: fora daqui, nada do app entra na linha —
+        // em especial driver_request_notified_at, que silenciaria a
+        // notificação do motorista, e stripe_payment_intent_id.
+        fields: [
+          "dependent_id", "full_name", "contact_phone", "bags_count",
+          "instructions", "receiver_name",
+          "origin_address", "origin_lat", "origin_lng",
+          "destination_address", "destination_lat", "destination_lng",
+          "when_option", "scheduled_at", "scheduled_trip_id",
+          "photo_url", "photo_paths",
+          "pricing_route_id", "price_route_base_cents", "pricing_subtotal_cents",
+          "pricing_surcharges_cents", "platform_fee_cents", "promo_discount_cents",
+          "promo_gain_cents", "worker_earning_cents", "admin_earning_cents",
+          "worker_payout_cents", "admin_pct_applied", "promotion_id",
+          "promo_worker_route_id", "amount_cents",
+        ],
+      },
+    } as const;
+
+    if (entityType === "shipment" || entityType === "dependent_shipment") {
+      const cfg = PIX_APP_PRICED_ENTITIES[entityType];
+      const d = (cfg.draft ?? {}) as Record<string, unknown>;
       const amountCents = Math.floor(Number(d.amount_cents ?? 0));
       if (!Number.isInteger(amountCents) || amountCents < 1) {
-        return jsonRes({ error: "Valor da encomenda inválido." }, 400);
+        return jsonRes({ error: `Valor inválido para ${cfg.label}.` }, 400);
       }
 
       // Limite de cobranças pendentes por usuário (mesmo teto da viagem).
-      const nowIsoShip = new Date().toISOString();
-      const { data: pendingShip } = await admin
+      const nowIsoApp = new Date().toISOString();
+      const { data: pendingApp } = await admin
         .from("pix_charges")
         .select("id")
         .eq("user_id", userId)
         .eq("status", "pending")
-        .gt("expires_at", nowIsoShip);
-      if (Array.isArray(pendingShip) && pendingShip.length >= MAX_PENDING_CHARGES_PER_USER) {
+        .gt("expires_at", nowIsoApp);
+      if (Array.isArray(pendingApp) && pendingApp.length >= MAX_PENDING_CHARGES_PER_USER) {
         return jsonRes(
           { error: "Você já tem cobranças Pix pendentes demais. Pague ou aguarde expirarem." },
           429,
         );
       }
 
-      // Whitelist: o app manda o payload inteiro, mas só estes campos entram.
-      // Sem isto um cliente poderia se autoatribuir driver_id, admin_approved_at
-      // ou driver_offer_index e furar a fila de ofertas.
-      const ALLOWED_SHIPMENT_FIELDS = [
-        "origin_address", "origin_lat", "origin_lng", "origin_city",
-        "destination_address", "destination_lat", "destination_lng",
-        "client_preferred_driver_id", "scheduled_trip_id", "base_id",
-        "when_option", "scheduled_at", "package_size",
-        "recipient_name", "recipient_email", "recipient_phone", "instructions",
-        "photo_url", "photo_paths",
-        "pricing_route_id", "price_route_base_cents", "pricing_subtotal_cents",
-        "pricing_surcharges_cents", "platform_fee_cents", "promo_discount_cents",
-        "promo_gain_cents", "worker_earning_cents", "admin_earning_cents",
-        "admin_pct_applied", "promotion_id", "promo_worker_route_id",
-        "preparer_payout_cents", "preparer_id", "amount_cents",
-      ];
-      const shipmentRow: Record<string, unknown> = {};
-      for (const k of ALLOWED_SHIPMENT_FIELDS) {
-        if (d[k] !== undefined) shipmentRow[k] = d[k];
+      const entityRow: Record<string, unknown> = {};
+      for (const k of cfg.fields) {
+        if (d[k] !== undefined) entityRow[k] = d[k];
       }
 
-      const rawStatus = String(d.status ?? "confirmed");
-      const status = rawStatus === "pending_review" ? "pending_review" : "confirmed";
+      const rawStatus = String(d.status ?? cfg.defaultStatus);
+      const status = rawStatus === "pending_review" ? "pending_review" : cfg.defaultStatus;
 
-      const shipmentId = crypto.randomUUID();
-      const ttlShip = setting.charge_ttl_minutes;
-      const expiresAtShip = new Date(Date.now() + ttlShip * 60 * 1000).toISOString();
+      const entityId = crypto.randomUUID();
+      const ttlApp = setting.charge_ttl_minutes;
+      const expiresAtApp = new Date(Date.now() + ttlApp * 60 * 1000).toISOString();
 
-      const { data: chargeIns, error: chargeErrShip } = await admin
+      const { data: chargeIns, error: chargeErrApp } = await admin
         .from("pix_charges")
         .insert({
           provider: provider.name,
           provider_env: provider.env,
           provider_charge_id: null,
-          entity_type: "shipment",
-          entity_id: shipmentId,
+          entity_type: entityType,
+          entity_id: entityId,
           user_id: userId,
           expected_amount_cents: amountCents,
           status: "pending",
-          expires_at: expiresAtShip,
+          expires_at: expiresAtApp,
         } as never)
         .select("id")
         .single();
-      if (chargeErrShip || !chargeIns?.id) {
-        console.error("[create-pix-charge] insert pix_charges (shipment):", chargeErrShip?.message);
+      if (chargeErrApp || !chargeIns?.id) {
+        console.error(`[create-pix-charge] insert pix_charges (${entityType}):`, chargeErrApp?.message);
         return jsonRes({ error: "Não foi possível iniciar a cobrança Pix." }, 500);
       }
-      const chargeIdShip = chargeIns.id as string;
+      const chargeIdApp = chargeIns.id as string;
 
-      const { error: shipInsErr } = await admin.from("shipments").insert({
-        ...shipmentRow,
-        id: shipmentId,
+      const { error: entityInsErr } = await admin.from(cfg.table).insert({
+        ...entityRow,
+        id: entityId,
         user_id: userId,
         payment_method: "pix",
         status,
-        pix_charge_id: chargeIdShip,
+        pix_charge_id: chargeIdApp,
       } as never);
-      if (shipInsErr) {
-        await markChargeCreateFailed(admin, chargeIdShip, `insert shipment: ${shipInsErr.message}`);
-        console.error("[create-pix-charge] insert shipment:", shipInsErr.message);
-        return jsonRes({ error: "Não foi possível registrar a encomenda." }, 500);
+      if (entityInsErr) {
+        await markChargeCreateFailed(admin, chargeIdApp, `insert ${cfg.table}: ${entityInsErr.message}`);
+        console.error(`[create-pix-charge] insert ${cfg.table}:`, entityInsErr.message);
+        return jsonRes({ error: `Não foi possível registrar ${cfg.label}.` }, 500);
       }
 
-      const customerNameShip = ((profile?.full_name as string | null) ?? "").trim() || "Cliente Take Me";
-      let createdShip;
+      const customerNameApp = ((profile?.full_name as string | null) ?? "").trim() || "Cliente Take Me";
+      let createdApp;
       try {
-        createdShip = await provider.createCharge({
-          internalId: chargeIdShip,
+        createdApp = await provider.createCharge({
+          internalId: chargeIdApp,
           userId,
           amountCents,
           cpfDigits,
-          customerName: customerNameShip,
-          description: "Take Me — envio de encomenda",
+          customerName: customerNameApp,
+          description: cfg.description,
         });
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
-        console.error("[create-pix-charge] provedor falhou (shipment):", reason);
+        console.error(`[create-pix-charge] provedor falhou (${entityType}):`, reason);
         // Mesma ordem da viagem: cancela o pedido ANTES de marcar a charge, para
         // que um crash no meio deixe a charge 'pending' e o cron resgate.
         const cancelIso = new Date().toISOString();
         const { error: cancelErr } = await admin
-          .from("shipments")
+          .from(cfg.table)
           .update({
             status: "cancelled",
             cancellation_reason: "pix_create_failed",
             updated_at: cancelIso,
           } as never)
-          .eq("id", shipmentId);
-        if (cancelErr) console.error("[create-pix-charge] cancel shipment:", cancelErr.message);
-        await markChargeCreateFailed(admin, chargeIdShip, reason);
+          .eq("id", entityId);
+        if (cancelErr) console.error(`[create-pix-charge] cancel ${cfg.table}:`, cancelErr.message);
+        await markChargeCreateFailed(admin, chargeIdApp, reason);
         return jsonRes({ error: "Provedor Pix indisponível no momento. Tente novamente." }, 502);
       }
 
-      const { error: qrErrShip } = await admin
+      const { error: qrErrApp } = await admin
         .from("pix_charges")
         .update({
-          provider_charge_id: createdShip.providerChargeId,
-          qr_payload: createdShip.qrPayload,
-          qr_image_base64: createdShip.qrImageBase64,
+          provider_charge_id: createdApp.providerChargeId,
+          qr_payload: createdApp.qrPayload,
+          qr_image_base64: createdApp.qrImageBase64,
           updated_at: new Date().toISOString(),
         } as never)
-        .eq("id", chargeIdShip);
-      if (qrErrShip) console.error("[create-pix-charge] update QR (shipment):", qrErrShip.message);
+        .eq("id", chargeIdApp);
+      if (qrErrApp) console.error(`[create-pix-charge] update QR (${entityType}):`, qrErrApp.message);
 
       return jsonRes({
         ok: true,
-        pix_charge_id: chargeIdShip,
-        entity_type: "shipment",
-        entity_id: shipmentId,
+        pix_charge_id: chargeIdApp,
+        entity_type: entityType,
+        entity_id: entityId,
         amount_cents: amountCents,
-        qr_payload: createdShip.qrPayload,
-        qr_image_base64: createdShip.qrImageBase64,
-        expires_at: expiresAtShip,
+        qr_payload: createdApp.qrPayload,
+        qr_image_base64: createdApp.qrImageBase64,
+        expires_at: expiresAtApp,
       });
     }
 

@@ -34,9 +34,10 @@ export type PromoteResult = { promoted: boolean };
 
 /**
  * Promove a entidade após a liquidação da cobrança Pix.
- * Fase 1: bookings pending→paid espelhando o stripe-webhook (guard idempotente
- * `.eq('status','pending')`) + pix_paid_at. Demais tipos lançam
- * UnsupportedEntityError — o chamador registra na fila + log.
+ * bookings: pending→paid espelhando o stripe-webhook (guard idempotente
+ * `.eq('status','pending')`) + pix_paid_at. shipments e dependent_shipments:
+ * só pix_paid_at (o status já é o final; o portão está nos gatilhos).
+ * excursion ainda lança UnsupportedEntityError — o chamador registra na fila.
  */
 export async function promoteEntityPaid(
   admin: SupabaseClient,
@@ -82,6 +83,29 @@ export async function promoteEntityPaid(
     return { promoted: Array.isArray(data) && data.length > 0 };
   }
 
-  // dependent_shipment / excursion: fases seguintes.
+  if (entityType === "dependent_shipment") {
+    // Como a encomenda, o envio de dependente já nasce com o status final
+    // ('pending_review') — o que o segurava era o portão do gatilho de
+    // notificação, que não avisa o motorista enquanto pix_paid_at for nulo.
+    // Marcar o pagamento é, portanto, o que dispara a notificação: o próprio
+    // gatilho reavalia no UPDATE (migration
+    // dependent_shipment_pix_real_notify_gate).
+    //
+    // Guard idempotente em pix_paid_at IS NULL: webhook e polling podem chegar
+    // juntos, e notificar duas vezes encheria o motorista de push repetido.
+    const { data, error } = await admin
+      .from("dependent_shipments")
+      .update({
+        pix_paid_at: paidAtIso,
+        updated_at: new Date().toISOString(),
+      } as never)
+      .eq("id", entityId)
+      .is("pix_paid_at", null)
+      .select("id");
+    if (error) throw new Error(`promoção do envio de dependente falhou: ${error.message}`);
+    return { promoted: Array.isArray(data) && data.length > 0 };
+  }
+
+  // excursion: fase seguinte.
   throw new UnsupportedEntityError(entityType);
 }
