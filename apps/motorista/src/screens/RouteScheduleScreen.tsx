@@ -20,6 +20,7 @@ import { Text } from '../components/Text';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useBottomSafeInset } from '@take-me/shared';
+import { getUserErrorMessage } from '../utils/errorMessage';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -293,21 +294,36 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
         // viagens vencidas, o admin). Quem manda sobre o que religar é o banco.
         const { data: dbDayRows, error: fetchErr } = await supabase
           .from('scheduled_trips')
-          .select('id, departure_time, arrival_time')
+          .select('id, departure_time, arrival_time, departure_at, arrival_at')
           .eq('route_id', routeId)
           .eq('day_of_week', dayNum)
-          .in('status', ['active', 'scheduled']);
+          .in('status', ['active', 'scheduled'])
+          .order('departure_at', { ascending: true });
         if (fetchErr) throw fetchErr;
-        const seenTimes = new Set<string>();
-        const rowsToEnable: { id: string; dep: string; arr: string }[] = [];
-        for (const t of (dbDayRows ?? []) as unknown as { id: string; departure_time: string | null; arrival_time: string | null }[]) {
+        // Religa TODAS as ocorrências do dia, não uma só: desligar apagou todas,
+        // e religar apenas uma fazia o cronograma perder as semanas seguintes.
+        // A tela continua mostrando um card por horário (dayTrips deduplica).
+        const rowsToEnable: {
+          id: string;
+          dep: string;
+          arr: string;
+          departureAtMs: number;
+        }[] = [];
+        for (const t of (dbDayRows ?? []) as unknown as {
+          id: string;
+          departure_time: string | null;
+          arrival_time: string | null;
+          departure_at: string | null;
+        }[]) {
           const dep = normalizeRouteTimeForSchedule(t.departure_time);
           const arr = normalizeRouteTimeForSchedule(t.arrival_time);
           if (!dep || !arr) continue;
-          const key = `${dep}|${arr}`;
-          if (seenTimes.has(key)) continue; // dedup por horário
-          seenTimes.add(key);
-          rowsToEnable.push({ id: t.id, dep, arr });
+          rowsToEnable.push({
+            id: t.id,
+            dep,
+            arr,
+            departureAtMs: t.departure_at ? Date.parse(t.departure_at) : Number.NaN,
+          });
         }
         if (rowsToEnable.length === 0) {
           const hadRows = (dbDayRows ?? []).length > 0;
@@ -342,27 +358,52 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
           },
         );
 
+        // Existe um índice único parcial em (driver_id, route_id, departure_at)
+        // WHERE status='active'. Como o dia tem VÁRIAS ocorrências semanais
+        // (07/09, 14/09, 21/09…), reescrever a data de uma delas para "a próxima
+        // ocorrência" batia na data de outra e o religar morria com violação de
+        // chave única — o "Não foi possível atualizar o cronograma".
+        //
+        // Ocorrência com data ainda no futuro mantém a data que já tem: não há
+        // o que recalcular. Só as vencidas são remarcadas, avançando semana a
+        // semana até cair numa data livre.
+        const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+        const nowMs = Date.now();
+        const takenMs = new Set<number>();
         for (const row of rowsToEnable) {
-          const { departureAt, arrivalAt } = computeNextDepartureArrivalFromWeekday(
-            dayNum,
-            row.dep,
-            row.arr,
-          );
+          if (Number.isFinite(row.departureAtMs) && row.departureAtMs > nowMs) {
+            takenMs.add(row.departureAtMs);
+          }
+        }
+
+        for (const row of rowsToEnable) {
+          const keepsDate = Number.isFinite(row.departureAtMs) && row.departureAtMs > nowMs;
+          const patch: Record<string, unknown> = {
+            is_active: true,
+            status: 'active',
+            origin_lat: geo.origin_lat,
+            origin_lng: geo.origin_lng,
+            destination_lat: geo.destination_lat,
+            destination_lng: geo.destination_lng,
+            updated_at: new Date().toISOString(),
+          };
+          if (!keepsDate) {
+            let { departureAt, arrivalAt } = computeNextDepartureArrivalFromWeekday(
+              dayNum,
+              row.dep,
+              row.arr,
+            );
+            while (takenMs.has(departureAt.getTime())) {
+              departureAt = new Date(departureAt.getTime() + WEEK_MS);
+              arrivalAt = new Date(arrivalAt.getTime() + WEEK_MS);
+            }
+            takenMs.add(departureAt.getTime());
+            patch.departure_at = departureAt.toISOString();
+            patch.arrival_at = arrivalAt.toISOString();
+          }
           const { error } = await supabase
             .from('scheduled_trips')
-            .update(
-              {
-                is_active: true,
-                status: 'active',
-                departure_at: departureAt.toISOString(),
-                arrival_at: arrivalAt.toISOString(),
-                origin_lat: geo.origin_lat,
-                origin_lng: geo.origin_lng,
-                destination_lat: geo.destination_lat,
-                destination_lng: geo.destination_lng,
-                updated_at: new Date().toISOString(),
-              } as never,
-            )
+            .update(patch as never)
             .eq('id', row.id);
           if (error) throw error;
         }
@@ -383,8 +424,12 @@ export function RouteScheduleScreen({ navigation, route }: Props) {
           .neq('status', 'cancelled');
         if (error) throw error;
       }
-    } catch {
-      showAlert('Erro', 'Não foi possível atualizar o cronograma.');
+    } catch (e) {
+      // O catch era vazio: engolia a causa e mostrava só "Não foi possível
+      // atualizar o cronograma", o que custou um print e uma investigação no
+      // banco para descobrir que era violação de chave única.
+      console.warn('[RouteScheduleScreen] toggleDay', e);
+      showAlert('Erro', getUserErrorMessage(e, 'Não foi possível atualizar o cronograma.'));
     }
     // Recarrega AINDA com o dia travado, para o retrato final não brigar com a
     // chave; só então devolve o controle ao que veio do banco.
