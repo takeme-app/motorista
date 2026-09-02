@@ -331,6 +331,7 @@ export type PixPaymentScreenParams =
       successNav: TripPixSuccessNavParam;
       shipmentSuccess?: undefined;
       dependentSuccess?: undefined;
+      excursionSuccess?: undefined;
       resume?: undefined;
     }
   | {
@@ -343,6 +344,7 @@ export type PixPaymentScreenParams =
       estimatedAmountCents: number;
       shipmentSuccess: { isLargePackage: boolean };
       dependentSuccess?: undefined;
+      excursionSuccess?: undefined;
       successNav?: undefined;
       draft?: undefined;
       resume?: undefined;
@@ -356,6 +358,21 @@ export type PixPaymentScreenParams =
       cpf?: string;
       estimatedAmountCents: number;
       dependentSuccess: true;
+      excursionSuccess?: undefined;
+      shipmentSuccess?: undefined;
+      successNav?: undefined;
+      draft?: undefined;
+      resume?: undefined;
+    }
+  | {
+      // Excursão: o orçamento JÁ existe (status 'quoted'); o servidor só anexa
+      // a cobrança e o pagamento é que aprova. Por isso vai o id, não um draft.
+      service: 'excursion';
+      excursionRequestId: string;
+      cpf?: string;
+      estimatedAmountCents: number;
+      excursionSuccess: true;
+      dependentSuccess?: undefined;
       shipmentSuccess?: undefined;
       successNav?: undefined;
       draft?: undefined;

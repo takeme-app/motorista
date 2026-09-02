@@ -1,4 +1,4 @@
-import type { TripFollowStackParamList } from './types';
+import type { PixPaymentScreenParams, TripFollowStackParamList } from './types';
 
 /** Parâmetros da tela de chat (Atividades ou Perfil). */
 export type ClientChatRouteParams = {
@@ -15,6 +15,8 @@ export type ClientChatRouteParams = {
 
 type ActivitiesOnlyParamList = {
   PixPaliativo: { requestId: string };
+  /** Pix REAL (gestor de provedores) — usado hoje pelo pagamento de excursão. */
+  PixPayment: PixPaymentScreenParams;
   ActivitiesList: undefined;
   TravelHistory: undefined;
   TripDetail: { bookingId: string };

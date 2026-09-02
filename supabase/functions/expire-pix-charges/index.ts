@@ -85,6 +85,25 @@ async function expireCharge(
     }
   }
 
+  // Excursão: o orçamento EXISTIA antes da cobrança (o cliente pediu, o
+  // preparador orçou). Expirar o Pix não pode cancelar o orçamento — só
+  // desanexa a cobrança para o cliente poder gerar outra. O status segue
+  // 'quoted', como estava antes de ele tentar pagar.
+  if (charge.entity_type === "excursion") {
+    const { error: detachExcErr } = await admin
+      .from("excursion_requests")
+      .update({ pix_charge_id: null, updated_at: nowIso } as never)
+      .eq("id", charge.entity_id)
+      .eq("pix_charge_id", charge.id)
+      .is("pix_paid_at", null);
+    if (detachExcErr) {
+      console.error(
+        `[expire-pix-charges] detach excursion ${charge.entity_id}:`,
+        detachExcErr.message,
+      );
+    }
+  }
+
   // Cancela devolvendo a vaga (trigger de capacidade).
   if (charge.entity_type === "booking") {
     const { error: cancelErr } = await admin

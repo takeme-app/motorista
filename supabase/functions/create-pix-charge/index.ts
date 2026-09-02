@@ -153,13 +153,16 @@ Deno.serve(async (req) => {
       shipment_draft?: Record<string, unknown>;
       /** Envio de dependente: idem (o preço também é do app). */
       dependent_draft?: Record<string, unknown>;
+      /** Excursão: o pedido JÁ existe (orçado); só anexamos a cobrança. */
+      excursion_request_id?: string;
     };
 
     const entityType = (body.entity_type ?? "").trim();
     if (
       entityType !== "booking" &&
       entityType !== "shipment" &&
-      entityType !== "dependent_shipment"
+      entityType !== "dependent_shipment" &&
+      entityType !== "excursion"
     ) {
       return jsonRes(
         { error: `entity_type '${entityType || "?"}' ainda não suportado no Pix real (fases 2+).` },
@@ -177,6 +180,9 @@ Deno.serve(async (req) => {
     }
     if (entityType === "dependent_shipment" && !body.dependent_draft) {
       return jsonRes({ error: "dependent_draft é obrigatório." }, 400);
+    }
+    if (entityType === "excursion" && !body.excursion_request_id?.trim()) {
+      return jsonRes({ error: "excursion_request_id é obrigatório." }, 400);
     }
 
     const admin = createClient(supabaseUrl, serviceRoleKey);
@@ -219,6 +225,226 @@ Deno.serve(async (req) => {
       if (cpfErr) console.warn("[create-pix-charge] persistência de CPF falhou:", cpfErr.message);
     } else {
       return jsonRes({ error: "cpf_required" }, 422);
+    }
+
+    // ══ EXCURSÃO ══════════════════════════════════════════════════════
+    // Único fluxo em que o pedido JÁ EXISTE quando o Pix é gerado: o cliente
+    // pede, o preparador orça ('quoted') e o pagamento é que aprova. Então aqui
+    // NÃO inserimos nada — só anexamos a cobrança ao orçamento existente.
+    // Espelha o charge-excursion-request (cartão): mesma validação, mesma
+    // promoção, mesmo valor líquido cobrado; a transição para 'approved' e os
+    // payouts ficam na liquidação (entities.ts), como no stripe-webhook.
+    if (entityType === "excursion") {
+      const excursionId = body.excursion_request_id!.trim();
+
+      const { data: excRow, error: excErr } = await admin
+        .from("excursion_requests")
+        .select(
+          "id, user_id, total_amount_cents, worker_payout_cents, admin_earning_cents, status, stripe_payment_intent_id, pix_charge_id, pix_paid_at",
+        )
+        .eq("id", excursionId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (excErr || !excRow) {
+        return jsonRes({ error: "Orçamento não encontrado ou não pertence ao usuário." }, 404);
+      }
+      const exc = excRow as {
+        total_amount_cents: number | null;
+        worker_payout_cents: number | null;
+        admin_earning_cents: number | null;
+        status: string;
+        stripe_payment_intent_id: string | null;
+        pix_charge_id: string | null;
+        pix_paid_at: string | null;
+      };
+
+      if (exc.stripe_payment_intent_id) {
+        return jsonRes(
+          { error: "Este orçamento já foi cobrado no cartão; não pode ser pago por Pix." },
+          400,
+        );
+      }
+      if (exc.pix_paid_at) {
+        return jsonRes({ error: "Este orçamento já foi pago." }, 400);
+      }
+      if (exc.status !== "quoted") {
+        return jsonRes(
+          {
+            error: exc.status === "approved"
+              ? "Este orçamento já foi aprovado/pago."
+              : `Status atual (${exc.status}) não permite pagamento; aguarde o orçamento.`,
+          },
+          400,
+        );
+      }
+
+      const totalCents = Number(exc.total_amount_cents);
+      if (!Number.isInteger(totalCents) || totalCents < 1) {
+        return jsonRes(
+          { error: "Orçamento sem valor definido ainda; solicite ao preparador." },
+          400,
+        );
+      }
+
+      // Retomada: cobrança pendente e não expirada deste MESMO orçamento devolve
+      // o QR existente. Sem isto, cada toque em "pagar" abriria uma cobrança
+      // nova no Asaas para o mesmo pedido — e o cliente poderia pagar duas.
+      const nowIsoExc = new Date().toISOString();
+      const { data: openCharge } = await admin
+        .from("pix_charges")
+        .select("id, qr_payload, qr_image_base64, expires_at, expected_amount_cents")
+        .eq("entity_type", "excursion")
+        .eq("entity_id", excursionId)
+        .eq("status", "pending")
+        .gt("expires_at", nowIsoExc)
+        .not("qr_payload", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (openCharge?.id) {
+        const c = openCharge as {
+          id: string;
+          qr_payload: string;
+          qr_image_base64: string | null;
+          expires_at: string;
+          expected_amount_cents: number;
+        };
+        return jsonRes({
+          ok: true,
+          pix_charge_id: c.id,
+          entity_type: "excursion",
+          entity_id: excursionId,
+          amount_cents: c.expected_amount_cents,
+          qr_payload: c.qr_payload,
+          qr_image_base64: c.qr_image_base64,
+          expires_at: c.expires_at,
+          resumed: true,
+        });
+      }
+
+      // Promoção: mesmo cálculo do charge-excursion-request — o desconto é
+      // absorvido pela plataforma (cap no resíduo dela) e cobramos o líquido.
+      let discountCents = 0;
+      let promotionId: string | null = null;
+      try {
+        const { data: promo } = await admin.rpc("apply_active_promotion", {
+          p_order_type: "excursions",
+          p_user_id: userId,
+          p_amount_cents: totalCents,
+        });
+        const promoRow = (Array.isArray(promo) ? promo[0] : promo) as
+          | { promotion_id?: string | null; promo_discount_cents?: number | null }
+          | null;
+        if (promoRow) {
+          const adminCap = Math.max(0, totalCents - (Number(exc.worker_payout_cents) || 0));
+          discountCents = Math.max(
+            0,
+            Math.min(Math.floor(Number(promoRow.promo_discount_cents) || 0), adminCap),
+          );
+          promotionId = promoRow.promotion_id ?? null;
+        }
+      } catch (_e) {
+        /* sem promoção ativa */
+      }
+      const chargeCentsExc = Math.max(1, totalCents - discountCents);
+
+      const ttlExc = setting.charge_ttl_minutes;
+      const expiresAtExc = new Date(Date.now() + ttlExc * 60 * 1000).toISOString();
+
+      const { data: chargeInsExc, error: chargeErrExc } = await admin
+        .from("pix_charges")
+        .insert({
+          provider: provider.name,
+          provider_env: provider.env,
+          provider_charge_id: null,
+          entity_type: "excursion",
+          entity_id: excursionId,
+          user_id: userId,
+          expected_amount_cents: chargeCentsExc,
+          status: "pending",
+          expires_at: expiresAtExc,
+        } as never)
+        .select("id")
+        .single();
+      if (chargeErrExc || !chargeInsExc?.id) {
+        console.error("[create-pix-charge] insert pix_charges (excursion):", chargeErrExc?.message);
+        return jsonRes({ error: "Não foi possível iniciar a cobrança Pix." }, 500);
+      }
+      const chargeIdExc = chargeInsExc.id as string;
+
+      // Anexa a cobrança ao orçamento (guard em 'quoted': se o preparador ou o
+      // cartão mudaram o status no meio, não sobrescreve).
+      const { data: attached, error: attachErr } = await admin
+        .from("excursion_requests")
+        .update({
+          pix_charge_id: chargeIdExc,
+          ...(discountCents > 0
+            ? {
+              promo_discount_cents: discountCents,
+              ...(promotionId ? { promotion_id: promotionId } : {}),
+            }
+            : {}),
+          updated_at: new Date().toISOString(),
+        } as never)
+        .eq("id", excursionId)
+        .eq("status", "quoted")
+        .select("id");
+      if (attachErr || !Array.isArray(attached) || attached.length === 0) {
+        await markChargeCreateFailed(
+          admin,
+          chargeIdExc,
+          `anexar cobrança ao orçamento: ${attachErr?.message ?? "status mudou"}`,
+        );
+        return jsonRes({ error: "O orçamento mudou de estado. Recarregue e tente de novo." }, 409);
+      }
+
+      const customerNameExc = ((profile?.full_name as string | null) ?? "").trim() || "Cliente Take Me";
+      let createdExc;
+      try {
+        createdExc = await provider.createCharge({
+          internalId: chargeIdExc,
+          userId,
+          amountCents: chargeCentsExc,
+          cpfDigits,
+          customerName: customerNameExc,
+          description: "Take Me — excursão",
+        });
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        console.error("[create-pix-charge] provedor falhou (excursion):", reason);
+        // A excursão EXISTIA antes da cobrança: não cancelar o orçamento, só
+        // desanexar para o cliente poder tentar de novo.
+        const { error: detachErr } = await admin
+          .from("excursion_requests")
+          .update({ pix_charge_id: null, updated_at: new Date().toISOString() } as never)
+          .eq("id", excursionId)
+          .eq("pix_charge_id", chargeIdExc);
+        if (detachErr) console.error("[create-pix-charge] detach excursion:", detachErr.message);
+        await markChargeCreateFailed(admin, chargeIdExc, reason);
+        return jsonRes({ error: "Provedor Pix indisponível no momento. Tente novamente." }, 502);
+      }
+
+      const { error: qrErrExc } = await admin
+        .from("pix_charges")
+        .update({
+          provider_charge_id: createdExc.providerChargeId,
+          qr_payload: createdExc.qrPayload,
+          qr_image_base64: createdExc.qrImageBase64,
+          updated_at: new Date().toISOString(),
+        } as never)
+        .eq("id", chargeIdExc);
+      if (qrErrExc) console.error("[create-pix-charge] update QR (excursion):", qrErrExc.message);
+
+      return jsonRes({
+        ok: true,
+        pix_charge_id: chargeIdExc,
+        entity_type: "excursion",
+        entity_id: excursionId,
+        amount_cents: chargeCentsExc,
+        qr_payload: createdExc.qrPayload,
+        qr_image_base64: createdExc.qrImageBase64,
+        expires_at: expiresAtExc,
+      });
     }
 
     // ══ ENCOMENDA e ENVIO DE DEPENDENTE ═══════════════════════════════

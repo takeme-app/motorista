@@ -17,6 +17,9 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
 import { registerPalliativePix } from '../../lib/palliativePixStore';
+import { fetchPixProviderMode, type PixProviderMode } from '../../lib/pixProviderConfig';
+import { validateCpf, onlyDigits } from '../../utils/formatCpf';
+import { useIsFocused } from '@react-navigation/native';
 import { PaymentMethodSection, type CardPaymentConfirmParams, type PaymentMethodType } from '../../components/PaymentMethodSection';
 import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCustomerForPayment';
 import { describeInvokeFailure } from '../../utils/edgeFunctionResponse';
@@ -165,6 +168,14 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
   const [downloading, setDownloading] = useState(false);
   // Desconto promocional de excursão (espelha o que os edges charge/confirm aplicam).
   const [promoDiscountCents, setPromoDiscountCents] = useState(0);
+  // Modo do Pix: 'palliative' mantém o QR estático de sempre; provedor real
+  // manda para a PixPaymentScreen (cobrança única com confirmação automática).
+  const [pixProviderMode, setPixProviderMode] = useState<PixProviderMode>('palliative');
+  useEffect(() => {
+    void fetchPixProviderMode().then(setPixProviderMode);
+  }, []);
+  // Voltar da tela de Pix real precisa remostrar o orçamento já aprovado.
+  const isFocused = useIsFocused();
 
   useEffect(() => {
     let cancelled = false;
@@ -214,7 +225,7 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [excursionRequestId]);
+  }, [excursionRequestId, isFocused]);
 
   // Após gerar o Pix, o pagamento é assíncrono: o stripe-webhook muda o status
   // para `approved`. Faz polling do status enquanto o Pix está pendente para
@@ -305,6 +316,29 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
       } finally {
         setSavingPayment(false);
       }
+      return;
+    }
+
+    // Pix REAL: o orçamento já existe; o servidor só anexa a cobrança e a
+    // aprovação (+ payouts) acontece na liquidação. Nada é aprovado antes de
+    // o pagamento entrar — diferente do paliativo abaixo.
+    if (params.method === 'pix' && pixProviderMode !== 'palliative') {
+      const collectedCpf = onlyDigits(params.holderCpfDigits ?? '');
+      if (!validateCpf(collectedCpf)) {
+        Alert.alert(
+          'CPF necessário',
+          'O pagamento por Pix exige CPF. Informe seu CPF no campo da opção Pix e confirme novamente.',
+        );
+        return;
+      }
+      setPixPaymentInfo(null);
+      navigation.navigate('PixPayment', {
+        service: 'excursion',
+        cpf: collectedCpf,
+        excursionRequestId: detail.id,
+        estimatedAmountCents: Math.max(1, total - promoDiscountCents),
+        excursionSuccess: true,
+      });
       return;
     }
 
@@ -617,6 +651,7 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
             cancellationPolicyVariant="trip"
             loading={savingPayment}
             allowedMethods={['credito', 'debito', 'pix', 'dinheiro']}
+            pixCpfRequired={pixProviderMode !== 'palliative'}
             cashInstructionVariant="excursion"
           />
         ) : null}

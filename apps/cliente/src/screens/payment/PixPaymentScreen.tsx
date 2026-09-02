@@ -85,6 +85,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
   const draftParams = isResume ? null : params;
   const isShipment = !isResume && params.service === 'shipment';
   const isDependentShipment = !isResume && params.service === 'dependent_shipment';
+  const isExcursion = !isResume && params.service === 'excursion';
   const shipmentSuccessParams = !isResume && params.service === 'shipment' ? params.shipmentSuccess : null;
   // Encomenda não tem successNav (a tela de sucesso é outra); o objeto vazio
   // mantém o resto do componente sem ramificações espalhadas.
@@ -169,6 +170,13 @@ export function PixPaymentScreen({ navigation, route }: Props) {
         });
         return;
       }
+      if (isExcursion) {
+        // A excursão não tem tela de sucesso própria: o orçamento (que já
+        // existia) volta aprovado. goBack devolve para ele, que recarrega ao
+        // ganhar foco.
+        navigation.goBack();
+        return;
+      }
       if (isDependentShipment) {
         // Envio de dependente também tem tela de sucesso própria.
         navigation.replace('DependentShipmentSuccess', {
@@ -192,6 +200,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
       isShipment,
       shipmentSuccessParams,
       isDependentShipment,
+      isExcursion,
     ],
   );
 
@@ -283,11 +292,17 @@ export function PixPaymentScreen({ navigation, route }: Props) {
                 cpf: draftParams.cpf,
                 dependentDraft: draftParams.dependentDraft,
               }
-            : {
-                service: 'booking',
-                cpf: draftParams.cpf,
-                draft: draftParams.draft,
-              },
+            : draftParams.service === 'excursion'
+              ? {
+                  service: 'excursion',
+                  cpf: draftParams.cpf,
+                  excursionRequestId: draftParams.excursionRequestId,
+                }
+              : {
+                  service: 'booking',
+                  cpf: draftParams.cpf,
+                  draft: draftParams.draft,
+                },
       );
       if (!res.ok) {
         if (res.code === 'palliative_mode') {

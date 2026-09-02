@@ -147,7 +147,9 @@ export async function createPixCharge(
     // cobrança, para o gatilho de fila não ofertá-la antes do pagamento.
     | { service: 'shipment'; cpf?: string; shipmentDraft: Record<string, unknown> }
     // Envio de dependente: idem encomenda.
-    | { service: 'dependent_shipment'; cpf?: string; dependentDraft: Record<string, unknown> },
+    | { service: 'dependent_shipment'; cpf?: string; dependentDraft: Record<string, unknown> }
+    // Excursão: o orçamento já existe; só mandamos o id.
+    | { service: 'excursion'; cpf?: string; excursionRequestId: string },
 ): Promise<CreatePixChargeResult> {
   try {
     const token = await getAccessToken();
@@ -159,6 +161,8 @@ export async function createPixCharge(
         ? { entity_type: 'shipment', shipment_draft: input.shipmentDraft }
         : input.service === 'dependent_shipment'
         ? { entity_type: 'dependent_shipment', dependent_draft: input.dependentDraft }
+        : input.service === 'excursion'
+        ? { entity_type: 'excursion', excursion_request_id: input.excursionRequestId }
         : (() => {
             const { scheduled_trip_id, ...draftRest } = input.draft;
             return { entity_type: 'booking', scheduled_trip_id, draft: draftRest };
