@@ -19,6 +19,7 @@ import type { ShipmentStackParamList } from '../../navigation/types';
 import { PaymentMethodSection, type PaymentMethodType, type CardPaymentConfirmParams } from '../../components/PaymentMethodSection';
 import { fetchPixProviderMode, type PixProviderMode } from '../../lib/pixProviderConfig';
 import { validateCpf, onlyDigits } from '../../utils/formatCpf';
+import { profileHasValidCpf } from '../../lib/profileCpf';
 import { fetchDriverStripeChargesEnabled } from '../../lib/driverStripeConnect';
 import { supabase } from '../../lib/supabase';
 import { registerPalliativePix } from '../../lib/palliativePixStore';
@@ -66,6 +67,14 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
   const [pixProviderMode, setPixProviderMode] = useState<PixProviderMode>('palliative');
   useEffect(() => {
     void fetchPixProviderMode().then(setPixProviderMode);
+  }, []);
+  // O servidor PREFERE o CPF do perfil e só grava um novo quando não há um
+  // válido — então pedir o CPF de quem já tem é pedir dado repetido. `null`
+  // (leitura pendente ou falha) conta como "não tem": perguntar à toa incomoda,
+  // esconder de quem não tem trava a pessoa num 422 sem saída.
+  const [profileCpfOk, setProfileCpfOk] = useState<boolean | null>(null);
+  useEffect(() => {
+    void profileHasValidCpf().then(setProfileCpfOk);
   }, []);
   const insets = useSafeAreaInsets();
   const bottomInset = useBottomSafeInset({ extra: 16 });
@@ -346,7 +355,8 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
 
         if (pixModeNow != null && pixModeNow !== 'palliative') {
           const collectedCpf = onlyDigits(params.holderCpfDigits ?? '');
-          if (!validateCpf(collectedCpf)) {
+          const collectedCpfOk = validateCpf(collectedCpf);
+          if (!collectedCpfOk && profileCpfOk !== true) {
             // Não navega sem CPF: o servidor devolveria 422 e o usuário voltaria
             // para cá. O campo inline já está visível (pixCpfRequired).
             showAlert(
@@ -357,7 +367,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
           }
           navigation.navigate('PixPayment', {
             service: 'shipment',
-            cpf: collectedCpf,
+            ...(collectedCpfOk ? { cpf: collectedCpf } : {}),
             shipmentDraft: shipmentInsertPayload as unknown as Record<string, unknown>,
             estimatedAmountCents: Number(
               (pricingInsertRow as { amount_cents?: number }).amount_cents ?? 0,
@@ -624,6 +634,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
       }
     },
     [
+      profileCpfOk,
       origin,
       destination,
       whenOption,
@@ -733,7 +744,7 @@ export function ConfirmShipmentScreen({ navigation, route }: Props) {
         </View>
 
         <PaymentMethodSection
-          pixCpfRequired={pixProviderMode !== 'palliative'}
+          pixCpfRequired={pixProviderMode !== 'palliative' && profileCpfOk !== true}
           amountCents={displayTotalCents}
           selectedMethod={selectedPaymentMethod}
           onSelectMethod={setSelectedPaymentMethod}

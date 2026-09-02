@@ -33,6 +33,7 @@ import { ensureAccessTokenForStripeFunctions } from '../../lib/ensureStripeCusto
 import { EDGE_CHARGE_SHIPMENT_SLUG } from '../../lib/supabaseEdgeFunctionNames';
 import { fetchPixProviderMode, type PixProviderMode } from '../../lib/pixProviderConfig';
 import { validateCpf, onlyDigits } from '../../utils/formatCpf';
+import { profileHasValidCpf } from '../../lib/profileCpf';
 
 type Props = NativeStackScreenProps<DependentShipmentStackParamList, 'ConfirmDependentShipment'>;
 
@@ -115,6 +116,14 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
   const [pixProviderMode, setPixProviderMode] = useState<PixProviderMode>('palliative');
   useEffect(() => {
     void fetchPixProviderMode().then(setPixProviderMode);
+  }, []);
+  // O servidor PREFERE o CPF do perfil e só grava um novo quando não há um
+  // válido — então pedir o CPF de quem já tem é pedir dado repetido. `null`
+  // (leitura pendente ou falha) conta como "não tem": perguntar à toa incomoda,
+  // esconder de quem não tem trava a pessoa num 422 sem saída.
+  const [profileCpfOk, setProfileCpfOk] = useState<boolean | null>(null);
+  useEffect(() => {
+    void profileHasValidCpf().then(setProfileCpfOk);
   }, []);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('dinheiro');
   const [submitting, setSubmitting] = useState(false);
@@ -409,7 +418,8 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
 
         if (pixModeNow != null && pixModeNow !== 'palliative') {
           const collectedCpf = onlyDigits(params.holderCpfDigits ?? '');
-          if (!validateCpf(collectedCpf)) {
+          const collectedCpfOk = validateCpf(collectedCpf);
+          if (!collectedCpfOk && profileCpfOk !== true) {
             // Não navega sem CPF: o servidor devolveria 422 e o usuário voltaria
             // para cá. O campo inline já está visível (pixCpfRequired).
             showAlert(
@@ -421,7 +431,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           }
           navigation.navigate('PixPayment', {
             service: 'dependent_shipment',
-            cpf: collectedCpf,
+            ...(collectedCpfOk ? { cpf: collectedCpf } : {}),
             dependentDraft: dependentInsertPayload as unknown as Record<string, unknown>,
             estimatedAmountCents: Number(
               (pricingFields as { amount_cents?: number }).amount_cents ?? amountCents,
@@ -536,6 +546,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
       }
     },
     [
+      profileCpfOk,
       dependentId,
       fullName,
       contactPhone,
@@ -627,7 +638,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
           allowedMethods={allowedPaymentMethods}
           cashInstructionVariant="dependent_shipment"
           connectCashOnlyContext="dependent_shipment"
-          pixCpfRequired={pixProviderMode !== 'palliative'}
+          pixCpfRequired={pixProviderMode !== 'palliative' && profileCpfOk !== true}
         />
       </ScrollView>
     </View>

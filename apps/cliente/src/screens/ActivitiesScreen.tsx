@@ -9,6 +9,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../navigation/ActivitiesStackTypes';
 import { supabase } from '../lib/supabase';
 import { formatActivityTotalPaidLine } from '../lib/tripDriverDisplay';
+import { isAwaitingRealPixPayment } from '../lib/pixPending';
 import {
   StatusBadge,
   clientViagemStatusBadge,
@@ -148,7 +149,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('bookings')
         .select(
-          'id, origin_address, destination_address, amount_cents, status, created_at, passenger_count, bags_count, scheduled_trip_id, cancellation_reason, payment_method, scheduled_trips(status, driver_journey_started_at, departure_at)',
+          'id, origin_address, destination_address, amount_cents, status, created_at, passenger_count, bags_count, scheduled_trip_id, cancellation_reason, payment_method, pix_charge_id, pix_paid_at, scheduled_trips(status, driver_journey_started_at, departure_at)',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -156,7 +157,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('shipments')
         .select(
-          'id, origin_address, destination_address, amount_cents, status, created_at, package_size, admin_approved_at, scheduled_trip_id, driver_id, cancellation_reason, payment_method, scheduled_trips(status, driver_journey_started_at, departure_at)',
+          'id, origin_address, destination_address, amount_cents, status, created_at, package_size, admin_approved_at, scheduled_trip_id, driver_id, cancellation_reason, payment_method, pix_charge_id, pix_paid_at, scheduled_trips(status, driver_journey_started_at, departure_at)',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -164,7 +165,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('dependent_shipments')
         .select(
-          'id, origin_address, destination_address, full_name, amount_cents, status, created_at, bags_count, scheduled_trip_id, cancellation_reason, payment_method, scheduled_trips(status, driver_journey_started_at, departure_at)',
+          'id, origin_address, destination_address, full_name, amount_cents, status, created_at, bags_count, scheduled_trip_id, cancellation_reason, payment_method, pix_charge_id, pix_paid_at, scheduled_trips(status, driver_journey_started_at, departure_at)',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -172,14 +173,16 @@ export function ActivitiesScreen({ navigation }: Props) {
       supabase
         .from('excursion_requests')
         .select(
-          'id, destination, excursion_date, status, total_amount_cents, created_at, people_count, check_in_ida_started_at, check_in_volta_started_at, boarding_ida_done_at, boarding_volta_done_at',
+          'id, destination, excursion_date, status, total_amount_cents, created_at, people_count, payment_method, pix_charge_id, pix_paid_at, check_in_ida_started_at, check_in_volta_started_at, boarding_ida_done_at, boarding_volta_done_at',
         )
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
         .limit(50),
     ]);
 
-    const bookingRows = (bookingsRes.data ?? []) as {
+    // Tipos gerados defasados (sem pix_charge_id/pix_paid_at): cast na origem,
+    // mesmo padrão já usado pelas excursões abaixo.
+    const bookingRows = (bookingsRes.data ?? []) as unknown as {
       id: string;
       origin_address?: string;
       destination_address?: string;
@@ -229,6 +232,8 @@ export function ActivitiesScreen({ navigation }: Props) {
       // data da solicitação (created_at), que confundia o cliente.
       const tripDepartureAt = Array.isArray(st) ? st[0]?.departure_at : st?.departure_at;
       const cr = (b as { cancellation_reason?: string | null }).cancellation_reason;
+      // Pix real gerado e não liquidado: o motorista nem foi notificado ainda.
+      const awaitingPixViagem = isAwaitingRealPixPayment(b as Parameters<typeof isAwaitingRealPixPayment>[0]);
       const statusBadgeVariant = clientViagemStatusBadge(
         b.status,
         tripStatus ?? null,
@@ -254,16 +259,19 @@ export function ActivitiesScreen({ navigation }: Props) {
         title: dest,
         originAddress: origin,
         dateTime: formatBookingDate(tripDepartureAt ?? b.created_at),
-        priceFormatted: formatActivityTotalPaidLine(b.amount_cents, b.payment_method),
+        priceFormatted: formatActivityTotalPaidLine(b.amount_cents, b.payment_method, {
+          awaitingPixPayment: awaitingPixViagem,
+        }),
         categoryLabel: 'Viagem',
         sectionBadge,
         bookingStatus: b.status,
         created_at: b.created_at,
         summaryLine: summaryParts.join(' · '),
-        statusBadgeVariant,
+        statusBadgeVariant: awaitingPixViagem ? 'aguardando_pagamento' : statusBadgeVariant,
       };
     });
-    const shipmentItems: ActivityItem[] = (shipmentsRes.data ?? []).map((s) => {
+    const shipmentRows = (shipmentsRes.data ?? []) as unknown as Record<string, unknown>[];
+    const shipmentItems: ActivityItem[] = shipmentRows.map((s) => {
       const rawStatus = (s as { status?: string }).status;
       const status = rawStatus?.toLowerCase() ?? '';
       const sectionBadge: ActivitySectionBadge =
@@ -285,6 +293,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       // Data do card: usa a partida da viagem agendada (departure_at) quando houver,
       // não a data da solicitação (created_at).
       const tripDepartureShip = Array.isArray(stShip) ? stShip[0]?.departure_at : stShip?.departure_at;
+      const awaitingPixEnvio = isAwaitingRealPixPayment(s as Parameters<typeof isAwaitingRealPixPayment>[0]);
       const statusBadgeVariant = clientShipmentActivityStatusBadge(
         rawStatus,
         (s as { cancellation_reason?: string | null }).cancellation_reason,
@@ -304,15 +313,17 @@ export function ActivitiesScreen({ navigation }: Props) {
         priceFormatted: formatActivityTotalPaidLine(
           (s as { amount_cents?: number }).amount_cents,
           (s as { payment_method?: string | null }).payment_method,
+          { awaitingPixPayment: awaitingPixEnvio },
         ),
         categoryLabel: 'Envio',
         sectionBadge,
         created_at: (s as { created_at: string }).created_at,
         summaryLine: `1 encomenda · tamanho ${encLabel}`,
-        statusBadgeVariant,
+        statusBadgeVariant: awaitingPixEnvio ? 'aguardando_pagamento' : statusBadgeVariant,
       };
     });
-    const dependentItems: ActivityItem[] = (dependentShipmentsRes.data ?? []).map((d) => {
+    const dependentRows = (dependentShipmentsRes.data ?? []) as unknown as Record<string, unknown>[];
+    const dependentItems: ActivityItem[] = dependentRows.map((d) => {
       const rawStatus = (d as { status?: string }).status;
       const status = rawStatus?.toLowerCase() ?? '';
       const sectionBadge: ActivitySectionBadge =
@@ -335,6 +346,7 @@ export function ActivitiesScreen({ navigation }: Props) {
       // Data do card: usa a partida da viagem agendada (departure_at) quando houver,
       // não a data da solicitação (created_at).
       const tripDepartureDep = Array.isArray(stDep) ? stDep[0]?.departure_at : stDep?.departure_at;
+      const awaitingPixDep = isAwaitingRealPixPayment(d as Parameters<typeof isAwaitingRealPixPayment>[0]);
       const statusBadgeVariant = clientDependentActivityStatusBadge(
         rawStatus,
         (d as { cancellation_reason?: string | null }).cancellation_reason,
@@ -350,12 +362,13 @@ export function ActivitiesScreen({ navigation }: Props) {
         priceFormatted: formatActivityTotalPaidLine(
           (d as { amount_cents?: number }).amount_cents,
           (d as { payment_method?: string | null }).payment_method,
+          { awaitingPixPayment: awaitingPixDep },
         ),
         categoryLabel: 'Envio dependente',
         sectionBadge,
         created_at: (d as { created_at: string }).created_at,
         summaryLine: `1 dependente · ${depBags} ${depBags === 1 ? 'mala' : 'malas'}`,
-        statusBadgeVariant,
+        statusBadgeVariant: awaitingPixDep ? 'aguardando_pagamento' : statusBadgeVariant,
       };
     });
     // Cast: colunas de embarque (check_in_*, boarding_*) ainda não estão nos tipos
@@ -379,8 +392,19 @@ export function ActivitiesScreen({ navigation }: Props) {
             return `${day} ${month}`;
           })()
         : formatBookingDate(createdAt);
+      const awaitingPixExc = isAwaitingRealPixPayment(e as Parameters<typeof isAwaitingRealPixPayment>[0]);
+      // Antes de aprovado, o valor é proposta do preparador — não cobrança.
+      const excQuoteOnly =
+        !awaitingPixExc &&
+        ['pending', 'contacted', 'quoted', 'in_analysis'].includes(status);
       const priceFormatted =
-        totalCents != null && totalCents > 0 ? formatActivityTotalPaidLine(totalCents) : '—';
+        totalCents != null && totalCents > 0
+          ? formatActivityTotalPaidLine(
+              totalCents,
+              (e as { payment_method?: string | null }).payment_method,
+              { awaitingPixPayment: awaitingPixExc, quoteOnly: excQuoteOnly },
+            )
+          : '—';
       return {
         id: (e as { id: string }).id,
         type: 'excursao',
@@ -389,11 +413,11 @@ export function ActivitiesScreen({ navigation }: Props) {
         priceFormatted,
         categoryLabel: 'Excursão',
         sectionBadge,
-        excursionStatusLabel: clientStatus.label,
+        excursionStatusLabel: awaitingPixExc ? 'Aguardando pagamento' : clientStatus.label,
         created_at: createdAt,
         summaryLine: `${people} ${people === 1 ? 'pessoa' : 'pessoas'}`,
-        statusBadgeVariant: clientStatus.variant,
-        statusBadgeLabel: clientStatus.label,
+        statusBadgeVariant: awaitingPixExc ? 'aguardando_pagamento' : clientStatus.variant,
+        statusBadgeLabel: awaitingPixExc ? 'Aguardando pagamento' : clientStatus.label,
       };
     });
     const combined = [...bookingItems, ...shipmentItems, ...dependentItems, ...excursionItems].sort(
