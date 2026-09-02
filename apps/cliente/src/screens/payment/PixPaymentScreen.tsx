@@ -254,7 +254,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
         }
         if (source === 'manual') {
           setManualCheckNote(
-            'Ainda não identificamos o pagamento. Se você acabou de pagar, aguarde alguns segundos — a confirmação é automática.',
+            'Ainda não identificamos o pagamento. Se você acabou de pagar, aguarde alguns segundos. A confirmação é automática.',
           );
         }
       } finally {
@@ -569,7 +569,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
         <Text style={styles.pixLabel}>Pix</Text>
         <Text style={styles.amount}>{formatBRL(amountCents)}</Text>
         <Text style={styles.instructions}>
-          Use o aplicativo do seu banco para escanear o código QR ou copie o código PIX abaixo. A
+          Use o aplicativo do seu banco para escanear o código QR ou copie o código Pix abaixo. A
           confirmação é automática assim que o pagamento for identificado.
         </Text>
 
@@ -586,7 +586,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
           <View style={[styles.qrWrap, styles.qrFallback]}>
             <MaterialIcons name="qr-code-2" size={56} color={COLORS.greyLight} />
             <Text style={styles.qrFallbackText}>
-              QR indisponível — use o código copia-e-cola abaixo.
+              QR indisponível. Use o código copia-e-cola abaixo.
             </Text>
           </View>
         )}
@@ -598,7 +598,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
         </View>
         <TouchableOpacity style={styles.copyBtn} onPress={copyCode} activeOpacity={0.8}>
           <MaterialIcons name="content-copy" size={18} color="#FFFFFF" />
-          <Text style={styles.copyBtnText}>{copied ? 'Código copiado!' : 'Copiar código PIX'}</Text>
+          <Text style={styles.copyBtnText}>{copied ? 'Código copiado!' : 'Copiar código Pix'}</Text>
         </TouchableOpacity>
 
         {manualCheckNote ? <Text style={styles.checkNote}>{manualCheckNote}</Text> : null}
@@ -612,7 +612,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
           {manualChecking ? (
             <ActivityIndicator size="small" color="#FFFFFF" />
           ) : (
-            <Text style={styles.confirmBtnText}>Já paguei — verificar</Text>
+            <Text style={styles.confirmBtnText}>Já paguei</Text>
           )}
         </TouchableOpacity>
       </View>
