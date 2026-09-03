@@ -21,6 +21,7 @@ import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackT
 import { supabase } from '../../lib/supabase';
 import { excursionClientStatus } from '../../lib/excursionStatus';
 import { isAwaitingRealPixPayment } from '../../lib/pixPending';
+import { PixPendingBanner } from '../../components/PixPendingBanner';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ExcursionDetail'>;
 
@@ -378,6 +379,13 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
         {passengerCount > 0 && (
           <Text style={styles.passengerCount}>{passengerCount} cadastrado(s)</Text>
         )}
+
+        {isAwaitingRealPixPayment(detail as Parameters<typeof isAwaitingRealPixPayment>[0]) ? (
+
+          <PixPendingBanner pixChargeId={String((detail as { pix_charge_id?: string }).pix_charge_id ?? '')} />
+
+        ) : null}
+
 
         {canShowBudget && (
           <TouchableOpacity

@@ -38,6 +38,7 @@ import { LiveDriverMapMarker } from '../../components/LiveDriverMapMarker';
 import { useScheduledTripLiveLocation } from '../../lib/useScheduledTripLiveLocation';
 import { StatusBadge, clientViagemStatusBadge } from '../../components/StatusBadge';
 import { isAwaitingRealPixPayment } from '../../lib/pixPending';
+import { PixPendingBanner } from '../../components/PixPendingBanner';
 import type { TripLiveDriverDisplay } from '../../navigation/types';
 import { parsePassengerData } from '../../lib/clientBookingTripLive';
 import { formatVehicleDescription, formatTripFareBrl } from '../../lib/tripDriverDisplay';
@@ -92,6 +93,9 @@ function pinCharsForDisplay(code: string | null | undefined): string[] {
 }
 
 type BookingDetail = {
+  /** Pix real: cobrança e liquidação, para o status do pedido. */
+  pix_charge_id?: string | null;
+  pix_paid_at?: string | null;
   id: string;
   origin_address: string;
   origin_lat: number;
@@ -415,6 +419,10 @@ export function TripDetailScreen({ navigation, route }: Props) {
         trip_status: trip?.status ?? null,
         driver_journey_started_at: trip?.driver_journey_started_at ?? null,
         cancellation_reason: (booking as { cancellation_reason?: string | null }).cancellation_reason ?? null,
+        // Sem estes dois o detalhe não sabe que o Pix está pendente: o objeto
+        // é montado campo a campo, então trazer as colunas no select não basta.
+        pix_charge_id: (booking as { pix_charge_id?: string | null }).pix_charge_id ?? null,
+        pix_paid_at: (booking as { pix_paid_at?: string | null }).pix_paid_at ?? null,
         scheduled_trip_id: b.scheduled_trip_id ?? null,
         departure_at: (trip as { departure_at?: string | null } | null)?.departure_at ?? null,
         passenger_count: Number(b.passenger_count ?? 0),
@@ -860,6 +868,9 @@ export function TripDetailScreen({ navigation, route }: Props) {
               }
             />
           </View>
+          {isAwaitingRealPixPayment(detail as Parameters<typeof isAwaitingRealPixPayment>[0]) ? (
+            <PixPendingBanner pixChargeId={String((detail as { pix_charge_id?: string }).pix_charge_id ?? '')} />
+          ) : null}
           <Text style={styles.tripId}>Minha reserva: {formatTripCode(detail.id)}</Text>
           {detail.scheduled_trip_id ? (
             <Text style={styles.tripIdMeta}>ID da Viagem: {formatTripCode(detail.scheduled_trip_id)}</Text>

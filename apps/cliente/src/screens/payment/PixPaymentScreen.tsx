@@ -131,6 +131,46 @@ export function PixPaymentScreen({ navigation, route }: Props) {
     ? Math.max(0, Math.ceil(((Number.isFinite(expiresAtMs) ? expiresAtMs : 0) - nowMs) / 1000))
     : 0;
 
+  /**
+   * Fechar a tela do Pix leva ao DETALHE do pedido, não de volta ao checkout.
+   * A cobrança já existe: voltar para a tela de confirmação convidava a
+   * confirmar de novo e abrir uma SEGUNDA cobrança para o mesmo pedido.
+   * Sem cobrança criada (ainda gerando, ou erro), goBack é o certo — não há
+   * pedido para onde ir.
+   */
+  const closeToOrderDetail = useCallback(() => {
+    const entityType = charge?.entityType ?? '';
+    const entityId = charge?.entityId ?? '';
+    if (!entityId) {
+      navigation.goBack();
+      return;
+    }
+    const target =
+      entityType === 'booking'
+        ? { screen: 'TripDetail', params: { bookingId: entityId } }
+        : entityType === 'shipment'
+          ? { screen: 'ShipmentDetail', params: { shipmentId: entityId } }
+          : entityType === 'dependent_shipment'
+            ? { screen: 'DependentShipmentDetail', params: { dependentShipmentId: entityId } }
+            : entityType === 'excursion'
+              ? { screen: 'ExcursionDetail', params: { excursionRequestId: entityId } }
+              : null;
+    if (!target) {
+      navigation.goBack();
+      return;
+    }
+    // getParent() é genérico demais para o tipo desta tela; o alvo é a mesma
+    // navegação aninhada que as telas de sucesso já usam.
+    const parent = navigation.getParent() as unknown as
+      | { navigate: (name: string, params?: unknown) => void }
+      | undefined;
+    if (!parent) {
+      navigation.goBack();
+      return;
+    }
+    parent.navigate('Main', { screen: 'Activities', params: target });
+  }, [charge, navigation]);
+
   /** Pago: limpa a pendência e navega para o sucesso com id/valor DO SERVIDOR. */
   const handlePaid = useCallback(
     (entityIdFromServer?: string | null) => {
@@ -490,7 +530,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
       <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar style="dark" />
         <View style={styles.navbar}>
-          <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.navBtn} onPress={closeToOrderDetail} activeOpacity={0.7}>
             <MaterialIcons name="close" size={24} color={COLORS.black} />
           </TouchableOpacity>
         </View>
@@ -508,7 +548,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
       <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar style="dark" />
         <View style={styles.navbar}>
-          <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.navBtn} onPress={closeToOrderDetail} activeOpacity={0.7}>
             <MaterialIcons name="close" size={24} color={COLORS.black} />
           </TouchableOpacity>
         </View>
@@ -531,7 +571,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
       <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar style="dark" />
         <View style={styles.navbar}>
-          <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.navBtn} onPress={closeToOrderDetail} activeOpacity={0.7}>
             <MaterialIcons name="close" size={24} color={COLORS.black} />
           </TouchableOpacity>
         </View>
@@ -561,7 +601,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
       <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar style="dark" />
         <View style={styles.navbar}>
-          <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.navBtn} onPress={closeToOrderDetail} activeOpacity={0.7}>
             <MaterialIcons name="close" size={24} color={COLORS.black} />
           </TouchableOpacity>
         </View>
@@ -595,7 +635,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
       <View style={styles.navbar}>
-        <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.navBtn} onPress={closeToOrderDetail} activeOpacity={0.7}>
           <MaterialIcons name="close" size={24} color={COLORS.black} />
         </TouchableOpacity>
       </View>

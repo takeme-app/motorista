@@ -38,6 +38,7 @@ import { getRouteWithDuration, formatDuration, type RoutePoint } from '../../lib
 import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
 import { StatusBadge, shipmentStatusToBadge } from '../../components/StatusBadge';
 import { isAwaitingRealPixPayment } from '../../lib/pixPending';
+import { PixPendingBanner } from '../../components/PixPendingBanner';
 import { SupportSheet } from '../../components/SupportSheet';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { tryOpenSupportTicket } from '../../lib/supportTickets';
@@ -92,6 +93,9 @@ function shipmentStatusMessage(status: string): string {
 }
 
 type ShipmentDetail = {
+  /** Pix real: cobrança e liquidação, para o status do pedido. */
+  pix_charge_id?: string | null;
+  pix_paid_at?: string | null;
   id: string;
   origin_address: string;
   origin_lat: number | null;
@@ -246,6 +250,10 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
         scheduled_trip_id: row.scheduled_trip_id ?? null,
         package_size: row.package_size ?? null,
         admin_approved_at: row.admin_approved_at ?? null,
+        // Idem viagem: o objeto é montado campo a campo, então trazer as
+        // colunas no select não basta para o detalhe saber do Pix pendente.
+        pix_charge_id: (row as { pix_charge_id?: string | null }).pix_charge_id ?? null,
+        pix_paid_at: (row as { pix_paid_at?: string | null }).pix_paid_at ?? null,
       });
       if (row.scheduled_trip_id) {
         const { data: trip } = await supabase
@@ -813,6 +821,9 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
               : isLargeAwaitingApproval
                 ? 'Aguardando aprovação da nossa equipe'
                 : shipmentStatusMessage(detail.status)}</Text>
+          {isAwaitingRealPixPayment(detail as Parameters<typeof isAwaitingRealPixPayment>[0]) ? (
+            <PixPendingBanner pixChargeId={String((detail as { pix_charge_id?: string }).pix_charge_id ?? '')} />
+          ) : null}
           <TouchableOpacity style={styles.receiptButton} activeOpacity={0.8}>
             <MaterialIcons name="receipt" size={20} color={COLORS.neutral700} />
             <Text style={styles.receiptButtonText}>Recibo</Text>

@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 import { Text } from '../../components/Text';
 import { isAwaitingRealPixPayment } from '../../lib/pixPending';
+import { PixPendingBanner } from '../../components/PixPendingBanner';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -657,6 +658,10 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
               : statusLabel(detail.status)}
           </Text>
         </Text>
+
+        {isAwaitingRealPixPayment(detail as Parameters<typeof isAwaitingRealPixPayment>[0]) ? (
+          <PixPendingBanner pixChargeId={String((detail as { pix_charge_id?: string }).pix_charge_id ?? '')} />
+        ) : null}
 
         {/* Recibo */}
         <TouchableOpacity style={styles.reciboChip} activeOpacity={0.8}>
