@@ -5,7 +5,7 @@
     "newArchEnabled": true,
     "slug": "take-me-motorista",
     "scheme": "take-me-motorista",
-    "version": "1.0.27",
+    "version": "1.0.28",
     "icon": "./assets/logo.png",
     "splash": {
       "image": "./assets/logo.png",
