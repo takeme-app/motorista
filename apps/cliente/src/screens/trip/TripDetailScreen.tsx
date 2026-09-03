@@ -142,6 +142,8 @@ type TripShipmentRow = {
 };
 
 type TripDependentShipmentRow = {
+  pix_charge_id?: string | null;
+  pix_paid_at?: string | null;
   id: string;
   full_name: string;
   pickup_code: string | null;
@@ -451,7 +453,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
         }
         const { data: depRows } = await supabase
           .from('dependent_shipments')
-          .select('id, full_name, pickup_code, delivery_code, status')
+          .select('id, full_name, pickup_code, delivery_code, status, pix_charge_id, pix_paid_at')
           .eq('scheduled_trip_id', tripId)
           .eq('user_id', user.id);
         if (!cancelled) {
@@ -768,6 +770,10 @@ export function TripDetailScreen({ navigation, route }: Props) {
         : `${supabaseUrl}/storage/v1/object/public/avatars/${detail.driver_avatar_url}`)
     : null;
 
+  // Pix real ainda não liquidado: usado no selo, na faixa e para esconder os
+  // PINs de embarque, que só valem depois do pagamento.
+  const awaitingPixTrip = isAwaitingRealPixPayment(detail);
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
@@ -857,7 +863,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
                 // reserva existe, mas nada anda até o pagamento entrar. Sem
                 // isto o card da lista dizia "Aguardando pagamento" e o
                 // detalhe dizia "Aguardando início".
-                isAwaitingRealPixPayment(detail as Parameters<typeof isAwaitingRealPixPayment>[0])
+                awaitingPixTrip
                   ? 'aguardando_pagamento'
                   : clientViagemStatusBadge(
                       detail.status,
@@ -868,8 +874,8 @@ export function TripDetailScreen({ navigation, route }: Props) {
               }
             />
           </View>
-          {isAwaitingRealPixPayment(detail as Parameters<typeof isAwaitingRealPixPayment>[0]) ? (
-            <PixPendingBanner pixChargeId={String((detail as { pix_charge_id?: string }).pix_charge_id ?? '')} />
+          {awaitingPixTrip ? (
+            <PixPendingBanner pixChargeId={String(detail.pix_charge_id ?? '')} />
           ) : null}
           <Text style={styles.tripId}>Minha reserva: {formatTripCode(detail.id)}</Text>
           {detail.scheduled_trip_id ? (
@@ -979,6 +985,9 @@ export function TripDetailScreen({ navigation, route }: Props) {
           </View>
         </View>
 
+        {/* PIN só existe depois do pagamento: mostrá-lo antes sugere que a
+            reserva está valendo e o passageiro pode tentar embarcar sem pagar. */}
+        {awaitingPixTrip ? null : (
         <View style={styles.pinSection}>
           <Text style={styles.pinLabel}>PIN de embarque</Text>
           <Text style={styles.pinHint}>Informe ao motorista ao entrar no veículo.</Text>
@@ -1008,6 +1017,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
             </View>
           </View>
         </View>
+        )}
 
         {tripDependentShipments.length > 0 ? (
           <>
@@ -1016,6 +1026,10 @@ export function TripDetailScreen({ navigation, route }: Props) {
               <View key={dep.id} style={styles.dependentPinBlock}>
                 <Text style={styles.dependentPinName}>{dep.full_name}</Text>
                 <Text style={styles.dependentPinStatus}>Status: {dep.status}</Text>
+                {/* Mesma regra do PIN da viagem, mais o cancelado: um envio
+                    cancelado não embarca, então o PIN dele não deve aparecer. */}
+                {isAwaitingRealPixPayment(dep as Parameters<typeof isAwaitingRealPixPayment>[0]) ||
+                String(dep.status ?? '').toLowerCase() === 'cancelled' ? null : (
                 <View style={[styles.pinSection, styles.pinSectionNested]}>
                   <Text style={styles.pinLabel}>PIN de embarque (dependente)</Text>
                   <Text style={styles.pinHint}>Informe ao motorista no embarque do dependente.</Text>
@@ -1045,6 +1059,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
                     </View>
                   </View>
                 </View>
+                )}
               </View>
             ))}
           </>

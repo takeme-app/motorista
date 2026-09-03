@@ -42,7 +42,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#fef3c7',
     borderRadius: 14,
     padding: 14,
-    marginBottom: 12,
+    // Respira do selo de status logo acima e do conteúdo abaixo.
+    marginTop: 10,
+    marginBottom: 14,
     gap: 6,
   },
   row: { flexDirection: 'row', alignItems: 'center', gap: 6 },
