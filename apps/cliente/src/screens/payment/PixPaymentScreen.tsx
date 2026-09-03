@@ -36,7 +36,7 @@ import type {
 } from '../../navigation/types';
 import { supabase } from '../../lib/supabase';
 import { formatShipmentCode } from '@take-me/shared';
-import { createPixCharge, getPixChargeStatus, type PixChargeCreated } from '../../lib/pixCharge';
+import { createPixCharge, fetchOpenPixCharge, getPixChargeStatus, type PixChargeCreated } from '../../lib/pixCharge';
 import { setPendingPixCharge, clearPendingPixCharge } from '../../lib/pixChargeStorage';
 import { invalidatePixProviderModeCache } from '../../lib/pixProviderConfig';
 import { useAppAlert } from '../../contexts/AppAlertContext';
@@ -82,10 +82,12 @@ function toQrDataUri(base64: string | null): string | null {
 export function PixPaymentScreen({ navigation, route }: Props) {
   const params = route.params;
   const isResume = 'resume' in params && params.resume === true;
-  const draftParams = isResume ? null : params;
-  const isShipment = !isResume && params.service === 'shipment';
-  const isDependentShipment = !isResume && params.service === 'dependent_shipment';
-  const isExcursion = !isResume && params.service === 'excursion';
+  // Reabertura por Atividades: a cobrança já existe, a tela só relê o QR.
+  const isReopen = 'reopen' in params && params.reopen === true;
+  const draftParams = isResume || isReopen ? null : params;
+  const isShipment = !isResume && !isReopen && params.service === 'shipment';
+  const isDependentShipment = !isResume && !isReopen && params.service === 'dependent_shipment';
+  const isExcursion = !isResume && !isReopen && params.service === 'excursion';
   const shipmentSuccessParams = !isResume && params.service === 'shipment' ? params.shipmentSuccess : null;
   // Encomenda não tem successNav (a tela de sucesso é outra); o objeto vazio
   // mantém o resto do componente sem ramificações espalhadas.
@@ -170,6 +172,12 @@ export function PixPaymentScreen({ navigation, route }: Props) {
         });
         return;
       }
+      if (isReopen) {
+        // Veio de Atividades: devolve para a lista, que recarrega no foco e já
+        // mostra o pedido sem o "Aguardando pagamento".
+        navigation.goBack();
+        return;
+      }
       if (isExcursion) {
         // A excursão não tem tela de sucesso própria: o orçamento (que já
         // existia) volta aprovado. goBack devolve para ele, que recarrega ao
@@ -201,6 +209,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
       shipmentSuccessParams,
       isDependentShipment,
       isExcursion,
+      isReopen,
     ],
   );
 
@@ -357,7 +366,33 @@ export function PixPaymentScreen({ navigation, route }: Props) {
   // Montagem: cria a cobrança (fluxo normal) ou revalida a retomada (o status
   // pode ter mudado enquanto o app esteve fechado).
   useEffect(() => {
-    if (isResume) {
+    if (isReopen) {
+      // Reabertura: a cobrança já existe, só relemos o QR pelo id.
+      void (async () => {
+        const reopenId = 'pixChargeId' in params ? params.pixChargeId : '';
+        const open = reopenId ? await fetchOpenPixCharge(reopenId) : null;
+        if (!open) {
+          setCreateError(
+            'Este código Pix não está mais disponível. Ele pode ter expirado ou o pagamento já foi identificado.',
+          );
+          setState('create_error');
+          return;
+        }
+        setCharge({
+          pixChargeId: open.pixChargeId,
+          entityType: open.entityType,
+          entityId: open.entityId,
+          amountCents: open.amountCents,
+          qrPayload: open.qrPayload,
+          qrImageBase64: open.qrImageBase64,
+          expiresAt: open.expiresAt,
+        });
+        setQrImageFailed(false);
+        setNowMs(Date.now());
+        setState('awaiting');
+        void checkStatus('auto');
+      })();
+    } else if (isResume) {
       void checkStatus('auto');
     } else {
       void runCreate();

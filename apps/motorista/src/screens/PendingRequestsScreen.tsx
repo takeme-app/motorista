@@ -204,6 +204,10 @@ export function PendingRequestsScreen({ navigation }: Props) {
         'id, origin_address, destination_address, passenger_count, amount_cents, created_at, scheduled_trip_id, user_id, scheduled_trips!inner(departure_at, driver_id, status)',
       )
       .in('status', ['pending', 'paid'])
+      // Esconde reserva de Pix real ainda não liquidada: ela existe no banco
+      // desde que o QR foi gerado, mas o passageiro pode nunca pagar. Sem isto
+      // o motorista via (e aceitava) viagem não paga.
+      .or('pix_charge_id.is.null,pix_paid_at.not.is.null')
       .limit(50);
 
     const filtered = ((bookings ?? []) as unknown[]).filter((b: unknown) => {

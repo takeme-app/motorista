@@ -257,3 +257,58 @@ export async function getPixChargeStatus(pixChargeId: string): Promise<PixCharge
     return { ok: false, message: msg || 'Não foi possível consultar o pagamento agora.' };
   }
 }
+
+export type OpenPixCharge = {
+  pixChargeId: string;
+  entityType: string;
+  entityId: string;
+  amountCents: number;
+  qrPayload: string;
+  qrImageBase64: string | null;
+  expiresAt: string;
+};
+
+/**
+ * Relê uma cobrança Pix JÁ criada, para o cliente voltar ao QR depois de sair
+ * da tela. Sem isto o pedido ficava visível em Atividades como "Aguardando
+ * pagamento" e não havia caminho de volta para pagar — a pessoa só podia
+ * esperar expirar.
+ *
+ * Lê a tabela direto: a RLS `pix_charges_select_own` já limita ao dono, e o
+ * get-pix-charge-status não devolve o QR.
+ */
+export async function fetchOpenPixCharge(pixChargeId: string): Promise<OpenPixCharge | null> {
+  try {
+    // Tipos gerados (packages/shared) não têm pix_charges; cast como o resto
+    // do app já faz para tabelas fora do schema gerado.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any)
+      .from('pix_charges')
+      .select('id, entity_type, entity_id, expected_amount_cents, qr_payload, qr_image_base64, expires_at, status')
+      .eq('id', pixChargeId)
+      .maybeSingle();
+    if (error || !data) return null;
+    const row = data as unknown as {
+      id: string;
+      entity_type: string;
+      entity_id: string;
+      expected_amount_cents: number;
+      qr_payload: string | null;
+      qr_image_base64: string | null;
+      expires_at: string | null;
+      status: string;
+    };
+    if (row.status !== 'pending' || !row.qr_payload || !row.expires_at) return null;
+    return {
+      pixChargeId: row.id,
+      entityType: row.entity_type,
+      entityId: row.entity_id,
+      amountCents: Number(row.expected_amount_cents) || 0,
+      qrPayload: row.qr_payload,
+      qrImageBase64: row.qr_image_base64,
+      expiresAt: row.expires_at,
+    };
+  } catch {
+    return null;
+  }
+}
