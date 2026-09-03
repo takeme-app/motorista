@@ -233,6 +233,11 @@ export function PendingRequestsScreen({ navigation }: Props) {
       .eq('current_offer_driver_id', user.id)
       .in('status', ['pending_review', 'confirmed'])
       .is('driver_id', null)
+      // Pix real não liquidado: o pedido existe desde que o QR foi gerado,
+      // mas o cliente pode nunca pagar. Estas listagens vão por
+      // scheduled_trip_id e contornam a fila de ofertas, que só abre depois
+      // do pagamento — sem o filtro, o não pago aparecia aqui.
+      .or('pix_charge_id.is.null,pix_paid_at.not.is.null')
       .limit(20);
 
     const offerRows = ((offerRowsRaw ?? []) as unknown[]).filter((row: unknown) => {
@@ -421,6 +426,11 @@ export function PendingRequestsScreen({ navigation }: Props) {
         .in('scheduled_trip_id', tripIds)
         .is('driver_id', null)
         .in('status', ['pending_review', 'confirmed'])
+        // Pix real não liquidado: o pedido existe desde que o QR foi gerado,
+        // mas o cliente pode nunca pagar. Estas listagens vão por
+        // scheduled_trip_id e contornam a fila de ofertas, que só abre depois
+        // do pagamento — sem o filtro, o não pago aparecia aqui.
+        .or('pix_charge_id.is.null,pix_paid_at.not.is.null')
         .limit(50);
 
       for (const s of (shipRows ?? []) as unknown as {
@@ -485,6 +495,11 @@ export function PendingRequestsScreen({ navigation }: Props) {
         )
         .in('scheduled_trip_id', tripIds)
         .eq('status', 'pending_review')
+        // Pix real não liquidado: o pedido existe desde que o QR foi gerado,
+        // mas o cliente pode nunca pagar. Estas listagens vão por
+        // scheduled_trip_id e contornam a fila de ofertas, que só abre depois
+        // do pagamento — sem o filtro, o não pago aparecia aqui.
+        .or('pix_charge_id.is.null,pix_paid_at.not.is.null')
         .limit(50);
 
       for (const d of (depRows ?? []) as {
