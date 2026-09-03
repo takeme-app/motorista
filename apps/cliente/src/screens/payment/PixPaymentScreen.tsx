@@ -36,7 +36,7 @@ import type {
 } from '../../navigation/types';
 import { supabase } from '../../lib/supabase';
 import { formatShipmentCode } from '@take-me/shared';
-import { createPixCharge, fetchOpenPixCharge, getPixChargeStatus, type PixChargeCreated } from '../../lib/pixCharge';
+import { createPixCharge, reopenPixCharge, getPixChargeStatus, type PixChargeCreated } from '../../lib/pixCharge';
 import { setPendingPixCharge, clearPendingPixCharge } from '../../lib/pixChargeStorage';
 import { invalidatePixProviderModeCache } from '../../lib/pixProviderConfig';
 import { useAppAlert } from '../../contexts/AppAlertContext';
@@ -410,23 +410,20 @@ export function PixPaymentScreen({ navigation, route }: Props) {
       // Reabertura: a cobrança já existe, só relemos o QR pelo id.
       void (async () => {
         const reopenId = 'pixChargeId' in params ? params.pixChargeId : '';
-        const open = reopenId ? await fetchOpenPixCharge(reopenId) : null;
-        if (!open) {
-          setCreateError(
-            'Este código Pix não está mais disponível. Ele pode ter expirado ou o pagamento já foi identificado.',
-          );
+        if (!reopenId) {
+          setCreateError('Não foi possível reabrir o pagamento deste pedido.');
           setState('create_error');
           return;
         }
-        setCharge({
-          pixChargeId: open.pixChargeId,
-          entityType: open.entityType,
-          entityId: open.entityId,
-          amountCents: open.amountCents,
-          qrPayload: open.qrPayload,
-          qrImageBase64: open.qrImageBase64,
-          expiresAt: open.expiresAt,
-        });
+        // O servidor devolve a MESMA cobrança se ainda estiver no prazo e gera
+        // outra se tiver expirado — o cliente não fica preso num código morto.
+        const res = await reopenPixCharge(reopenId);
+        if (!res.ok) {
+          setCreateError(res.message);
+          setState('create_error');
+          return;
+        }
+        setCharge(res.charge);
         setQrImageFailed(false);
         setNowMs(Date.now());
         setState('awaiting');

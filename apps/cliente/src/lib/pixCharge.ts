@@ -258,57 +258,75 @@ export async function getPixChargeStatus(pixChargeId: string): Promise<PixCharge
   }
 }
 
-export type OpenPixCharge = {
-  pixChargeId: string;
-  entityType: string;
-  entityId: string;
-  amountCents: number;
-  qrPayload: string;
-  qrImageBase64: string | null;
-  expiresAt: string;
-};
+export type ReopenPixChargeResult =
+  | { ok: true; charge: PixChargeCreated; renewed: boolean }
+  | { ok: false; code: 'order_not_payable' | 'error'; message: string };
 
 /**
- * Relê uma cobrança Pix JÁ criada, para o cliente voltar ao QR depois de sair
- * da tela. Sem isto o pedido ficava visível em Atividades como "Aguardando
- * pagamento" e não havia caminho de volta para pagar — a pessoa só podia
- * esperar expirar.
+ * Reabre o pagamento de um pedido a partir da cobrança que ele já teve.
  *
- * Lê a tabela direto: a RLS `pix_charges_select_own` já limita ao dono, e o
- * get-pix-charge-status não devolve o QR.
+ * O servidor decide: cobrança ainda no prazo devolve a MESMA (não abre outra no
+ * provedor nem deixa duas em aberto para o mesmo pedido); expirada gera uma
+ * nova para o mesmo pedido. Antes disto a tela lia a cobrança direto da tabela
+ * e, se tivesse expirado, só sabia dizer "não está mais disponível" — o cliente
+ * ficava preso sem como pagar.
+ *
+ * Se o pedido já tiver sido cancelado (o cron varre as expiradas a cada 2 min),
+ * volta `order_not_payable` com a explicação.
  */
-export async function fetchOpenPixCharge(pixChargeId: string): Promise<OpenPixCharge | null> {
+export async function reopenPixCharge(pixChargeId: string): Promise<ReopenPixChargeResult> {
   try {
-    // Tipos gerados (packages/shared) não têm pix_charges; cast como o resto
-    // do app já faz para tabelas fora do schema gerado.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data, error } = await (supabase as any)
-      .from('pix_charges')
-      .select('id, entity_type, entity_id, expected_amount_cents, qr_payload, qr_image_base64, expires_at, status')
-      .eq('id', pixChargeId)
-      .maybeSingle();
-    if (error || !data) return null;
-    const row = data as unknown as {
-      id: string;
-      entity_type: string;
-      entity_id: string;
-      expected_amount_cents: number;
-      qr_payload: string | null;
-      qr_image_base64: string | null;
-      expires_at: string | null;
-      status: string;
-    };
-    if (row.status !== 'pending' || !row.qr_payload || !row.expires_at) return null;
+    const token = await getAccessToken();
+    if (!token) {
+      return { ok: false, code: 'error', message: 'Sessão expirada. Faça login novamente.' };
+    }
+    const { data, error } = await supabase.functions.invoke(EDGE_CREATE_PIX_CHARGE_SLUG, {
+      headers: { Authorization: `Bearer ${token}` },
+      body: { renew_pix_charge_id: pixChargeId },
+    });
+    if (error) {
+      const { body } = await readInvokeErrorInfo(data, error);
+      const code = readErrorCode(body);
+      if (code === 'order_not_payable') {
+        const msg = typeof body?.message === 'string' ? body.message : '';
+        return {
+          ok: false,
+          code: 'order_not_payable',
+          message:
+            msg ||
+            'Este pedido não está mais disponível para pagamento porque o código expirou. Faça uma nova solicitação.',
+        };
+      }
+      const message =
+        formatEdgeFunctionBody(body) ?? (await describeInvokeFailure(data, error));
+      return { ok: false, code: 'error', message };
+    }
+    const b = parseInvokeData(data);
+    const id = typeof b?.pix_charge_id === 'string' ? b.pix_charge_id : '';
+    const qrPayload = typeof b?.qr_payload === 'string' ? b.qr_payload : '';
+    const expiresAt = typeof b?.expires_at === 'string' ? b.expires_at : '';
+    const amountCents = Number(b?.amount_cents);
+    if (!id || !qrPayload || !expiresAt || !Number.isFinite(amountCents)) {
+      return { ok: false, code: 'error', message: 'Resposta inesperada ao reabrir o Pix.' };
+    }
     return {
-      pixChargeId: row.id,
-      entityType: row.entity_type,
-      entityId: row.entity_id,
-      amountCents: Number(row.expected_amount_cents) || 0,
-      qrPayload: row.qr_payload,
-      qrImageBase64: row.qr_image_base64,
-      expiresAt: row.expires_at,
+      ok: true,
+      renewed: b?.renewed === true,
+      charge: {
+        pixChargeId: id,
+        entityType: typeof b?.entity_type === 'string' ? b.entity_type : '',
+        entityId: b?.entity_id != null ? String(b.entity_id) : '',
+        amountCents: Math.floor(amountCents),
+        qrPayload,
+        qrImageBase64:
+          typeof b?.qr_image_base64 === 'string' && b.qr_image_base64.trim()
+            ? b.qr_image_base64.trim()
+            : null,
+        expiresAt,
+      },
     };
-  } catch {
-    return null;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : '';
+    return { ok: false, code: 'error', message: msg || 'Não foi possível reabrir o Pix agora.' };
   }
 }
