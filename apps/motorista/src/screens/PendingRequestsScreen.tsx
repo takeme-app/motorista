@@ -846,7 +846,10 @@ export function PendingRequestsScreen({ navigation }: Props) {
                   ? 'Reserva não encontrada.'
                   : code === 'unauthorized'
                     ? 'Faça login novamente.'
-                    : code === 'server_error' && rpc?.message
+                    // A RPC explica o motivo em `message` (ex.: Pix ainda não
+                    // pago). Sem isto o motorista via só "não foi possível" e
+                    // não entendia que era falta de pagamento do passageiro.
+                    : rpc?.message
                       ? String(rpc.message)
                       : 'Não foi possível atualizar a reserva.';
           showAlert('Reserva', msg);
