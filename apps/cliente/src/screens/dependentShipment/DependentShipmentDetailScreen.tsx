@@ -19,6 +19,7 @@ import {
   Share,
 } from 'react-native';
 import { Text } from '../../components/Text';
+import { isAwaitingRealPixPayment } from '../../lib/pixPending';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -182,7 +183,7 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
       const { data: row, error } = await supabase
         .from('dependent_shipments')
         .select(
-          'id, user_id, dependent_id, full_name, contact_phone, bags_count, instructions, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, tip_cents, tip_status, tip_paid_at, rating, receiver_name, pickup_code, delivery_code, scheduled_trip_id',
+          'id, user_id, dependent_id, full_name, contact_phone, bags_count, instructions, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, tip_cents, tip_status, tip_paid_at, rating, receiver_name, pickup_code, delivery_code, scheduled_trip_id, pix_charge_id, pix_paid_at',
         )
         .eq('id', dependentShipmentId)
         .eq('user_id', user.id)
@@ -650,7 +651,11 @@ export function DependentShipmentDetailScreen({ navigation, route }: Props) {
 
         {/* Preço + Status */}
         <Text style={styles.priceStatus}>
-          {priceFormatted} • <Text style={isDelivered ? styles.statusGreen : undefined}>{statusLabel(detail.status)}</Text>
+          {priceFormatted} • <Text style={isDelivered ? styles.statusGreen : undefined}>
+            {isAwaitingRealPixPayment(detail as Parameters<typeof isAwaitingRealPixPayment>[0])
+              ? 'Aguardando pagamento'
+              : statusLabel(detail.status)}
+          </Text>
         </Text>
 
         {/* Recibo */}

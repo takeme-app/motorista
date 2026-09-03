@@ -37,6 +37,7 @@ import { getRouteWithDuration, formatDuration, formatDistanceKmLabel, type Route
 import { LiveDriverMapMarker } from '../../components/LiveDriverMapMarker';
 import { useScheduledTripLiveLocation } from '../../lib/useScheduledTripLiveLocation';
 import { StatusBadge, clientViagemStatusBadge } from '../../components/StatusBadge';
+import { isAwaitingRealPixPayment } from '../../lib/pixPending';
 import type { TripLiveDriverDisplay } from '../../navigation/types';
 import { parsePassengerData } from '../../lib/clientBookingTripLive';
 import { formatVehicleDescription, formatTripFareBrl } from '../../lib/tripDriverDisplay';
@@ -334,7 +335,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
       const { data: booking, error: bookErr } = await supabase
         .from('bookings')
         .select(
-          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, scheduled_trip_id, passenger_count, bags_count, passenger_data, pickup_code, delivery_code, cancellation_reason, tip_cents, tip_status, tip_paid_at, payment_method'
+          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, scheduled_trip_id, passenger_count, bags_count, passenger_data, pickup_code, delivery_code, cancellation_reason, tip_cents, tip_status, tip_paid_at, payment_method, pix_charge_id, pix_paid_at'
         )
         .eq('id', bookingId)
         .eq('user_id', user.id)
@@ -842,7 +843,22 @@ export function TripDetailScreen({ navigation, route }: Props) {
 
         <View style={styles.card}>
           <View style={styles.cardStatusRow}>
-            <StatusBadge variant={clientViagemStatusBadge(detail.status, detail.trip_status, detail.cancellation_reason, detail.driver_journey_started_at)} />
+            <StatusBadge
+              variant={
+                // Pix real não liquidado manda em qualquer outro status: a
+                // reserva existe, mas nada anda até o pagamento entrar. Sem
+                // isto o card da lista dizia "Aguardando pagamento" e o
+                // detalhe dizia "Aguardando início".
+                isAwaitingRealPixPayment(detail as Parameters<typeof isAwaitingRealPixPayment>[0])
+                  ? 'aguardando_pagamento'
+                  : clientViagemStatusBadge(
+                      detail.status,
+                      detail.trip_status,
+                      detail.cancellation_reason,
+                      detail.driver_journey_started_at,
+                    )
+              }
+            />
           </View>
           <Text style={styles.tripId}>Minha reserva: {formatTripCode(detail.id)}</Text>
           {detail.scheduled_trip_id ? (

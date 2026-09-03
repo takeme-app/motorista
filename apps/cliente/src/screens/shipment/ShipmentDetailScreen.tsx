@@ -37,6 +37,7 @@ import { supabase } from '../../lib/supabase';
 import { getRouteWithDuration, formatDuration, type RoutePoint } from '../../lib/route';
 import { DriverEtaMarkerIcon } from '../../components/DriverEtaMarkerIcon';
 import { StatusBadge, shipmentStatusToBadge } from '../../components/StatusBadge';
+import { isAwaitingRealPixPayment } from '../../lib/pixPending';
 import { SupportSheet } from '../../components/SupportSheet';
 import { useAppAlert } from '../../contexts/AppAlertContext';
 import { tryOpenSupportTicket } from '../../lib/supportTickets';
@@ -179,7 +180,7 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
       const { data: shipment, error: shipErr } = await supabase
         .from('shipments')
         .select(
-          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents, tip_status, tip_paid_at, driver_id, pickup_code, delivery_code, cancellation_reason, base_id, picked_up_at, picked_up_by_preparer_at, preparer_handoff_expired_at, scheduled_trip_id, package_size, admin_approved_at'
+          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, recipient_name, recipient_phone, instructions, tip_cents, tip_status, tip_paid_at, driver_id, pickup_code, delivery_code, cancellation_reason, base_id, picked_up_at, picked_up_by_preparer_at, preparer_handoff_expired_at, scheduled_trip_id, package_size, admin_approved_at, pix_charge_id, pix_paid_at'
         )
         .eq('id', shipmentId)
         .eq('user_id', user.id)
@@ -807,7 +808,11 @@ export function ShipmentDetailScreen({ navigation, route }: Props) {
             </View>
           </View>
           <Text style={styles.cardDate}>{formatDetailDate(tripDepartureAt ?? detail.created_at)}</Text>
-          <Text style={styles.cardPrice}>R$ {(detail.amount_cents / 100).toFixed(2)} • {isLargeAwaitingApproval ? 'Aguardando aprovação da nossa equipe' : shipmentStatusMessage(detail.status)}</Text>
+          <Text style={styles.cardPrice}>R$ {(detail.amount_cents / 100).toFixed(2)} • {isAwaitingRealPixPayment(detail as Parameters<typeof isAwaitingRealPixPayment>[0])
+              ? 'Aguardando pagamento'
+              : isLargeAwaitingApproval
+                ? 'Aguardando aprovação da nossa equipe'
+                : shipmentStatusMessage(detail.status)}</Text>
           <TouchableOpacity style={styles.receiptButton} activeOpacity={0.8}>
             <MaterialIcons name="receipt" size={20} color={COLORS.neutral700} />
             <Text style={styles.receiptButtonText}>Recibo</Text>
