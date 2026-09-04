@@ -356,6 +356,8 @@ export function HomeScreen({ navigation }: Props) {
                   .from('bookings')
                   .select('id', { count: 'exact', head: true })
                   .in('status', ['pending', 'paid'])
+                  // Reserva de Pix real não liquidada não conta como pendente.
+                  .or('pix_charge_id.is.null,pix_paid_at.not.is.null')
                   .in('scheduled_trip_id', myTripIds),
                 supabase
                   .from('shipments')

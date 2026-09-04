@@ -257,10 +257,17 @@ export function CheckoutScreen({ navigation, route }: Props) {
   const [pixProviderMode, setPixProviderMode] = useState<PixProviderMode>('palliative');
 
   const allowedPaymentMethods = useMemo((): PaymentMethodType[] => {
-    // Pix paliativo não depende do Stripe Connect do motorista — fica disponível como o dinheiro.
-    if (connectStatusLoading) return ['pix', 'dinheiro'];
-    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix', 'dinheiro'];
-    return ['pix', 'dinheiro'];
+    // Dinheiro OCULTO por decisão de produto (02/09/2026): o cliente não paga
+    // mais em mãos. A máquina de dívida do motorista continua no banco
+    // (driver_platform_fee_ledger e gatilhos), intacta — isto aqui só some com
+    // a opção na tela, então voltar atrás é adicionar 'dinheiro' de novo.
+    //
+    // Pix não depende do Stripe Connect do motorista, então segue como a opção
+    // sempre disponível — inclusive quando o motorista não tem Connect ativo,
+    // caso em que antes o dinheiro era a única saída.
+    if (connectStatusLoading) return ['pix'];
+    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix'];
+    return ['pix'];
   }, [connectChargesEnabled, connectStatusLoading]);
 
   useEffect(() => {
@@ -282,7 +289,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (selectedPaymentMethod == null) return;
     if (!allowedPaymentMethods.includes(selectedPaymentMethod)) {
-      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'dinheiro');
+      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'pix');
     }
   }, [allowedPaymentMethods, selectedPaymentMethod]);
 

@@ -318,7 +318,17 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
   const sectionTitle = (title: string) => <Text style={styles.sectionTitle}>{title}</Text>;
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior="height">
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior="height"
+      // No Android o app já pana a janela inteira (SOFT_INPUT_ADJUST_PAN global,
+      // App.tsx). Deixar o KAV TAMBÉM encolher a view desconta a altura do
+      // teclado duas vezes e sobra um vão cinza do tamanho do teclado no rodapé
+      // — a tela "cortada ao meio". O ChatScreen já tinha chegado nessa mesma
+      // conclusão e por isso não usa KAV. No iOS não há pan, então o KAV
+      // continua sendo o que levanta o conteúdo.
+      enabled={Platform.OS !== 'android'}
+    >
       <StatusBar style="dark" />
       <View style={[styles.navbar, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity
@@ -585,7 +595,7 @@ export function CompleteDriverRegistrationScreen({ navigation, route }: Props) {
             />
             <UploadField
               label="Fotos do veículo"
-              labelHint="Máx. 4 fotos, 20MB"
+              labelHint="Mínimo 4 fotos, 20MB"
               title="Clique para fazer upload (múltiplas fotos)"
               selected={vehiclePhotosUris.length > 0}
               selectedLabel={vehiclePhotosUris.length > 0 ? `${vehiclePhotosUris.length} foto(s) adicionadas` : null}

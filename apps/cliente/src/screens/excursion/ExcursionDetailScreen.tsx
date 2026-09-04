@@ -20,6 +20,8 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { ActivitiesStackParamList } from '../../navigation/ActivitiesStackTypes';
 import { supabase } from '../../lib/supabase';
 import { excursionClientStatus } from '../../lib/excursionStatus';
+import { isAwaitingRealPixPayment } from '../../lib/pixPending';
+import { PixPendingBanner } from '../../components/PixPendingBanner';
 
 type Props = NativeStackScreenProps<ActivitiesStackParamList, 'ExcursionDetail'>;
 
@@ -160,7 +162,7 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
     }
     const { data: row, error } = await supabase
       .from('excursion_requests')
-      .select('id, user_id, destination, excursion_date, people_count, fleet_type, first_aid_team, recreation_team, children_team, special_needs_team, recreation_items, observations, status, sub_status, created_at, total_amount_cents, confirmed_at, scheduled_departure_at, check_in_ida_started_at, check_in_volta_started_at, boarding_ida_done_at, boarding_volta_done_at, driver_id, preparer_id, assignment_notes, vehicle_details, budget_lines, payment_method')
+      .select('id, user_id, destination, excursion_date, people_count, fleet_type, first_aid_team, recreation_team, children_team, special_needs_team, recreation_items, observations, status, sub_status, created_at, total_amount_cents, confirmed_at, scheduled_departure_at, check_in_ida_started_at, check_in_volta_started_at, boarding_ida_done_at, boarding_volta_done_at, driver_id, preparer_id, assignment_notes, vehicle_details, budget_lines, payment_method, pix_charge_id, pix_paid_at')
       .eq('id', excursionRequestId)
       .eq('user_id', user.id)
       .single();
@@ -270,7 +272,11 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
     );
   }
 
-  const statusBarLabel = excursionClientStatus(detail).label;
+  const statusBarLabel = isAwaitingRealPixPayment(
+    detail as Parameters<typeof isAwaitingRealPixPayment>[0],
+  )
+    ? 'Aguardando pagamento'
+    : excursionClientStatus(detail).label;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -373,6 +379,13 @@ export function ExcursionDetailScreen({ navigation, route }: Props) {
         {passengerCount > 0 && (
           <Text style={styles.passengerCount}>{passengerCount} cadastrado(s)</Text>
         )}
+
+        {isAwaitingRealPixPayment(detail as Parameters<typeof isAwaitingRealPixPayment>[0]) ? (
+
+          <PixPendingBanner pixChargeId={String((detail as { pix_charge_id?: string }).pix_charge_id ?? '')} />
+
+        ) : null}
+
 
         {canShowBudget && (
           <TouchableOpacity

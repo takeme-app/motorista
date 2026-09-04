@@ -230,7 +230,7 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
       if (savedMethod === 'credit_card') setSelectedPaymentMethod('credito');
       else if (savedMethod === 'debit_card') setSelectedPaymentMethod('debito');
       else if (savedMethod === 'pix') setSelectedPaymentMethod('pix');
-      else if (savedMethod === 'cash') setSelectedPaymentMethod('dinheiro');
+      else if (savedMethod === 'cash') setSelectedPaymentMethod('pix');
       setLoading(false);
     })();
     return () => { cancelled = true; };
@@ -669,7 +669,7 @@ export function ExcursionBudgetScreen({ navigation, route }: Props) {
             confirmLabel="Pagar orçamento"
             cancellationPolicyVariant="trip"
             loading={savingPayment}
-            allowedMethods={['credito', 'debito', 'pix', 'dinheiro']}
+            allowedMethods={['credito', 'debito', 'pix']}
             pixCpfRequired={pixProviderMode !== 'palliative' && profileCpfOk !== true}
             cashInstructionVariant="excursion"
           />

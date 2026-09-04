@@ -257,3 +257,76 @@ export async function getPixChargeStatus(pixChargeId: string): Promise<PixCharge
     return { ok: false, message: msg || 'Não foi possível consultar o pagamento agora.' };
   }
 }
+
+export type ReopenPixChargeResult =
+  | { ok: true; charge: PixChargeCreated; renewed: boolean }
+  | { ok: false; code: 'order_not_payable' | 'error'; message: string };
+
+/**
+ * Reabre o pagamento de um pedido a partir da cobrança que ele já teve.
+ *
+ * O servidor decide: cobrança ainda no prazo devolve a MESMA (não abre outra no
+ * provedor nem deixa duas em aberto para o mesmo pedido); expirada gera uma
+ * nova para o mesmo pedido. Antes disto a tela lia a cobrança direto da tabela
+ * e, se tivesse expirado, só sabia dizer "não está mais disponível" — o cliente
+ * ficava preso sem como pagar.
+ *
+ * Se o pedido já tiver sido cancelado (o cron varre as expiradas a cada 2 min),
+ * volta `order_not_payable` com a explicação.
+ */
+export async function reopenPixCharge(pixChargeId: string): Promise<ReopenPixChargeResult> {
+  try {
+    const token = await getAccessToken();
+    if (!token) {
+      return { ok: false, code: 'error', message: 'Sessão expirada. Faça login novamente.' };
+    }
+    const { data, error } = await supabase.functions.invoke(EDGE_CREATE_PIX_CHARGE_SLUG, {
+      headers: { Authorization: `Bearer ${token}` },
+      body: { renew_pix_charge_id: pixChargeId },
+    });
+    if (error) {
+      const { body } = await readInvokeErrorInfo(data, error);
+      const code = readErrorCode(body);
+      if (code === 'order_not_payable') {
+        const msg = typeof body?.message === 'string' ? body.message : '';
+        return {
+          ok: false,
+          code: 'order_not_payable',
+          message:
+            msg ||
+            'Este pedido não está mais disponível para pagamento porque o código expirou. Faça uma nova solicitação.',
+        };
+      }
+      const message =
+        formatEdgeFunctionBody(body) ?? (await describeInvokeFailure(data, error));
+      return { ok: false, code: 'error', message };
+    }
+    const b = parseInvokeData(data);
+    const id = typeof b?.pix_charge_id === 'string' ? b.pix_charge_id : '';
+    const qrPayload = typeof b?.qr_payload === 'string' ? b.qr_payload : '';
+    const expiresAt = typeof b?.expires_at === 'string' ? b.expires_at : '';
+    const amountCents = Number(b?.amount_cents);
+    if (!id || !qrPayload || !expiresAt || !Number.isFinite(amountCents)) {
+      return { ok: false, code: 'error', message: 'Resposta inesperada ao reabrir o Pix.' };
+    }
+    return {
+      ok: true,
+      renewed: b?.renewed === true,
+      charge: {
+        pixChargeId: id,
+        entityType: typeof b?.entity_type === 'string' ? b.entity_type : '',
+        entityId: b?.entity_id != null ? String(b.entity_id) : '',
+        amountCents: Math.floor(amountCents),
+        qrPayload,
+        qrImageBase64:
+          typeof b?.qr_image_base64 === 'string' && b.qr_image_base64.trim()
+            ? b.qr_image_base64.trim()
+            : null,
+        expiresAt,
+      },
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : '';
+    return { ok: false, code: 'error', message: msg || 'Não foi possível reabrir o Pix agora.' };
+  }
+}

@@ -36,7 +36,7 @@ import type {
 } from '../../navigation/types';
 import { supabase } from '../../lib/supabase';
 import { formatShipmentCode } from '@take-me/shared';
-import { createPixCharge, getPixChargeStatus, type PixChargeCreated } from '../../lib/pixCharge';
+import { createPixCharge, reopenPixCharge, getPixChargeStatus, type PixChargeCreated } from '../../lib/pixCharge';
 import { setPendingPixCharge, clearPendingPixCharge } from '../../lib/pixChargeStorage';
 import { invalidatePixProviderModeCache } from '../../lib/pixProviderConfig';
 import { useAppAlert } from '../../contexts/AppAlertContext';
@@ -82,10 +82,12 @@ function toQrDataUri(base64: string | null): string | null {
 export function PixPaymentScreen({ navigation, route }: Props) {
   const params = route.params;
   const isResume = 'resume' in params && params.resume === true;
-  const draftParams = isResume ? null : params;
-  const isShipment = !isResume && params.service === 'shipment';
-  const isDependentShipment = !isResume && params.service === 'dependent_shipment';
-  const isExcursion = !isResume && params.service === 'excursion';
+  // Reabertura por Atividades: a cobrança já existe, a tela só relê o QR.
+  const isReopen = 'reopen' in params && params.reopen === true;
+  const draftParams = isResume || isReopen ? null : params;
+  const isShipment = !isResume && !isReopen && params.service === 'shipment';
+  const isDependentShipment = !isResume && !isReopen && params.service === 'dependent_shipment';
+  const isExcursion = !isResume && !isReopen && params.service === 'excursion';
   const shipmentSuccessParams = !isResume && params.service === 'shipment' ? params.shipmentSuccess : null;
   // Encomenda não tem successNav (a tela de sucesso é outra); o objeto vazio
   // mantém o resto do componente sem ramificações espalhadas.
@@ -129,6 +131,46 @@ export function PixPaymentScreen({ navigation, route }: Props) {
     ? Math.max(0, Math.ceil(((Number.isFinite(expiresAtMs) ? expiresAtMs : 0) - nowMs) / 1000))
     : 0;
 
+  /**
+   * Fechar a tela do Pix leva ao DETALHE do pedido, não de volta ao checkout.
+   * A cobrança já existe: voltar para a tela de confirmação convidava a
+   * confirmar de novo e abrir uma SEGUNDA cobrança para o mesmo pedido.
+   * Sem cobrança criada (ainda gerando, ou erro), goBack é o certo — não há
+   * pedido para onde ir.
+   */
+  const closeToOrderDetail = useCallback(() => {
+    const entityType = charge?.entityType ?? '';
+    const entityId = charge?.entityId ?? '';
+    if (!entityId) {
+      navigation.goBack();
+      return;
+    }
+    const target =
+      entityType === 'booking'
+        ? { screen: 'TripDetail', params: { bookingId: entityId } }
+        : entityType === 'shipment'
+          ? { screen: 'ShipmentDetail', params: { shipmentId: entityId } }
+          : entityType === 'dependent_shipment'
+            ? { screen: 'DependentShipmentDetail', params: { dependentShipmentId: entityId } }
+            : entityType === 'excursion'
+              ? { screen: 'ExcursionDetail', params: { excursionRequestId: entityId } }
+              : null;
+    if (!target) {
+      navigation.goBack();
+      return;
+    }
+    // getParent() é genérico demais para o tipo desta tela; o alvo é a mesma
+    // navegação aninhada que as telas de sucesso já usam.
+    const parent = navigation.getParent() as unknown as
+      | { navigate: (name: string, params?: unknown) => void }
+      | undefined;
+    if (!parent) {
+      navigation.goBack();
+      return;
+    }
+    parent.navigate('Main', { screen: 'Activities', params: target });
+  }, [charge, navigation]);
+
   /** Pago: limpa a pendência e navega para o sucesso com id/valor DO SERVIDOR. */
   const handlePaid = useCallback(
     (entityIdFromServer?: string | null) => {
@@ -170,6 +212,12 @@ export function PixPaymentScreen({ navigation, route }: Props) {
         });
         return;
       }
+      if (isReopen) {
+        // Veio de Atividades: devolve para a lista, que recarrega no foco e já
+        // mostra o pedido sem o "Aguardando pagamento".
+        navigation.goBack();
+        return;
+      }
       if (isExcursion) {
         // A excursão não tem tela de sucesso própria: o orçamento (que já
         // existia) volta aprovado. goBack devolve para ele, que recarrega ao
@@ -201,6 +249,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
       shipmentSuccessParams,
       isDependentShipment,
       isExcursion,
+      isReopen,
     ],
   );
 
@@ -254,7 +303,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
         }
         if (source === 'manual') {
           setManualCheckNote(
-            'Ainda não identificamos o pagamento. Se você acabou de pagar, aguarde alguns segundos — a confirmação é automática.',
+            'Ainda não identificamos o pagamento. Se você acabou de pagar, aguarde alguns segundos. A confirmação é automática.',
           );
         }
       } finally {
@@ -357,7 +406,30 @@ export function PixPaymentScreen({ navigation, route }: Props) {
   // Montagem: cria a cobrança (fluxo normal) ou revalida a retomada (o status
   // pode ter mudado enquanto o app esteve fechado).
   useEffect(() => {
-    if (isResume) {
+    if (isReopen) {
+      // Reabertura: a cobrança já existe, só relemos o QR pelo id.
+      void (async () => {
+        const reopenId = 'pixChargeId' in params ? params.pixChargeId : '';
+        if (!reopenId) {
+          setCreateError('Não foi possível reabrir o pagamento deste pedido.');
+          setState('create_error');
+          return;
+        }
+        // O servidor devolve a MESMA cobrança se ainda estiver no prazo e gera
+        // outra se tiver expirado — o cliente não fica preso num código morto.
+        const res = await reopenPixCharge(reopenId);
+        if (!res.ok) {
+          setCreateError(res.message);
+          setState('create_error');
+          return;
+        }
+        setCharge(res.charge);
+        setQrImageFailed(false);
+        setNowMs(Date.now());
+        setState('awaiting');
+        void checkStatus('auto');
+      })();
+    } else if (isResume) {
       void checkStatus('auto');
     } else {
       void runCreate();
@@ -455,7 +527,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
       <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar style="dark" />
         <View style={styles.navbar}>
-          <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.navBtn} onPress={closeToOrderDetail} activeOpacity={0.7}>
             <MaterialIcons name="close" size={24} color={COLORS.black} />
           </TouchableOpacity>
         </View>
@@ -473,7 +545,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
       <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar style="dark" />
         <View style={styles.navbar}>
-          <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.navBtn} onPress={closeToOrderDetail} activeOpacity={0.7}>
             <MaterialIcons name="close" size={24} color={COLORS.black} />
           </TouchableOpacity>
         </View>
@@ -496,7 +568,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
       <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar style="dark" />
         <View style={styles.navbar}>
-          <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.navBtn} onPress={closeToOrderDetail} activeOpacity={0.7}>
             <MaterialIcons name="close" size={24} color={COLORS.black} />
           </TouchableOpacity>
         </View>
@@ -526,7 +598,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
       <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar style="dark" />
         <View style={styles.navbar}>
-          <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.navBtn} onPress={closeToOrderDetail} activeOpacity={0.7}>
             <MaterialIcons name="close" size={24} color={COLORS.black} />
           </TouchableOpacity>
         </View>
@@ -560,7 +632,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
       <View style={styles.navbar}>
-        <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.navBtn} onPress={closeToOrderDetail} activeOpacity={0.7}>
           <MaterialIcons name="close" size={24} color={COLORS.black} />
         </TouchableOpacity>
       </View>
@@ -569,7 +641,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
         <Text style={styles.pixLabel}>Pix</Text>
         <Text style={styles.amount}>{formatBRL(amountCents)}</Text>
         <Text style={styles.instructions}>
-          Use o aplicativo do seu banco para escanear o código QR ou copie o código PIX abaixo. A
+          Use o aplicativo do seu banco para escanear o código QR ou copie o código Pix abaixo. A
           confirmação é automática assim que o pagamento for identificado.
         </Text>
 
@@ -586,7 +658,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
           <View style={[styles.qrWrap, styles.qrFallback]}>
             <MaterialIcons name="qr-code-2" size={56} color={COLORS.greyLight} />
             <Text style={styles.qrFallbackText}>
-              QR indisponível — use o código copia-e-cola abaixo.
+              QR indisponível. Use o código copia-e-cola abaixo.
             </Text>
           </View>
         )}
@@ -598,7 +670,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
         </View>
         <TouchableOpacity style={styles.copyBtn} onPress={copyCode} activeOpacity={0.8}>
           <MaterialIcons name="content-copy" size={18} color="#FFFFFF" />
-          <Text style={styles.copyBtnText}>{copied ? 'Código copiado!' : 'Copiar código PIX'}</Text>
+          <Text style={styles.copyBtnText}>{copied ? 'Código copiado!' : 'Copiar código Pix'}</Text>
         </TouchableOpacity>
 
         {manualCheckNote ? <Text style={styles.checkNote}>{manualCheckNote}</Text> : null}
@@ -612,7 +684,7 @@ export function PixPaymentScreen({ navigation, route }: Props) {
           {manualChecking ? (
             <ActivityIndicator size="small" color="#FFFFFF" />
           ) : (
-            <Text style={styles.confirmBtnText}>Já paguei — verificar</Text>
+            <Text style={styles.confirmBtnText}>Já paguei</Text>
           )}
         </TouchableOpacity>
       </View>

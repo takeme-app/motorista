@@ -1,0 +1,22 @@
+-- Pedido com Pix real não liquidado é invisível para quem não é o dono.
+--
+-- Ver policies aplicadas em produção (drivers_can_view_shipments,
+-- drivers_can_view_trip_dependent_shipments, "Motorista lê dependent_shipments
+-- da viagem atribuída", drivers_can_view_trip_bookings): todas ganham
+-- (pix_charge_id IS NULL OR pix_paid_at IS NOT NULL); a cláusula do DONO fica
+-- de fora da restrição, porque é ele quem precisa abrir o QR e pagar.
+--
+-- Motivo: filtrar consulta por consulta no app não segurava. Só a tela de
+-- solicitações tinha QUATRO leituras diferentes e o app tem ~46 pontos que leem
+-- essas tabelas. A que escapou foi a de "motorista preferido aguardando":
+--
+--   shipments WHERE client_preferred_driver_id = auth.uid()
+--             AND current_offer_driver_id IS NULL
+--             AND driver_id IS NULL
+--             AND status IN ('pending_review','confirmed')
+--
+-- Encomenda Pix NÃO PAGA tem exatamente essa forma: o cliente escolheu o
+-- motorista e a oferta não abriu justamente porque não foi paga — o portão da
+-- fila vira a condição que faz a linha aparecer. A mesma consulta existe na
+-- HomeScreen, com equivalentes para dependentes.
+SELECT 1;

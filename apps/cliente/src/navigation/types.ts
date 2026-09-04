@@ -332,6 +332,7 @@ export type PixPaymentScreenParams =
       shipmentSuccess?: undefined;
       dependentSuccess?: undefined;
       excursionSuccess?: undefined;
+      reopen?: undefined;
       resume?: undefined;
     }
   | {
@@ -343,6 +344,7 @@ export type PixPaymentScreenParams =
       cpf?: string;
       estimatedAmountCents: number;
       shipmentSuccess: { isLargePackage: boolean };
+      reopen?: undefined;
       dependentSuccess?: undefined;
       excursionSuccess?: undefined;
       successNav?: undefined;
@@ -358,6 +360,7 @@ export type PixPaymentScreenParams =
       cpf?: string;
       estimatedAmountCents: number;
       dependentSuccess: true;
+      reopen?: undefined;
       excursionSuccess?: undefined;
       shipmentSuccess?: undefined;
       successNav?: undefined;
@@ -372,13 +375,30 @@ export type PixPaymentScreenParams =
       cpf?: string;
       estimatedAmountCents: number;
       excursionSuccess: true;
+      reopen?: undefined;
       dependentSuccess?: undefined;
       shipmentSuccess?: undefined;
       successNav?: undefined;
       draft?: undefined;
       resume?: undefined;
     }
-  | { resume: true; stored: PendingPixChargeParam };
+  | {
+      // Reabertura a partir de Atividades: a cobrança JÁ existe no servidor e a
+      // tela relê o QR por id. Vale para os quatro fluxos.
+      reopen: true;
+      pixChargeId: string;
+      // Declaradas ausentes para a união continuar estreitando por propriedade.
+      service?: undefined;
+      draft?: undefined;
+      cpf?: undefined;
+      estimatedAmountCents?: undefined;
+      successNav?: undefined;
+      shipmentSuccess?: undefined;
+      dependentSuccess?: undefined;
+      excursionSuccess?: undefined;
+      resume?: undefined;
+    }
+  | { resume: true; stored: PendingPixChargeParam; reopen?: undefined };
 
 export type TripStackParamList = {
   PixPaliativo: { requestId: string };

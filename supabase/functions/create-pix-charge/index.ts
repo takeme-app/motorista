@@ -155,10 +155,18 @@ Deno.serve(async (req) => {
       dependent_draft?: Record<string, unknown>;
       /** Excursão: o pedido JÁ existe (orçado); só anexamos a cobrança. */
       excursion_request_id?: string;
+      /**
+       * RENOVAÇÃO: id de uma cobrança já emitida. Devolve a MESMA se ainda
+       * estiver válida; emite outra para o mesmo pedido se tiver expirado.
+       * Dispensa entity_type — ele vem da própria cobrança.
+       */
+      renew_pix_charge_id?: string;
     };
 
+    const renewId = body.renew_pix_charge_id?.trim();
     const entityType = (body.entity_type ?? "").trim();
     if (
+      !renewId &&
       entityType !== "booking" &&
       entityType !== "shipment" &&
       entityType !== "dependent_shipment" &&
@@ -172,16 +180,16 @@ Deno.serve(async (req) => {
 
     const sid = body.scheduled_trip_id?.trim();
     const draft = body.draft;
-    if (entityType === "booking" && (!sid || !draft)) {
+    if (!renewId && entityType === "booking" && (!sid || !draft)) {
       return jsonRes({ error: "scheduled_trip_id e draft são obrigatórios." }, 400);
     }
-    if (entityType === "shipment" && !body.shipment_draft) {
+    if (!renewId && entityType === "shipment" && !body.shipment_draft) {
       return jsonRes({ error: "shipment_draft é obrigatório." }, 400);
     }
-    if (entityType === "dependent_shipment" && !body.dependent_draft) {
+    if (!renewId && entityType === "dependent_shipment" && !body.dependent_draft) {
       return jsonRes({ error: "dependent_draft é obrigatório." }, 400);
     }
-    if (entityType === "excursion" && !body.excursion_request_id?.trim()) {
+    if (!renewId && entityType === "excursion" && !body.excursion_request_id?.trim()) {
       return jsonRes({ error: "excursion_request_id é obrigatório." }, 400);
     }
 
@@ -225,6 +233,188 @@ Deno.serve(async (req) => {
       if (cpfErr) console.warn("[create-pix-charge] persistência de CPF falhou:", cpfErr.message);
     } else {
       return jsonRes({ error: "cpf_required" }, 422);
+    }
+
+    // ══ RENOVAÇÃO DE COBRANÇA ═════════════════════════════════════════
+    // O cliente voltou ao pedido e pediu o código de novo. Dois casos:
+    //   ainda válida  → devolve a MESMA (não abre cobrança nova no provedor,
+    //                   nem deixa duas em aberto para o mesmo pedido);
+    //   expirada      → emite outra para o MESMO pedido.
+    //
+    // Sem isto o cliente ficava preso: o código expirava, o cron leva até 2
+    // minutos para cancelar o pedido, e nessa janela a tela só sabia dizer
+    // "este código não está mais disponível".
+    if (renewId) {
+      const { data: oldChargeRow } = await admin
+        .from("pix_charges")
+        .select("id, entity_type, entity_id, user_id, status, expires_at, qr_payload, qr_image_base64, expected_amount_cents")
+        .eq("id", renewId)
+        .maybeSingle();
+      const oldCharge = oldChargeRow as {
+        id: string;
+        entity_type: string;
+        entity_id: string;
+        user_id: string;
+        status: string;
+        expires_at: string | null;
+        qr_payload: string | null;
+        qr_image_base64: string | null;
+        expected_amount_cents: number;
+      } | null;
+      if (!oldCharge || oldCharge.user_id !== userId) {
+        return jsonRes({ error: "Cobrança não encontrada." }, 404);
+      }
+
+      // Ainda no prazo e pagável: devolve exatamente a mesma.
+      const stillValid =
+        oldCharge.status === "pending" &&
+        oldCharge.qr_payload &&
+        oldCharge.expires_at &&
+        Date.parse(oldCharge.expires_at) > Date.now();
+      if (stillValid) {
+        return jsonRes({
+          ok: true,
+          pix_charge_id: oldCharge.id,
+          entity_type: oldCharge.entity_type,
+          entity_id: oldCharge.entity_id,
+          amount_cents: oldCharge.expected_amount_cents,
+          qr_payload: oldCharge.qr_payload,
+          qr_image_base64: oldCharge.qr_image_base64,
+          expires_at: oldCharge.expires_at,
+          reused: true,
+        });
+      }
+
+      if (oldCharge.status === "paid") {
+        return jsonRes({ error: "Este pedido já foi pago." }, 409);
+      }
+
+      // Configuração do pedido por tipo: onde ler o valor e quais estados
+      // ainda aceitam pagamento.
+      const RENEWABLE = {
+        booking: { table: "bookings", amount: "amount_cents", ok: ["pending"] },
+        shipment: { table: "shipments", amount: "amount_cents", ok: ["confirmed", "pending_review"] },
+        dependent_shipment: {
+          table: "dependent_shipments",
+          amount: "amount_cents",
+          ok: ["confirmed", "pending_review"],
+        },
+        excursion: { table: "excursion_requests", amount: "total_amount_cents", ok: ["quoted"] },
+      } as const;
+      const cfgRenew = RENEWABLE[oldCharge.entity_type as keyof typeof RENEWABLE];
+      if (!cfgRenew) {
+        return jsonRes({ error: "Tipo de pedido não suporta nova cobrança." }, 400);
+      }
+
+      const { data: orderRow } = await admin
+        .from(cfgRenew.table)
+        .select(`id, user_id, status, pix_paid_at, ${cfgRenew.amount}`)
+        .eq("id", oldCharge.entity_id)
+        .maybeSingle();
+      const order = orderRow as Record<string, unknown> | null;
+      if (!order || String(order.user_id) !== userId) {
+        return jsonRes({ error: "Pedido não encontrado." }, 404);
+      }
+      if (order.pix_paid_at) {
+        return jsonRes({ error: "Este pedido já foi pago." }, 409);
+      }
+      const orderStatus = String(order.status ?? "");
+      if (!(cfgRenew.ok as readonly string[]).includes(orderStatus)) {
+        // Caso mais comum: o cron já cancelou o pedido depois da expiração.
+        return jsonRes(
+          {
+            error: "order_not_payable",
+            message:
+              "Este pedido não está mais disponível para pagamento porque o código expirou. Faça uma nova solicitação.",
+          },
+          409,
+        );
+      }
+
+      const amountRenew = Math.floor(Number(order[cfgRenew.amount] ?? 0));
+      if (!Number.isInteger(amountRenew) || amountRenew < 1) {
+        return jsonRes({ error: "Valor do pedido inválido." }, 400);
+      }
+
+      // Fecha a antiga que ainda estiver 'pending' (expirada mas não varrida),
+      // para não ficar cobrança órfã em aberto no provedor.
+      if (oldCharge.status === "pending") {
+        await admin
+          .from("pix_charges")
+          .update({ status: "expired", updated_at: new Date().toISOString() } as never)
+          .eq("id", oldCharge.id)
+          .eq("status", "pending");
+      }
+
+      const ttlRenew = setting.charge_ttl_minutes;
+      const expiresAtRenew = new Date(Date.now() + ttlRenew * 60 * 1000).toISOString();
+      const { data: newChargeRow, error: newChargeErr } = await admin
+        .from("pix_charges")
+        .insert({
+          provider: provider.name,
+          provider_env: provider.env,
+          provider_charge_id: null,
+          entity_type: oldCharge.entity_type,
+          entity_id: oldCharge.entity_id,
+          user_id: userId,
+          expected_amount_cents: amountRenew,
+          status: "pending",
+          expires_at: expiresAtRenew,
+        } as never)
+        .select("id")
+        .single();
+      if (newChargeErr || !newChargeRow?.id) {
+        console.error("[create-pix-charge] renovação: insert pix_charges:", newChargeErr?.message);
+        return jsonRes({ error: "Não foi possível gerar um novo código Pix." }, 500);
+      }
+      const newChargeId = newChargeRow.id as string;
+
+      const customerNameRenew = ((profile?.full_name as string | null) ?? "").trim() || "Cliente Take Me";
+      let createdRenew;
+      try {
+        createdRenew = await provider.createCharge({
+          internalId: newChargeId,
+          userId,
+          amountCents: amountRenew,
+          cpfDigits,
+          customerName: customerNameRenew,
+          description: "Take Me — novo código Pix",
+        });
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        console.error("[create-pix-charge] renovação: provedor falhou:", reason);
+        await markChargeCreateFailed(admin, newChargeId, reason);
+        return jsonRes({ error: "Provedor Pix indisponível no momento. Tente novamente." }, 502);
+      }
+
+      await admin
+        .from("pix_charges")
+        .update({
+          provider_charge_id: createdRenew.providerChargeId,
+          qr_payload: createdRenew.qrPayload,
+          qr_image_base64: createdRenew.qrImageBase64,
+          updated_at: new Date().toISOString(),
+        } as never)
+        .eq("id", newChargeId);
+
+      // Aponta o pedido para a cobrança nova, senão os gatilhos e a tela
+      // continuariam olhando para a antiga.
+      await admin
+        .from(cfgRenew.table)
+        .update({ pix_charge_id: newChargeId, updated_at: new Date().toISOString() } as never)
+        .eq("id", oldCharge.entity_id);
+
+      return jsonRes({
+        ok: true,
+        pix_charge_id: newChargeId,
+        entity_type: oldCharge.entity_type,
+        entity_id: oldCharge.entity_id,
+        amount_cents: amountRenew,
+        qr_payload: createdRenew.qrPayload,
+        qr_image_base64: createdRenew.qrImageBase64,
+        expires_at: expiresAtRenew,
+        renewed: true,
+      });
     }
 
     // ══ EXCURSÃO ══════════════════════════════════════════════════════
