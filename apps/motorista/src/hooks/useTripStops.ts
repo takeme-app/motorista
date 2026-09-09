@@ -135,7 +135,9 @@ async function countBookingsAwaitingDriverAcceptance(tripId: string): Promise<nu
     .from('bookings')
     .select('id', { count: 'exact', head: true })
     .eq('scheduled_trip_id', tripId)
-    .in('status', ['pending', 'paid']);
+    .in('status', ['pending', 'paid'])
+    // Reserva de Pix real não liquidada não vira parada da viagem.
+    .or('pix_charge_id.is.null,pix_paid_at.not.is.null');
   return Math.max(0, count ?? 0);
 }
 

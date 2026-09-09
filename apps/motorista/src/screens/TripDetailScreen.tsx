@@ -546,7 +546,9 @@ export function TripDetailScreen({ route, navigation }: Props) {
             'id, user_id, passenger_count, bags_count, status, amount_cents, worker_earning_cents, pickup_code, delivery_code, origin_address, destination_address'
           )
           .eq('scheduled_trip_id', tripId)
-          .in('status', ['pending', 'paid', 'confirmed', 'in_progress']),
+          .in('status', ['pending', 'paid', 'confirmed', 'in_progress'])
+          // Reserva de Pix real não liquidada não é passageiro da viagem.
+          .or('pix_charge_id.is.null,pix_paid_at.not.is.null'),
         uid
           ? supabase
               .from('shipments')

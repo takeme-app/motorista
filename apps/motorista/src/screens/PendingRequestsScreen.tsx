@@ -204,6 +204,10 @@ export function PendingRequestsScreen({ navigation }: Props) {
         'id, origin_address, destination_address, passenger_count, amount_cents, created_at, scheduled_trip_id, user_id, scheduled_trips!inner(departure_at, driver_id, status)',
       )
       .in('status', ['pending', 'paid'])
+      // Esconde reserva de Pix real ainda não liquidada: ela existe no banco
+      // desde que o QR foi gerado, mas o passageiro pode nunca pagar. Sem isto
+      // o motorista via (e aceitava) viagem não paga.
+      .or('pix_charge_id.is.null,pix_paid_at.not.is.null')
       .limit(50);
 
     const filtered = ((bookings ?? []) as unknown[]).filter((b: unknown) => {
@@ -229,6 +233,11 @@ export function PendingRequestsScreen({ navigation }: Props) {
       .eq('current_offer_driver_id', user.id)
       .in('status', ['pending_review', 'confirmed'])
       .is('driver_id', null)
+      // Pix real não liquidado: o pedido existe desde que o QR foi gerado,
+      // mas o cliente pode nunca pagar. Estas listagens vão por
+      // scheduled_trip_id e contornam a fila de ofertas, que só abre depois
+      // do pagamento — sem o filtro, o não pago aparecia aqui.
+      .or('pix_charge_id.is.null,pix_paid_at.not.is.null')
       .limit(20);
 
     const offerRows = ((offerRowsRaw ?? []) as unknown[]).filter((row: unknown) => {
@@ -417,6 +426,11 @@ export function PendingRequestsScreen({ navigation }: Props) {
         .in('scheduled_trip_id', tripIds)
         .is('driver_id', null)
         .in('status', ['pending_review', 'confirmed'])
+        // Pix real não liquidado: o pedido existe desde que o QR foi gerado,
+        // mas o cliente pode nunca pagar. Estas listagens vão por
+        // scheduled_trip_id e contornam a fila de ofertas, que só abre depois
+        // do pagamento — sem o filtro, o não pago aparecia aqui.
+        .or('pix_charge_id.is.null,pix_paid_at.not.is.null')
         .limit(50);
 
       for (const s of (shipRows ?? []) as unknown as {
@@ -481,6 +495,11 @@ export function PendingRequestsScreen({ navigation }: Props) {
         )
         .in('scheduled_trip_id', tripIds)
         .eq('status', 'pending_review')
+        // Pix real não liquidado: o pedido existe desde que o QR foi gerado,
+        // mas o cliente pode nunca pagar. Estas listagens vão por
+        // scheduled_trip_id e contornam a fila de ofertas, que só abre depois
+        // do pagamento — sem o filtro, o não pago aparecia aqui.
+        .or('pix_charge_id.is.null,pix_paid_at.not.is.null')
         .limit(50);
 
       for (const d of (depRows ?? []) as {
@@ -827,7 +846,10 @@ export function PendingRequestsScreen({ navigation }: Props) {
                   ? 'Reserva não encontrada.'
                   : code === 'unauthorized'
                     ? 'Faça login novamente.'
-                    : code === 'server_error' && rpc?.message
+                    // A RPC explica o motivo em `message` (ex.: Pix ainda não
+                    // pago). Sem isto o motorista via só "não foi possível" e
+                    // não entendia que era falta de pagamento do passageiro.
+                    : rpc?.message
                       ? String(rpc.message)
                       : 'Não foi possível atualizar a reserva.';
           showAlert('Reserva', msg);

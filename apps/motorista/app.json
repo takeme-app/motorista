@@ -5,7 +5,7 @@
     "newArchEnabled": true,
     "slug": "take-me-motorista",
     "scheme": "take-me-motorista",
-    "version": "1.0.26",
+    "version": "1.0.28",
     "icon": "./assets/logo.png",
     "splash": {
       "image": "./assets/logo.png",
@@ -16,7 +16,7 @@
     "userInterfaceStyle": "light",
     "ios": {
       "bundleIdentifier": "com.takeme.motorista",
-      "buildNumber": "8",
+      "buildNumber": "9",
       "googleServicesFile": "./GoogleService-Info-motorista.plist",
       "supportsTablet": true
     },

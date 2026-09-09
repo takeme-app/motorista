@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { AsaasProvider } from "../_shared/pixProviders/asaas.ts";
+import { BradescoProvider } from "../_shared/pixProviders/bradesco.ts";
 import { PixProviderUnavailableError } from "../_shared/pixProviders/types.ts";
 
 const corsHeaders = {
@@ -61,30 +62,55 @@ Deno.serve(async (req) => {
     const asaasUrl = Deno.env.get("ASAAS_API_URL")?.trim() ?? "";
     const asaasConfigured = Boolean(asaasKey && asaasUrl);
 
+    // Bradesco: mTLS + OAuth. "Configurado" = os 6 secrets presentes.
+    const bradescoUrl = Deno.env.get("BRADESCO_API_URL")?.trim() ?? "";
+    const bradescoConfigured = Boolean(
+      bradescoUrl &&
+        Deno.env.get("BRADESCO_CLIENT_ID")?.trim() &&
+        Deno.env.get("BRADESCO_CLIENT_SECRET")?.trim() &&
+        Deno.env.get("BRADESCO_CERT_PEM") &&
+        Deno.env.get("BRADESCO_KEY_PEM") &&
+        Deno.env.get("BRADESCO_PIX_KEY")?.trim(),
+    );
+
     const providers: Record<string, Record<string, unknown>> = {
       asaas: {
         configured: asaasConfigured,
         env: asaasConfigured ? (asaasUrl.includes("sandbox") ? "sandbox" : "production") : null,
       },
       bradesco: {
-        configured: false,
-        env: null,
+        configured: bradescoConfigured,
+        env: bradescoConfigured
+          ? (/sandbox|prebanco/i.test(bradescoUrl) ? "sandbox" : "production")
+          : null,
       },
     };
 
-    if (ping && asaasConfigured) {
+    if (ping) {
       const admin = createClient(supabaseUrl, serviceRoleKey);
-      try {
-        const asaas = new AsaasProvider(admin);
-        providers.asaas.ping = await asaas.ping();
-      } catch (e) {
-        providers.asaas.ping = {
-          ok: false,
-          detail: e instanceof PixProviderUnavailableError ? e.message : "falha ao inicializar o provedor",
-        };
-      }
-    } else if (ping) {
-      providers.asaas.ping = { ok: false, detail: "secrets não configurados" };
+      const pingOne = async (
+        name: string,
+        configured: boolean,
+        make: () => { ping: () => Promise<{ ok: boolean; detail: string }> },
+      ) => {
+        if (!configured) {
+          providers[name].ping = { ok: false, detail: "secrets não configurados" };
+          return;
+        }
+        try {
+          providers[name].ping = await make().ping();
+        } catch (e) {
+          providers[name].ping = {
+            ok: false,
+            detail: e instanceof PixProviderUnavailableError
+              ? e.message
+              : "falha ao inicializar o provedor",
+          };
+        }
+      };
+
+      await pingOne("asaas", asaasConfigured, () => new AsaasProvider(admin));
+      await pingOne("bradesco", bradescoConfigured, () => new BradescoProvider(admin));
     }
 
     return jsonRes({ ok: true, providers });
