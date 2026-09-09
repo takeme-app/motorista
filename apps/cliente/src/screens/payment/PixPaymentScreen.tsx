@@ -73,10 +73,20 @@ function formatBRL(cents: number): string {
   return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
-/** Alguns provedores devolvem o PNG já com prefixo data:; normaliza para data URI. */
+/**
+ * Normaliza a imagem do QR para data URI. Alguns provedores já mandam com prefixo
+ * `data:`; o resto vem só o base64 — e o formato varia (Asaas devolve PNG, Bradesco
+ * devolve JPEG), então o mime sai dos magic bytes em vez de ser fixo.
+ */
 function toQrDataUri(base64: string | null): string | null {
   if (!base64) return null;
-  return base64.startsWith('data:') ? base64 : `data:image/png;base64,${base64}`;
+  if (base64.startsWith('data:')) return base64;
+  const mime = base64.startsWith('/9j/')
+    ? 'image/jpeg'
+    : base64.startsWith('R0lGOD')
+      ? 'image/gif'
+      : 'image/png';
+  return `data:${mime};base64,${base64}`;
 }
 
 export function PixPaymentScreen({ navigation, route }: Props) {

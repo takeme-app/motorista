@@ -379,6 +379,7 @@ Deno.serve(async (req) => {
           cpfDigits,
           customerName: customerNameRenew,
           description: "Take Me — novo código Pix",
+          expiresInSeconds: ttlRenew * 60,
         });
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
@@ -598,6 +599,7 @@ Deno.serve(async (req) => {
           cpfDigits,
           customerName: customerNameExc,
           description: "Take Me — excursão",
+          expiresInSeconds: ttlExc * 60,
         });
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
@@ -781,6 +783,7 @@ Deno.serve(async (req) => {
           cpfDigits,
           customerName: customerNameApp,
           description: cfg.description,
+          expiresInSeconds: ttlApp * 60,
         });
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
@@ -1029,6 +1032,7 @@ Deno.serve(async (req) => {
         cpfDigits,
         customerName,
         description: "Take Me — reserva de viagem",
+        expiresInSeconds: ttlMinutes * 60,
       });
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);

@@ -279,7 +279,7 @@ export default function PixConfigTab() {
         },
           React.createElement('option', { value: 'palliative' }, 'Paliativo (QR estático, sem verificação)'),
           React.createElement('option', { value: 'asaas' }, 'Asaas'),
-          React.createElement('option', { value: 'bradesco', disabled: true }, 'Bradesco (em breve)')),
+          React.createElement('option', { value: 'bradesco' }, 'Bradesco')),
         selectChevron)),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6, maxWidth: 260 } },
       React.createElement('label', { style: labelStyle }, 'Validade da cobrança (minutos)'),
