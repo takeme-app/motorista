@@ -389,6 +389,11 @@ export class BradescoProvider implements PixProvider {
         // O par no nosso banco é a COBRANÇA (txid), não o endToEndId.
         const rowTxid = p.txid ?? "";
         if (!rowTxid) continue;
+        // A chave Pix é COMPARTILHADA: o QR paliativo estático da Take Me usa a
+        // mesma chave, e outros sistemas podem usá-la no futuro. Um Pix que não
+        // nasceu de cobrança nossa não é órfão — é dinheiro legítimo de outro
+        // fluxo. Tratá-lo como órfão enfileiraria devolução do próprio caixa.
+        if (!txidToChargeId(rowTxid)) continue;
         out.push({
           providerChargeId: rowTxid,
           status: "paid",
