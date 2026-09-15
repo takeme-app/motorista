@@ -24,6 +24,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
+import QRCodeSvg from 'react-native-qrcode-svg';
+
+/** Lado do QR desenhado no app: a caixa tem 220 com 8 de padding. */
+const QR_SIZE = 204;
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Text } from '../../components/Text';
 import type {
@@ -663,6 +667,17 @@ export function PixPaymentScreen({ navigation, route }: Props) {
               resizeMode="contain"
               onError={() => setQrImageFailed(true)}
             />
+          </View>
+        ) : charge.qrPayload ? (
+          /*
+           * Sem imagem do provedor, desenhamos o QR a partir do próprio
+           * copia-e-cola — é a mesma informação, só que representada
+           * visualmente, então não há como divergir do que o banco cobra.
+           * O Bradesco nunca devolve imagem; o servidor também gera uma para
+           * atender as versões do app já instaladas, que não têm este código.
+           */
+          <View style={styles.qrWrap}>
+            <QRCodeSvg value={charge.qrPayload} size={QR_SIZE} ecl="M" />
           </View>
         ) : (
           <View style={[styles.qrWrap, styles.qrFallback]}>
