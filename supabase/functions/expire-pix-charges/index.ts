@@ -165,6 +165,7 @@ Deno.serve(async (req) => {
     const admin = createClient(supabaseUrl, serviceRoleKey);
     const nowIso = new Date().toISOString();
 
+    // ── Pendentes VENCIDAS: re-consulta (pagou no último segundo?) e expira ──
     const { data, error } = await admin
       .from("pix_charges")
       .select(PIX_CHARGE_ROW_COLUMNS)
@@ -179,8 +180,62 @@ Deno.serve(async (req) => {
       });
     }
 
-    const result = { settled_last_second: 0, expired: 0, create_failed_rescued: 0 };
+    const result = {
+      settled_in_window: 0,
+      checked_in_window: 0,
+      settled_last_second: 0,
+      expired: 0,
+      create_failed_rescued: 0,
+    };
     const errors: string[] = [];
+
+    // ── Pendentes AINDA NO PRAZO ──
+    //
+    // Sem isto, durante os 15 minutos de validade a única coisa que confirma um
+    // pagamento é o polling da tela do Pix — ou seja, o cliente precisa ficar com
+    // o app aberto. Quem paga no app do banco e fecha o Take Me só tinha o
+    // pagamento reconhecido quando a cobrança vencia e caía na varredura de
+    // expiração abaixo: até 15 minutos de atraso, com o motorista sem ser avisado
+    // esse tempo todo.
+    //
+    // O Asaas mascarava isso com o webhook. O Bradesco não tem webhook (o
+    // certificado depende de processo com o banco), então aqui o buraco é real.
+    // Varrendo a cada 2 minutos, o atraso máximo sem app aberto e sem webhook cai
+    // para ~2 minutos.
+    //
+    // Vale para TODOS os provedores de propósito: se o webhook do Asaas falhar ou
+    // atrasar, esta varredura cobre também. O custo é uma consulta barata por
+    // cobrança pendente a cada 2 min — com TTL de 15 min, ~7 consultas por
+    // cobrança no pior caso.
+    try {
+      const { data: openRows, error: openErr } = await admin
+        .from("pix_charges")
+        .select(PIX_CHARGE_ROW_COLUMNS)
+        .eq("status", "pending")
+        .gte("expires_at", nowIso)
+        .not("provider_charge_id", "is", null)
+        .order("created_at", { ascending: true })
+        .limit(100);
+      if (openErr) throw new Error(openErr.message);
+
+      for (const row of (openRows ?? []) as unknown as PixChargeRow[]) {
+        result.checked_in_window++;
+        try {
+          const { result: settleResult } = await refreshAndSettlePixCharge(admin, row);
+          if (settleResult === "settled" || settleResult === "mismatch" || settleResult === "orphan") {
+            result.settled_in_window++;
+          }
+        } catch (e) {
+          // Provedor instável não pode derrubar a varredura de expiração, que é
+          // o que devolve a vaga. Só registra e segue.
+          errors.push(
+            `janela ${row.id}: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      }
+    } catch (e) {
+      errors.push(`varredura na janela: ${e instanceof Error ? e.message : String(e)}`);
+    }
 
     // Resgate: charge 'create_failed' cujo booking ficou 'pending' (o cancel do
     // create-pix-charge falhou transitoriamente). Sem esta varredura, o assento
