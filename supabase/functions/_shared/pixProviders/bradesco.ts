@@ -20,7 +20,11 @@
 //     onde a expiração é nossa. Por isso o input carrega expiresInSeconds: se o QR do
 //     banco vivesse mais que o nosso expires_at, o cliente poderia pagar uma cobrança
 //     que já cancelamos (paid_orphan + devolução manual).
-//  5. A criação devolve só o pixCopiaECola; a imagem (base64, JPEG) vem no GET seguinte.
+//  5. A criação devolve só o pixCopiaECola. O campo `base64` documentado no manual
+//     NÃO veio em nenhum ambiente (sandbox nem produção, verificado 15/09/2026), então
+//     geramos a imagem aqui a partir do payload. O app já consome qr_image_base64, então
+//     isso funciona inclusive nas versões já instaladas, sem OTA.
+import QRCode from "npm:qrcode@1.5.4";
 import type {
   CreatePixChargeInput,
   CreatePixChargeResult,
@@ -292,18 +296,24 @@ export class BradescoProvider implements PixProvider {
     const qrPayload = cob?.pixCopiaECola ?? cob?.emv;
     if (!qrPayload) throw new Error("Bradesco não devolveu o pixCopiaECola da cobrança");
 
-    // A imagem só vem no GET. Se falhar, seguimos com o copia-e-cola: ele sozinho
-    // paga, e a tela do cliente já tem fallback quando a imagem não carrega. Não
-    // cancelamos a cobrança por isso (diferente do Asaas, onde o QR vinha de um
-    // recurso separado que podia deixar um payment órfão no painel).
+    // O Bradesco não devolve imagem (nem na criação nem no GET). Geramos a partir do
+    // payload — é uma transformação determinística do próprio copia-e-cola, então não
+    // há risco de divergir do que o banco cobra.
     let qrImageBase64 = cob?.base64 ?? "";
     if (!qrImageBase64) {
       try {
-        const full = (await this.fetchJson("GET", `/v2/cob/${txid}`)) as BradescoCob;
-        qrImageBase64 = full?.base64 ?? "";
+        const dataUrl: string = await QRCode.toDataURL(qrPayload, {
+          errorCorrectionLevel: "M",
+          margin: 1,
+          width: 512,
+        });
+        // O cliente aceita data URI completa; manter o prefixo evita adivinhar o mime.
+        qrImageBase64 = dataUrl;
       } catch (e) {
+        // Sem imagem a tela cai no copia-e-cola, que paga sozinho. Não é motivo
+        // para cancelar uma cobrança que o banco já registrou.
         console.warn(
-          `[bradesco] cobrança ${txid} criada, mas a imagem do QR não veio:`,
+          `[bradesco] cobrança ${txid} criada, mas falhou ao gerar a imagem do QR:`,
           e instanceof Error ? e.message : e,
         );
       }
