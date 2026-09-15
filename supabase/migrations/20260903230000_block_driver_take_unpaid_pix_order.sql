@@ -1,0 +1,15 @@
+-- Encomenda e envio de dependente com Pix real não liquidado não podem ser
+-- assumidos pelo motorista. Ver função aplicada em produção
+-- (trg_block_take_unpaid_pix_order): recusar/cancelar segue permitido, só o
+-- avanço é barrado.
+--
+-- O aceite dessas duas é UPDATE direto do app (sem RPC), então não havia
+-- guarda nenhuma: bastava a linha aparecer na lista. E aparecia — a tela lista
+-- por scheduled_trip_id, contornando a fila de ofertas que só abre após o
+-- pagamento.
+--
+-- A leitura dos campos é por to_jsonb(NEW): a primeira versão acessava
+-- NEW.driver_id dentro de um AND com TG_TABLE_NAME='shipments', e plpgsql
+-- resolve o campo mesmo com a condição da tabela falsa — quebrou todo update
+-- de dependent_shipments até ser corrigido.
+SELECT 1;

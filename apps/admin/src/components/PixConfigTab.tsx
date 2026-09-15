@@ -114,6 +114,16 @@ export default function PixConfigTab() {
   const [provSaving, setProvSaving] = useState(false);
   const [provSaved, setProvSaved] = useState(false);
   const [provError, setProvError] = useState<string | null>(null);
+  /**
+   * Confirmação da troca de provedor. Era um window.confirm, que neste app (Expo
+   * web, às vezes embutido em painel) não abre: a função saía no `if (!ok) return`
+   * e o Salvar não fazia nada, sem erro na tela. Confirmar aqui dentro é
+   * determinístico e ainda deixa o aviso legível, que num diálogo nativo fica
+   * espremido.
+   */
+  const [provConfirm, setProvConfirm] = useState(false);
+  /** Primeiro clique alerta sobre o prefixo EMV; o segundo salva mesmo assim. */
+  const [palPrefixAck, setPalPrefixAck] = useState(false);
 
   // ── Estado: allowlist input ─────────────────────────────────────────
 
@@ -164,17 +174,17 @@ export default function PixConfigTab() {
 
   // ── Handlers ────────────────────────────────────────────────────────
 
-  const saveProvider = useCallback(async () => {
+  /** Clique no Salvar: troca de provedor pede confirmação; o resto salva direto. */
+  const onSaveProviderClick = useCallback(() => {
     setProvError(null);
-    if (draftMode !== persisted.mode) {
-      const ok = window.confirm(
-        `Trocar o provedor Pix ativo?\n\n${MODE_LABELS[persisted.mode]} -> ${MODE_LABELS[draftMode]}.\n\n` +
-        'A troca vale SOMENTE para cobranças novas. Cobranças em andamento continuam sendo ' +
-        'confirmadas pelos webhooks dos provedores originais. As chaves de API vivem em secrets ' +
-        'do servidor — este seletor não as altera.',
-      );
-      if (!ok) return;
-    }
+    if (draftMode !== persisted.mode) { setProvConfirm(true); return; }
+    void saveProviderNow();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftMode, persisted.mode]);
+
+  const saveProviderNow = useCallback(async () => {
+    setProvError(null);
+    setProvConfirm(false);
     setProvSaving(true);
     const { error } = await updatePixProviderSetting({
       mode: draftMode,
@@ -192,7 +202,7 @@ export default function PixConfigTab() {
     }
     setProvSaved(true);
     setTimeout(() => setProvSaved(false), 2000);
-  }, [draftMode, draftTest, draftTtl, allowlistIds, persisted.mode, profileNames, mergeNames]);
+  }, [draftMode, draftTest, draftTtl, allowlistIds, profileNames, mergeNames]);
 
 
 
@@ -204,23 +214,29 @@ export default function PixConfigTab() {
     setHealthLoading(false);
   }, []);
 
+  /**
+   * Aviso de prefixo EMV. Era window.confirm — que aqui não abre e fazia o Salvar
+   * sair calado. Agora avisa na tela: o primeiro clique alerta, o segundo salva.
+   */
   const savePalliative = useCallback(async () => {
     setPalError(null);
     const copia = copiaECola.trim();
-    if (copia && !copia.startsWith('000201')) {
-      const ok = window.confirm(
-        'O copia-e-cola informado não começa com "000201" (prefixo padrão EMV do Pix).\n\n' +
-        'Salvar mesmo assim?',
+    if (copia && !copia.startsWith('000201') && !palPrefixAck) {
+      setPalPrefixAck(true);
+      setPalError(
+        'O copia-e-cola não começa com "000201", o prefixo padrão EMV do Pix. ' +
+        'Confira o valor; para salvar assim mesmo, clique em Salvar de novo.',
       );
-      if (!ok) return;
+      return;
     }
+    setPalPrefixAck(false);
     setPalSaving(true);
     const { error } = await updatePixPalliativeSetting({ copia_e_cola: copia, qr_image_url: qrImageUrl.trim() });
     setPalSaving(false);
     if (error) { setPalError(error); return; }
     setPalSaved(true);
     setTimeout(() => setPalSaved(false), 2000);
-  }, [copiaECola, qrImageUrl]);
+  }, [copiaECola, qrImageUrl, palPrefixAck]);
 
   const onQrUploaded = useCallback((path: string) => {
     const { data } = (supabase as any).storage.from('avatars').getPublicUrl(path);
@@ -279,7 +295,7 @@ export default function PixConfigTab() {
         },
           React.createElement('option', { value: 'palliative' }, 'Paliativo (QR estático, sem verificação)'),
           React.createElement('option', { value: 'asaas' }, 'Asaas'),
-          React.createElement('option', { value: 'bradesco', disabled: true }, 'Bradesco (em breve)')),
+          React.createElement('option', { value: 'bradesco' }, 'Bradesco')),
         selectChevron)),
     React.createElement('div', { style: { display: 'flex', flexDirection: 'column' as const, gap: 6, maxWidth: 260 } },
       React.createElement('label', { style: labelStyle }, 'Validade da cobrança (minutos)'),
@@ -310,9 +326,32 @@ export default function PixConfigTab() {
         'A troca de provedor vale somente para cobranças NOVAS. Os webhooks de todos os provedores ' +
         'permanecem ativos para cobranças em andamento. As chaves de API vivem em secrets de servidor ' +
         '(nunca neste painel) — configure-as antes de ativar um provedor real.')),
+    provConfirm
+      ? React.createElement('div', { style: amberBoxStyle, 'data-testid': 'pix-provider-confirm' },
+          React.createElement('p', { style: { ...amberTextStyle, fontWeight: 700 } },
+            `Trocar o provedor Pix ativo de ${MODE_LABELS[persisted.mode]} para ${MODE_LABELS[draftMode]}?`),
+          React.createElement('p', { style: amberTextStyle },
+            'Vale SOMENTE para cobranças novas, e para TODOS os usuários. Cobranças em andamento ' +
+            'continuam sendo confirmadas pelo provedor em que nasceram. As chaves de API vivem em ' +
+            'secrets do servidor — este seletor não as altera.'),
+          React.createElement('div', { style: { display: 'flex', gap: 12, marginTop: 12 } },
+            React.createElement('button', {
+              type: 'button', onClick: () => { void saveProviderNow(); },
+              'data-testid': 'pix-provider-confirm-yes', style: pillBtnStyle,
+            }, `Confirmar troca para ${MODE_LABELS[draftMode]}`),
+            React.createElement('button', {
+              type: 'button', onClick: () => setProvConfirm(false),
+              style: {
+                height: 40, padding: '0 18px', borderRadius: 999, border: '1px solid #0d0d0d',
+                background: '#fff', color: '#0d0d0d', fontSize: 13, fontWeight: 600,
+                cursor: 'pointer', ...font,
+              },
+            }, 'Cancelar')))
+      : null,
     React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } },
       React.createElement('button', {
-        type: 'button', onClick: saveProvider, disabled: provSaving,
+        type: 'button', onClick: onSaveProviderClick, disabled: provSaving,
+        'data-testid': 'pix-provider-save',
         style: { ...pillBtnStyle, cursor: provSaving ? 'wait' : 'pointer', opacity: provSaving ? 0.6 : 1 },
       }, provSaving ? 'Salvando...' : 'Salvar'),
       provSaved ? React.createElement('span', { style: { color: '#22c55e', fontSize: 14, fontWeight: 500, ...font } }, 'Salvo com sucesso!') : null,

@@ -27,6 +27,13 @@ export type CreatePixChargeInput = {
   cpfDigits: string;
   customerName: string;
   description?: string;
+  /**
+   * Vida útil da cobrança, em segundos (= o expires_at que gravamos em pix_charges).
+   * O Asaas ignora (lá a expiração é nossa, via cron); o Bradesco usa em
+   * `calendario.expiracao` — sem isso o QR do banco viveria 24h, muito além do
+   * nosso expires_at, e o cliente poderia pagar uma cobrança já cancelada.
+   */
+  expiresInSeconds?: number;
 };
 
 export type CreatePixChargeResult = {

@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { readPixProviderSetting } from "../_shared/pixProviders/index.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -97,6 +98,32 @@ Deno.serve(async (req) => {
     }
 
     const s = row as ExcursionRow;
+
+    // ── Portão do Pix real ────────────────────────────────────────────
+    // O fluxo paliativo do app ANTIGO aprova a excursão por aqui, gravando
+    // 'cash', sem cobrança nenhuma. Com um provedor real configurado isso
+    // registra como dinheiro um pedido que o cliente escolheu pagar por Pix.
+    //
+    // O teste é pelo positivo: só aprova como dinheiro quem ESCOLHEU dinheiro.
+    // Não dá para testar por payment_method='pix' porque o Pix já vem
+    // selecionado por padrão na tela e, se o cliente não trocar, a coluna fica
+    // nula — enquanto escolher "Dinheiro" sempre grava 'cash' antes de chegar
+    // aqui. Modo paliativo mantém o comportamento antigo intacto.
+    const pixSetting = await readPixProviderSetting(admin);
+    const chosenMethod = (s.payment_method ?? "").trim().toLowerCase();
+    if (
+      pixSetting.mode !== "palliative" &&
+      chosenMethod !== "cash" &&
+      chosenMethod !== "dinheiro"
+    ) {
+      return new Response(
+        JSON.stringify({
+          error:
+            "Atualize o aplicativo Take Me para pagar esta excursão. Esta versão aprova o orçamento sem gerar a cobrança.",
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
 
     if (s.stripe_payment_intent_id) {
       return new Response(

@@ -174,8 +174,8 @@ export function PixPaliativoScreen() {
         <Text style={styles.pixLabel}>Pix</Text>
         <Text style={styles.amount}>{formatBRL(req.amountCents)}</Text>
         <Text style={styles.instructions}>
-          Use o aplicativo do seu banco para escanear o código QR ou copie o código PIX abaixo para
-          concluir o pagamento.
+          Use o aplicativo do seu banco para escanear o código QR ou copie o código Pix abaixo.
+          Depois toque em "Já paguei".
         </Text>
 
         <View style={styles.qrWrap}>
@@ -187,7 +187,7 @@ export function PixPaliativoScreen() {
         </View>
 
         <Text style={[styles.timer, expired && styles.timerExpired]}>
-          {expired ? 'Código expirado' : `Você tem ${formatMMSS(secondsLeft)} para pagar`}
+          {expired ? 'Código Pix expirado' : `Você tem ${formatMMSS(secondsLeft)} para pagar`}
         </Text>
 
         <View style={styles.codeBox}>
@@ -195,7 +195,7 @@ export function PixPaliativoScreen() {
         </View>
         <TouchableOpacity style={styles.copyBtn} onPress={copyCode} activeOpacity={0.8}>
           <MaterialIcons name="content-copy" size={18} color="#FFFFFF" />
-          <Text style={styles.copyBtnText}>{copied ? 'Código copiado!' : 'Copiar código PIX'}</Text>
+          <Text style={styles.copyBtnText}>{copied ? 'Código copiado!' : 'Copiar código Pix'}</Text>
         </TouchableOpacity>
 
         {effectivateError ? <Text style={styles.errorInline}>{effectivateError}</Text> : null}
@@ -210,7 +210,7 @@ export function PixPaliativoScreen() {
             <ActivityIndicator size="small" color="#FFFFFF" />
           ) : (
             <Text style={styles.confirmBtnText}>
-              {canRetry ? 'Tentar novamente' : 'Realizei o Pagamento'}
+              {canRetry ? 'Tentar novamente' : 'Já paguei'}
             </Text>
           )}
         </TouchableOpacity>

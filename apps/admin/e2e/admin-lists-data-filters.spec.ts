@@ -362,7 +362,7 @@ test.describe('listas, dados da API e filtros', () => {
     await expect(page.getByRole('heading', { name: 'Configurações', exact: true })).toBeVisible({ timeout: 25_000 });
   });
 
-  test('Configurações — aba Pix visível e option Bradesco desabilitada', async ({ page }) => {
+  test('Configurações — aba Pix lista os três provedores selecionáveis', async ({ page }) => {
     await page.goto('/configuracoes');
     await expect(page.getByRole('heading', { name: 'Configurações', exact: true })).toBeVisible({ timeout: 25_000 });
     const pixTab = page.getByRole('button', { name: 'Pix', exact: true });
@@ -370,9 +370,10 @@ test.describe('listas, dados da API e filtros', () => {
     // Trocar de aba é só estado de UI (nenhuma mutação) — seguro fora de E2E_ALLOW_MUTATIONS.
     await pixTab.click();
     await expect(page.getByTestId('pix-config-tab')).toBeVisible({ timeout: 25_000 });
-    await expect(
-      page.getByTestId('pix-provider-select').locator('option[value="bradesco"]'),
-    ).toBeDisabled();
+    const select = page.getByTestId('pix-provider-select');
+    for (const value of ['palliative', 'asaas', 'bradesco']) {
+      await expect(select.locator(`option[value="${value}"]`)).not.toBeDisabled();
+    }
   });
 
   test('Pagamentos — /pagamentos/pix renderiza (somente leitura)', async ({ page }) => {

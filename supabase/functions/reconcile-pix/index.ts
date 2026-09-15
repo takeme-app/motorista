@@ -1,7 +1,11 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { AsaasProvider } from "../_shared/pixProviders/asaas.ts";
-import { PixProviderUnavailableError } from "../_shared/pixProviders/types.ts";
+import { BradescoProvider } from "../_shared/pixProviders/bradesco.ts";
+import {
+  PixProviderUnavailableError,
+  type ProviderChargeSnapshot,
+} from "../_shared/pixProviders/types.ts";
 import {
   PIX_CHARGE_ROW_COLUMNS,
   type PixChargeRow,
@@ -104,13 +108,26 @@ Deno.serve(async (req) => {
 
     const admin = createClient(supabaseUrl, serviceRoleKey);
 
-    // Asaas é o único provedor real por ora; sem secrets, roda em vazio.
-    let asaas: AsaasProvider | null = null;
-    try {
-      asaas = new AsaasProvider(admin);
-    } catch (e) {
-      if (!(e instanceof PixProviderUnavailableError)) throw e;
+    // Provedores reais com varredura provedor→banco. Cada um sem secrets
+    // simplesmente não entra na lista (roda em vazio, sem erro).
+    type ReconcilableProvider = {
+      name: "asaas" | "bradesco";
+      env: string;
+      listReceivedPayments: (day: string) => Promise<ProviderChargeSnapshot[]>;
+    };
+    const providers: ReconcilableProvider[] = [];
+    for (const make of [
+      () => new AsaasProvider(admin),
+      () => new BradescoProvider(admin),
+    ]) {
+      try {
+        providers.push(make() as unknown as ReconcilableProvider);
+      } catch (e) {
+        if (!(e instanceof PixProviderUnavailableError)) throw e;
+      }
     }
+    /** Env ativo por provedor — usado para pular cobranças de outro ambiente. */
+    const envByProvider = new Map(providers.map((p) => [p.name, p.env]));
 
     const result = {
       checked_pending: 0,
@@ -135,7 +152,8 @@ Deno.serve(async (req) => {
 
       for (const row of (data ?? []) as unknown as PixChargeRow[]) {
         // Env divergente do adapter atual (piloto sandbox em produção): ignora.
-        if (asaas && row.provider === "asaas" && row.provider_env !== asaas.env) {
+        const activeEnv = envByProvider.get(row.provider);
+        if (activeEnv && row.provider_env !== activeEnv) {
           result.skipped_env++;
           continue;
         }
@@ -151,13 +169,13 @@ Deno.serve(async (req) => {
     }
 
     // ── 2) provedor → banco: RECEIVED D-2..D0 sem par viram fila ──
-    if (asaas) {
+    for (const provider of providers) {
       for (const day of lastDaysSaoPaulo(3)) {
         let payments;
         try {
-          payments = await asaas.listReceivedPayments(day);
+          payments = await provider.listReceivedPayments(day);
         } catch (e) {
-          errors.push(`list ${day}: ${e instanceof Error ? e.message : String(e)}`);
+          errors.push(`list ${provider.name} ${day}: ${e instanceof Error ? e.message : String(e)}`);
           continue;
         }
         for (const payment of payments) {
@@ -174,7 +192,7 @@ Deno.serve(async (req) => {
               const { data: byPid } = await admin
                 .from("pix_charges")
                 .select(PIX_CHARGE_ROW_COLUMNS)
-                .eq("provider", "asaas")
+                .eq("provider", provider.name)
                 .eq("provider_charge_id", payment.providerChargeId)
                 .maybeSingle();
               matched = (byPid as PixChargeRow | null) ?? null;
@@ -196,7 +214,7 @@ Deno.serve(async (req) => {
             }
 
             // Sem par no banco: fila de devolução (dedup pelo marcador no notes).
-            const marker = `asaas payment ${payment.providerChargeId}`;
+            const marker = `${provider.name} payment ${payment.providerChargeId}`;
             const { data: queued } = await admin
               .from("pix_refunds_pending")
               .select("id")

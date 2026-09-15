@@ -37,6 +37,9 @@ import { getRouteWithDuration, formatDuration, formatDistanceKmLabel, type Route
 import { LiveDriverMapMarker } from '../../components/LiveDriverMapMarker';
 import { useScheduledTripLiveLocation } from '../../lib/useScheduledTripLiveLocation';
 import { StatusBadge, clientViagemStatusBadge } from '../../components/StatusBadge';
+import { isAwaitingRealPixPayment } from '../../lib/pixPending';
+import { orderStatusLabelPt } from '../../lib/orderStatusLabel';
+import { PixPendingBanner } from '../../components/PixPendingBanner';
 import type { TripLiveDriverDisplay } from '../../navigation/types';
 import { parsePassengerData } from '../../lib/clientBookingTripLive';
 import { formatVehicleDescription, formatTripFareBrl } from '../../lib/tripDriverDisplay';
@@ -91,6 +94,9 @@ function pinCharsForDisplay(code: string | null | undefined): string[] {
 }
 
 type BookingDetail = {
+  /** Pix real: cobrança e liquidação, para o status do pedido. */
+  pix_charge_id?: string | null;
+  pix_paid_at?: string | null;
   id: string;
   origin_address: string;
   origin_lat: number;
@@ -130,6 +136,8 @@ type BookingDetail = {
 };
 
 type TripShipmentRow = {
+  pix_charge_id?: string | null;
+  pix_paid_at?: string | null;
   id: string;
   package_size: string;
   status: string;
@@ -137,6 +145,8 @@ type TripShipmentRow = {
 };
 
 type TripDependentShipmentRow = {
+  pix_charge_id?: string | null;
+  pix_paid_at?: string | null;
   id: string;
   full_name: string;
   pickup_code: string | null;
@@ -334,7 +344,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
       const { data: booking, error: bookErr } = await supabase
         .from('bookings')
         .select(
-          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, scheduled_trip_id, passenger_count, bags_count, passenger_data, pickup_code, delivery_code, cancellation_reason, tip_cents, tip_status, tip_paid_at, payment_method'
+          'id, origin_address, origin_lat, origin_lng, destination_address, destination_lat, destination_lng, amount_cents, status, created_at, scheduled_trip_id, passenger_count, bags_count, passenger_data, pickup_code, delivery_code, cancellation_reason, tip_cents, tip_status, tip_paid_at, payment_method, pix_charge_id, pix_paid_at'
         )
         .eq('id', bookingId)
         .eq('user_id', user.id)
@@ -414,6 +424,10 @@ export function TripDetailScreen({ navigation, route }: Props) {
         trip_status: trip?.status ?? null,
         driver_journey_started_at: trip?.driver_journey_started_at ?? null,
         cancellation_reason: (booking as { cancellation_reason?: string | null }).cancellation_reason ?? null,
+        // Sem estes dois o detalhe não sabe que o Pix está pendente: o objeto
+        // é montado campo a campo, então trazer as colunas no select não basta.
+        pix_charge_id: (booking as { pix_charge_id?: string | null }).pix_charge_id ?? null,
+        pix_paid_at: (booking as { pix_paid_at?: string | null }).pix_paid_at ?? null,
         scheduled_trip_id: b.scheduled_trip_id ?? null,
         departure_at: (trip as { departure_at?: string | null } | null)?.departure_at ?? null,
         passenger_count: Number(b.passenger_count ?? 0),
@@ -434,15 +448,15 @@ export function TripDetailScreen({ navigation, route }: Props) {
       if (tripId && !cancelled) {
         const { data: shipRows } = await supabase
           .from('shipments')
-          .select('id, package_size, status, recipient_name')
+          .select('id, package_size, status, recipient_name, pix_charge_id, pix_paid_at')
           .eq('scheduled_trip_id', tripId)
           .eq('user_id', user.id);
         if (!cancelled) {
-          setTripShipments((shipRows ?? []) as TripShipmentRow[]);
+          setTripShipments((shipRows ?? []) as unknown as TripShipmentRow[]);
         }
         const { data: depRows } = await supabase
           .from('dependent_shipments')
-          .select('id, full_name, pickup_code, delivery_code, status')
+          .select('id, full_name, pickup_code, delivery_code, status, pix_charge_id, pix_paid_at')
           .eq('scheduled_trip_id', tripId)
           .eq('user_id', user.id);
         if (!cancelled) {
@@ -759,6 +773,10 @@ export function TripDetailScreen({ navigation, route }: Props) {
         : `${supabaseUrl}/storage/v1/object/public/avatars/${detail.driver_avatar_url}`)
     : null;
 
+  // Pix real ainda não liquidado: usado no selo, na faixa e para esconder os
+  // PINs de embarque, que só valem depois do pagamento.
+  const awaitingPixTrip = isAwaitingRealPixPayment(detail);
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
@@ -842,8 +860,26 @@ export function TripDetailScreen({ navigation, route }: Props) {
 
         <View style={styles.card}>
           <View style={styles.cardStatusRow}>
-            <StatusBadge variant={clientViagemStatusBadge(detail.status, detail.trip_status, detail.cancellation_reason, detail.driver_journey_started_at)} />
+            <StatusBadge
+              variant={
+                // Pix real não liquidado manda em qualquer outro status: a
+                // reserva existe, mas nada anda até o pagamento entrar. Sem
+                // isto o card da lista dizia "Aguardando pagamento" e o
+                // detalhe dizia "Aguardando início".
+                awaitingPixTrip
+                  ? 'aguardando_pagamento'
+                  : clientViagemStatusBadge(
+                      detail.status,
+                      detail.trip_status,
+                      detail.cancellation_reason,
+                      detail.driver_journey_started_at,
+                    )
+              }
+            />
           </View>
+          {awaitingPixTrip ? (
+            <PixPendingBanner pixChargeId={String(detail.pix_charge_id ?? '')} />
+          ) : null}
           <Text style={styles.tripId}>Minha reserva: {formatTripCode(detail.id)}</Text>
           {detail.scheduled_trip_id ? (
             <Text style={styles.tripIdMeta}>ID da Viagem: {formatTripCode(detail.scheduled_trip_id)}</Text>
@@ -952,6 +988,9 @@ export function TripDetailScreen({ navigation, route }: Props) {
           </View>
         </View>
 
+        {/* PIN só existe depois do pagamento: mostrá-lo antes sugere que a
+            reserva está valendo e o passageiro pode tentar embarcar sem pagar. */}
+        {awaitingPixTrip ? null : (
         <View style={styles.pinSection}>
           <Text style={styles.pinLabel}>PIN de embarque</Text>
           <Text style={styles.pinHint}>Informe ao motorista ao entrar no veículo.</Text>
@@ -981,6 +1020,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
             </View>
           </View>
         </View>
+        )}
 
         {tripDependentShipments.length > 0 ? (
           <>
@@ -988,7 +1028,13 @@ export function TripDetailScreen({ navigation, route }: Props) {
             {tripDependentShipments.map((dep) => (
               <View key={dep.id} style={styles.dependentPinBlock}>
                 <Text style={styles.dependentPinName}>{dep.full_name}</Text>
-                <Text style={styles.dependentPinStatus}>Status: {dep.status}</Text>
+                <Text style={styles.dependentPinStatus}>
+                  Status: {orderStatusLabelPt(dep as Parameters<typeof orderStatusLabelPt>[0])}
+                </Text>
+                {/* Mesma regra do PIN da viagem, mais o cancelado: um envio
+                    cancelado não embarca, então o PIN dele não deve aparecer. */}
+                {isAwaitingRealPixPayment(dep as Parameters<typeof isAwaitingRealPixPayment>[0]) ||
+                String(dep.status ?? '').toLowerCase() === 'cancelled' ? null : (
                 <View style={[styles.pinSection, styles.pinSectionNested]}>
                   <Text style={styles.pinLabel}>PIN de embarque (dependente)</Text>
                   <Text style={styles.pinHint}>Informe ao motorista no embarque do dependente.</Text>
@@ -1018,6 +1064,7 @@ export function TripDetailScreen({ navigation, route }: Props) {
                     </View>
                   </View>
                 </View>
+                )}
               </View>
             ))}
           </>
@@ -1052,7 +1099,9 @@ export function TripDetailScreen({ navigation, route }: Props) {
                   <Text style={styles.passengerRowText}>
                     {shipmentPackageLabelPt(s.package_size)} · {s.recipient_name}
                   </Text>
-                  <Text style={styles.shipmentMeta}>Status: {s.status}</Text>
+                  <Text style={styles.shipmentMeta}>
+                    Status: {orderStatusLabelPt(s as Parameters<typeof orderStatusLabelPt>[0])}
+                  </Text>
                 </View>
               </View>
             ))

@@ -1,0 +1,17 @@
+-- Motorista recusa reserva JÁ PAGA no Pix: entra na fila de devolução.
+--
+-- As outras vias já enfileiravam (cancel-booking quando o passageiro cancela,
+-- cancel-scheduled-trip quando o motorista cancela a viagem inteira). A recusa
+-- individual passa pela RPC motorista_respond_booking_request e não enfileirava
+-- nada: a reserva virava 'cancelled' e o dinheiro do cliente ficava sem
+-- registro. Verificado antes da correção: recusa de reserva paga deixava 0
+-- pendências.
+--
+-- Encomenda, dependente e excursão já são cobertos pelo gatilho
+-- trg_shipment_pix_paid_cancel_refund_queue. Bookings ficou fora dele de
+-- propósito — as edge functions acima já inserem e um gatilho amplo poderia
+-- duplicar a pendência. Por isso a fila entra no ponto exato que faltava, com
+-- guard de idempotência por cobrança.
+--
+-- Ver função aplicada em produção. Conteúdo idêntico ao aplicado.
+SELECT 1;

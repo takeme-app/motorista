@@ -117,3 +117,9 @@ verify_jwt = false
 # Saúde dos provedores Pix (aba do admin): exige app_metadata.role = admin; nunca expõe a chave.
 [functions.pix-provider-health]
 verify_jwt = false
+
+# Webhook do Bradesco: o callback NÃO traz token nem assinatura (limitação do
+# arranjo deles), então a autenticação real é a re-consulta GET /v2/cob/{txid}
+# feita dentro do handler — nada do corpo recebido decide pagamento.
+[functions.bradesco-webhook]
+verify_jwt = false

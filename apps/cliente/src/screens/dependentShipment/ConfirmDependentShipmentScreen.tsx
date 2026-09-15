@@ -125,7 +125,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
   useEffect(() => {
     void profileHasValidCpf().then(setProfileCpfOk);
   }, []);
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('dinheiro');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>('pix');
   const [submitting, setSubmitting] = useState(false);
   /** Stripe Connect (`charges_enabled`): só então cartão/Pix ficam disponíveis. */
   const [connectChargesEnabled, setConnectChargesEnabled] = useState<boolean | null>(null);
@@ -197,10 +197,17 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
   }, [amountCents, driver?.id]);
 
   const allowedPaymentMethods = useMemo((): PaymentMethodType[] => {
-    // Pix paliativo não depende do Stripe Connect do motorista — fica disponível como o dinheiro.
-    if (connectStatusLoading) return ['pix', 'dinheiro'];
-    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix', 'dinheiro'];
-    return ['pix', 'dinheiro'];
+    // Dinheiro OCULTO por decisão de produto (02/09/2026): o cliente não paga
+    // mais em mãos. A máquina de dívida do motorista continua no banco
+    // (driver_platform_fee_ledger e gatilhos), intacta — isto aqui só some com
+    // a opção na tela, então voltar atrás é adicionar 'dinheiro' de novo.
+    //
+    // Pix não depende do Stripe Connect do motorista, então segue como a opção
+    // sempre disponível — inclusive quando o motorista não tem Connect ativo,
+    // caso em que antes o dinheiro era a única saída.
+    if (connectStatusLoading) return ['pix'];
+    if (connectChargesEnabled === true) return ['credito', 'debito', 'pix'];
+    return ['pix'];
   }, [connectChargesEnabled, connectStatusLoading]);
 
   useEffect(() => {
@@ -222,7 +229,7 @@ export function ConfirmDependentShipmentScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (selectedPaymentMethod == null) return;
     if (!allowedPaymentMethods.includes(selectedPaymentMethod)) {
-      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'dinheiro');
+      setSelectedPaymentMethod(allowedPaymentMethods[0] ?? 'pix');
     }
   }, [allowedPaymentMethods, selectedPaymentMethod]);
 

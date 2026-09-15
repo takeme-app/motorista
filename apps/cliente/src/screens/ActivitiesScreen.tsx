@@ -42,6 +42,8 @@ export type ActivityItem = {
   excursionStatusLabel?: string;
   /** Status exibido no cartão (cores alinhadas a `StatusBadge` / Histórico de viagens). */
   statusBadgeVariant: StatusBadgeVariant;
+  /** Cobrança Pix aberta: o card leva de volta ao QR em vez do detalhe. */
+  pendingPixChargeId?: string;
   /** Sobrescreve o texto padrão do variant (ex.: excursões). */
   statusBadgeLabel?: string;
 };
@@ -268,6 +270,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         created_at: b.created_at,
         summaryLine: summaryParts.join(' · '),
         statusBadgeVariant: awaitingPixViagem ? 'aguardando_pagamento' : statusBadgeVariant,
+        pendingPixChargeId: awaitingPixViagem ? String((b as { pix_charge_id?: string }).pix_charge_id ?? '') : undefined,
       };
     });
     const shipmentRows = (shipmentsRes.data ?? []) as unknown as Record<string, unknown>[];
@@ -320,6 +323,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         created_at: (s as { created_at: string }).created_at,
         summaryLine: `1 encomenda · tamanho ${encLabel}`,
         statusBadgeVariant: awaitingPixEnvio ? 'aguardando_pagamento' : statusBadgeVariant,
+        pendingPixChargeId: awaitingPixEnvio ? String((s as { pix_charge_id?: string }).pix_charge_id ?? '') : undefined,
       };
     });
     const dependentRows = (dependentShipmentsRes.data ?? []) as unknown as Record<string, unknown>[];
@@ -369,6 +373,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         created_at: (d as { created_at: string }).created_at,
         summaryLine: `1 dependente · ${depBags} ${depBags === 1 ? 'mala' : 'malas'}`,
         statusBadgeVariant: awaitingPixDep ? 'aguardando_pagamento' : statusBadgeVariant,
+        pendingPixChargeId: awaitingPixDep ? String((d as { pix_charge_id?: string }).pix_charge_id ?? '') : undefined,
       };
     });
     // Cast: colunas de embarque (check_in_*, boarding_*) ainda não estão nos tipos
@@ -417,6 +422,7 @@ export function ActivitiesScreen({ navigation }: Props) {
         created_at: createdAt,
         summaryLine: `${people} ${people === 1 ? 'pessoa' : 'pessoas'}`,
         statusBadgeVariant: awaitingPixExc ? 'aguardando_pagamento' : clientStatus.variant,
+        pendingPixChargeId: awaitingPixExc ? String((e as { pix_charge_id?: string }).pix_charge_id ?? '') : undefined,
         statusBadgeLabel: awaitingPixExc ? 'Aguardando pagamento' : clientStatus.label,
       };
     });
@@ -546,6 +552,12 @@ export function ActivitiesScreen({ navigation }: Props) {
 
   const renderActivityCard = (item: ActivityItem) => {
     const navigateToDetail = () => {
+      // Cobrança Pix aberta: o toque volta para o QR. Antes o card dizia
+      // "Aguardando pagamento" e levava para um detalhe sem como pagar.
+      if (item.pendingPixChargeId) {
+        navigation.navigate('PixPayment', { reopen: true, pixChargeId: item.pendingPixChargeId });
+        return;
+      }
       if (item.type === 'viagem') navigation.navigate('TripDetail', { bookingId: item.id });
       if (item.type === 'envio') navigation.navigate('ShipmentDetail', { shipmentId: item.id });
       if (item.type === 'excursao') navigation.navigate('ExcursionDetail', { excursionRequestId: item.id });
