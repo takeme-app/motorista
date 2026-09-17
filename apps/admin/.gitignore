@@ -27,3 +27,5 @@ public/mapbox-gl-csp-worker.js
 .DS_Store
 *.tsbuildinfo
 npm-debug.log*
+.vercel
+.env*
