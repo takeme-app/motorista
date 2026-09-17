@@ -92,3 +92,5 @@ credentials.json.*
 credentials/
 google-service-account.json
 *.p8
+.backups/
+.vercel
