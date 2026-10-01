@@ -7,6 +7,7 @@ import WebLoginScreen from './screens/WebLoginScreen';
 import WebForgotPasswordScreen from './screens/WebForgotPasswordScreen';
 import WebResetPasswordScreen from './screens/WebResetPasswordScreen';
 import WebSignupScreen from './screens/WebSignupScreen';
+import WebDeleteAccountScreen from './screens/WebDeleteAccountScreen';
 import HomeScreen from './screens/HomeScreen';
 import ViagensScreen from './screens/ViagensScreen';
 import ViagemDetalheScreen from './screens/ViagemDetalheScreen';
@@ -43,6 +44,10 @@ import AvaliacoesScreen from './screens/AvaliacoesScreen';
 import AnalyticsScreen from './screens/AnalyticsScreen';
 
 export const router = createBrowserRouter([
+  // Página pública exigida pelo Google Play para solicitar a exclusão da conta.
+  // Fica FORA de PublicRoute porque aquele componente manda quem tem sessão para
+  // "/", e esta precisa abrir para qualquer visitante — inclusive o revisor da loja.
+  { path: '/excluir-conta', element: React.createElement(WebDeleteAccountScreen) },
   {
     element: React.createElement(PublicRoute),
     children: [
