@@ -8,6 +8,7 @@ import WebForgotPasswordScreen from './screens/WebForgotPasswordScreen';
 import WebResetPasswordScreen from './screens/WebResetPasswordScreen';
 import WebSignupScreen from './screens/WebSignupScreen';
 import WebDeleteAccountScreen from './screens/WebDeleteAccountScreen';
+import WebPrivacyPolicyScreen from './screens/WebPrivacyPolicyScreen';
 import HomeScreen from './screens/HomeScreen';
 import ViagensScreen from './screens/ViagensScreen';
 import ViagemDetalheScreen from './screens/ViagemDetalheScreen';
@@ -48,6 +49,7 @@ export const router = createBrowserRouter([
   // Fica FORA de PublicRoute porque aquele componente manda quem tem sessão para
   // "/", e esta precisa abrir para qualquer visitante — inclusive o revisor da loja.
   { path: '/excluir-conta', element: React.createElement(WebDeleteAccountScreen) },
+  { path: '/politica-de-privacidade', element: React.createElement(WebPrivacyPolicyScreen) },
   {
     element: React.createElement(PublicRoute),
     children: [
