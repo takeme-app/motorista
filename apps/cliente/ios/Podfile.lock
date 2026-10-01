@@ -260,7 +260,7 @@ PODS:
   - ExpoSplashScreen (31.0.13):
     - ExpoModulesCore
   - EXStructuredHeaders (5.0.0)
-  - EXUpdates (29.0.17):
+  - EXUpdates (29.0.20):
     - EASClient
     - EXManifests
     - ExpoModulesCore
@@ -2786,7 +2786,7 @@ SPEC CHECKSUMS:
   ExpoSharing: 0d983394ed4a80334bab5a0d5384f75710feb7e8
   ExpoSplashScreen: bc3cffefca2716e5f22350ca109badd7e50ec14d
   EXStructuredHeaders: c951e77f2d936f88637421e9588c976da5827368
-  EXUpdates: 0de6a4c54030b7070da16126cc481912004ec705
+  EXUpdates: dfa95abdb2063c56bc6a8791afbcb3db1e87ded6
   EXUpdatesInterface: 5adf50cb41e079c861da6d9b4b954c3db9a50734
   FBLazyVector: e95a291ad2dadb88e42b06e0c5fb8262de53ec12
   Firebase: d99ac19b909cd2c548339c2241ecd0d1599ab02e
@@ -2890,6 +2890,6 @@ SPEC CHECKSUMS:
   Turf: c9eb11a65d96af58cac523460fd40fec5061b081
   Yoga: 5934998fbeaef7845dbf698f698518695ab4cd1a
 
-PODFILE CHECKSUM: 66a3d9651f9d4d9a1660f9cf4785ce202db0d373
+PODFILE CHECKSUM: 671a27c5b22b45535c40f702fe4c2638c25d0840
 
 COCOAPODS: 1.16.2

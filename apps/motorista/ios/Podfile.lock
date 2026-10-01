@@ -311,6 +311,7 @@ PODS:
     - ExpoModulesCore
   - ExpoSplashScreen (31.0.13):
     - ExpoModulesCore
+  - EXStructuredHeaders (5.0.0)
   - EXUpdatesInterface (2.0.0):
     - ExpoModulesCore
   - fast_float (8.0.0)
@@ -3277,6 +3278,7 @@ DEPENDENCIES:
   - ExpoPrint (from `../../../node_modules/expo-print/ios`)
   - ExpoSharing (from `../../../node_modules/expo-sharing/ios`)
   - ExpoSplashScreen (from `../../../node_modules/expo-splash-screen/ios`)
+  - EXStructuredHeaders (from `../../../node_modules/expo-structured-headers/ios`)
   - EXUpdatesInterface (from `../../../node_modules/expo-updates-interface/ios`)
   - fast_float (from `../../../node_modules/react-native/third-party-podspecs/fast_float.podspec`)
   - FBLazyVector (from `../../../node_modules/react-native/Libraries/FBLazyVector`)
@@ -3441,6 +3443,8 @@ EXTERNAL SOURCES:
     :path: "../../../node_modules/expo-sharing/ios"
   ExpoSplashScreen:
     :path: "../../../node_modules/expo-splash-screen/ios"
+  EXStructuredHeaders:
+    :path: "../../../node_modules/expo-structured-headers/ios"
   EXUpdatesInterface:
     :path: "../../../node_modules/expo-updates-interface/ios"
   fast_float:
@@ -3637,6 +3641,7 @@ SPEC CHECKSUMS:
   ExpoPrint: 813bfa965eda2ecc4b1cdc61612c820e239c382a
   ExpoSharing: 0d983394ed4a80334bab5a0d5384f75710feb7e8
   ExpoSplashScreen: bc3cffefca2716e5f22350ca109badd7e50ec14d
+  EXStructuredHeaders: c951e77f2d936f88637421e9588c976da5827368
   EXUpdatesInterface: 5adf50cb41e079c861da6d9b4b954c3db9a50734
   fast_float: b32c788ed9c6a8c584d114d0047beda9664e7cc6
   FBLazyVector: 5beb8028d5a2e75dd9634917f23e23d3a061d2aa
@@ -3735,6 +3740,6 @@ SPEC CHECKSUMS:
   Turf: c9eb11a65d96af58cac523460fd40fec5061b081
   Yoga: 728df40394d49f3f471688747cf558158b3a3bd1
 
-PODFILE CHECKSUM: fd89902dd0485b0b507522463aac61ea803b77ce
+PODFILE CHECKSUM: 785de4ed1fe32ad9c120f4c929fc9b626f115154
 
 COCOAPODS: 1.16.2

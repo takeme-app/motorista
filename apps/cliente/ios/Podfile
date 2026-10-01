@@ -74,6 +74,27 @@ target 'TakeMeCliente' do
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
 
+    # Xcode 27 recusa qualquer alvo com IPHONEOS_DEPLOYMENT_TARGET abaixo de 15.0.
+    # O `react_native_post_install` acerta os alvos principais, mas não os resource
+    # bundles que o CocoaPods gera (FirebaseCore_Privacy, StripeCoreBundle,
+    # RNSVGFilters e companhia): esses herdam o mínimo do pod de origem, que às
+    # vezes é iOS 9. Sem este piso o Archive falha com ~20 erros de deployment
+    # target e nenhum build sai — o do app nem chega a compilar.
+    minimum = Gem::Version.new('15.1')
+    projects = [installer.pods_project]
+    projects += installer.generated_projects if installer.respond_to?(:generated_projects)
+    projects.compact.uniq.each do |project|
+      project.targets.each do |target|
+        target.build_configurations.each do |config|
+          current = config.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
+          if current.nil? || Gem::Version.new(current.to_s) < minimum
+            config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = minimum.to_s
+          end
+        end
+      end
+      project.save
+    end
+
     # Workaround para Xcode 26 / Clang novo: o `fmt` (FMT_STRING) usa funções
     # consteval que o compilador novo rejeita como "not a constant expression".
     # O fmt/base.h define FMT_USE_CONSTEVAL por detecção de compilador e ignora -D,

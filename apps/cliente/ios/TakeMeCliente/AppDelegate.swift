@@ -1,4 +1,5 @@
 import Expo
+import FirebaseCore
 import React
 import ReactAppDependencyProvider
 
@@ -13,6 +14,16 @@ public class AppDelegate: ExpoAppDelegate {
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
+    // Sem isto não existe FirebaseApp padrão no iOS e o @react-native-firebase/messaging
+    // nunca devolve token — o registro em clienteFcm/motoristaFcm desiste em silêncio e o
+    // aparelho jamais recebe push. No Android o plugin Gradle do google-services inicializa
+    // sozinho via ContentProvider, e foi por isso que só o iOS ficou sem token nenhum.
+    // O config plugin do @react-native-firebase/app injetaria esta chamada no prebuild, mas
+    // o projeto é bare com ios/ versionado: aqui ela precisa estar no arquivo.
+    if FirebaseApp.app() == nil {
+      FirebaseApp.configure()
+    }
+
     let delegate = ReactNativeDelegate()
     let factory = ExpoReactNativeFactory(delegate: delegate)
     delegate.dependencyProvider = RCTAppDependencyProvider()

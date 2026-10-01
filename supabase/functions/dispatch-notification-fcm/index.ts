@@ -123,6 +123,13 @@ Deno.serve(async (req) => {
       .map((r: { fcm_token: string }) => r.fcm_token)
       .filter(Boolean);
     if (tokens.length === 0) {
+      // Estado normal (usuário nunca autorizou notificação) ou sintoma de que os
+      // tokens do perfil foram todos purgados por morte. Em ambos o push não sai,
+      // então precisa aparecer no log — em silêncio, parece que funcionou.
+      console.warn(
+        "dispatch-notification-fcm sem token",
+        JSON.stringify({ user_id: userId, target_app_slug: targetAppSlug, error_id }),
+      );
       return json(200, {
         ok: true,
         info: "No FCM tokens for profile",
@@ -182,6 +189,8 @@ Deno.serve(async (req) => {
 
     const fcmUrl = `https://fcm.googleapis.com/v1/projects/${GOOGLE_PROJECT_ID}/messages:send`;
     const results: unknown[] = [];
+    /** Tokens que o FCM declarou mortos nesta rodada — removidos ao final. */
+    const dead: string[] = [];
 
     for (const token of tokens) {
       // Android: data-only (SEM o bloco `notification`) — o sistema NÃO auto-exibe
@@ -232,16 +241,55 @@ Deno.serve(async (req) => {
         resJson = resText;
       }
       if (!r.ok) {
-        results.push({ token: token.slice(0, 12) + "...", error: resJson });
+        // UNREGISTERED = o app foi desinstalado, reinstalado ou teve os dados
+        // limpos: o token morreu e nunca mais volta a valer. Como o upsert casa
+        // por `fcm_token`, cada reinstalação cria uma linha nova e a antiga fica.
+        // Sem apagar, a tabela só acumula cadáveres e todo envio seguinte falha
+        // neles — foi assim que a frota inteira ficou morta sem ninguém perceber.
+        // Só purgamos UNREGISTERED: INVALID_ARGUMENT também pode ser payload nosso
+        // malformado, e aí apagaríamos tokens bons por causa de um bug nosso.
+        const code =
+          (resJson as any)?.error?.details?.[0]?.errorCode ??
+          (resJson as any)?.error?.status ??
+          null;
+        if (code === "UNREGISTERED") dead.push(token);
+        results.push({ token: token.slice(0, 12) + "...", code, error: resJson });
       } else {
         results.push({ token: token.slice(0, 12) + "...", ok: true });
       }
     }
 
+    if (dead.length > 0) {
+      const { error: purgeErr } = await supabase
+        .from("profile_fcm_tokens")
+        .delete()
+        .in("fcm_token", dead);
+      if (purgeErr) {
+        console.error("dispatch-notification-fcm purge", purgeErr.message, error_id);
+      }
+    }
+
     const anyFail = results.some((x: any) => x && x.error);
+    if (anyFail) {
+      // Sem este log a falha existia só no corpo da resposta, que ninguém lê: o
+      // push parava de chegar e os logs da função seguiam limpos.
+      console.error(
+        "dispatch-notification-fcm envio falhou",
+        JSON.stringify({
+          user_id: userId,
+          target_app_slug: targetAppSlug,
+          tentados: tokens.length,
+          removidos: dead.length,
+          results,
+          error_id,
+        }),
+      );
+    }
+
     return json(anyFail ? 502 : 200, {
       ok: !anyFail,
       sent: tokens.length,
+      purged: dead.length,
       results,
       error_id,
     });
