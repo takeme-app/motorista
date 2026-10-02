@@ -139,12 +139,16 @@ export default function WebPrivacyPolicyScreen() {
 
       React.createElement('h2', { style: s.h2 }, '3. Compartilhamento'),
       React.createElement('p', { style: s.p },
-        'A Take Me ', React.createElement('strong', { style: s.strong }, 'não vende e não compartilha'),
-        ' dados pessoais com terceiros para uso próprio deles. Os dados necessários para a '
-        + 'viagem são mostrados à outra parte envolvida — o motorista vê o ponto de embarque '
-        + 'e o contato do passageiro, e vice-versa.'),
+        'A Take Me ', React.createElement('strong', { style: s.strong }, 'não vende'),
+        ' dados pessoais e não os entrega a ninguém para uso comercial próprio. Os dados '
+        + 'necessários para a viagem são mostrados à outra parte envolvida — o motorista vê o '
+        + 'ponto de embarque e o contato do passageiro, e vice-versa.'),
       React.createElement('p', { style: s.p },
-        'Usamos operadores que tratam dados em nosso nome, sob contrato e apenas para executar o serviço:'),
+        'Para o app funcionar, ',
+        React.createElement('strong', { style: s.strong },
+          'identificadores do seu dispositivo são transmitidos aos provedores abaixo'),
+        ', que tratam esses dados em nosso nome, sob contrato e apenas para executar o serviço '
+        + 'contratado:'),
       React.createElement('ul', { style: s.ul },
         ...PROCESSORS.map((proc, i) =>
           React.createElement('li', { key: `proc-${i}`, style: s.li },
